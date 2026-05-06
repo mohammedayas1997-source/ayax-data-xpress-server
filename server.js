@@ -17,6 +17,11 @@ startDB();
 
 const app = express();
 
+const PORT = process.env.PORT || 10000; // Render yana son 10000 ko kuma ya ba shi dama ya zaɓa
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server is running on port ${PORT}`);
+});
+
 const allowedOrigins = [
   "https://www.ayaxdata.online",
   "https://ayaxdata.online",
