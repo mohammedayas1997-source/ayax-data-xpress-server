@@ -80,7 +80,7 @@ app.use("/api/v1/vtu", vtuRoutes);
 app.use("/api/v1/payments", paymentRoutes);
 app.use("/api/v1/agent", agentRoutes);
 app.use("/api/v1/leader", leaderRoutes);
-//app.use("/api/v1/supervisors", supervisorRoutes);
+app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 
 /**
