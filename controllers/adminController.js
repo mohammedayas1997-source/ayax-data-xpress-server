@@ -6,7 +6,7 @@ const Activity = require("../models/Activity");
 const NIMCRequest = require("../models/NIMCRequest");
 const BVNRequest = require("../models/BVNRequest");
 const SupportRequest = require("../models/SupportRequest");
-const sendNotification = require("../utils/notificationHelper");
+const sendNotification = require("../../utils/notificationHelper");
 // Idan kana bukatar su, ga yadda zaka kira NIMCPrice da BVNPrice
 const NIMCPrice = require("../models/NIMCPrice");
 const BVNPrice = require("../models/BVNPrice");
