@@ -5,6 +5,7 @@ const connectDB = require("./config/db");
 
 dotenv.config();
 
+// --- DATABASE CONNECTION ---
 const startDB = async () => {
   try {
     await connectDB();
@@ -17,11 +18,7 @@ startDB();
 
 const app = express();
 
-const PORT = process.env.PORT || 10000; // Render yana son 10000 ko kuma ya ba shi dama ya zaɓa
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server is running on port ${PORT}`);
-});
-
+// --- CORS CONFIGURATION ---
 const allowedOrigins = [
   "https://www.ayaxdata.online",
   "https://ayaxdata.online",
@@ -34,8 +31,8 @@ app.use(
   cors({
     origin: function (origin, callback) {
       if (!origin) return callback(null, true);
-      const isAllowed = allowedOrigins.some((domain) =>
-        origin.startsWith(domain),
+      const isAllowed = allowedOrigins.some(
+        (domain) => origin.startsWith(origin) || origin.includes(domain),
       );
       if (isAllowed) {
         callback(null, true);
@@ -65,8 +62,6 @@ const supervisorRoutes = require("./routes/supervisorRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const nimcRoutes = require("./routes/nimcRoutes");
 const bvnRoutes = require("./routes/bvnRoutes");
-
-// Gyara: Tabbatar da sunan fayil din superAdminRoutes.js a folder dinka
 const superAdminRoutes = require("./routes/superAdminRoutes");
 
 // --- ROUTES REGISTRATION ---
@@ -82,35 +77,41 @@ app.use("/api/v1/agent", agentRoutes);
 app.use("/api/v1/leader", leaderRoutes);
 app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
-
-/**
- * GYARA: An canza daga /superAdmin zuwa /superadmin
- * domin ya yi daidai da kiran da kake yi a Frontend (UserManagement.js)
- */
 app.use("/api/v1/superadmin", superAdminRoutes);
 
+// --- ROOT ENDPOINT ---
 app.get("/", (req, res) => {
   res.status(200).send(`
         <div style="font-family: sans-serif; text-align: center; padding: 50px;">
-            <h1 style="color: #2ecc71;">Ayax API v2 is ONLINE</h1>
-            <p style="color: #666;">Server is running in Safe Mode (Auth & Support Only).</p>
-            <div style="display: inline-block; padding: 10px 20px; background: #eee; border-radius: 5px;">
-                Status: Debugging Active
+            <h1 style="color: #1e3a8a;">Ayax API v2 is ONLINE</h1>
+            <p style="color: #666;">High-Performance Backend System Active.</p>
+            <div style="display: inline-block; padding: 10px 20px; background: #f1f5f9; border-radius: 8px; font-weight: bold; color: #1e3a8a;">
+                System Status: Production Ready
             </div>
         </div>
     `);
 });
 
+// --- 404 HANDLER ---
 app.use("*", (req, res) => {
   res.status(404).json({ success: false, message: "API Route not found" });
 });
 
+// --- GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
   console.error("[SERVER ERROR]:", err.stack);
   res.status(err.statusCode || 500).json({
     success: false,
     message: err.message || "Internal Server Error",
   });
+});
+
+// --- SERVER INITIALIZATION ---
+// Render yana sanya PORT a matsayin environment variable kai tsaye
+const PORT = process.env.PORT || 10000;
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server fully optimized and running on port ${PORT}`);
 });
 
 module.exports = app;

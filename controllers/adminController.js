@@ -6,11 +6,29 @@ const Activity = require("../models/Activity");
 const NIMCRequest = require("../models/NIMCRequest");
 const BVNRequest = require("../models/BVNRequest");
 const SupportRequest = require("../models/SupportRequest");
-const { sendNotification } = require("../../utils/notificationHelper");
+
 // Idan kana bukatar su, ga yadda zaka kira NIMCPrice da BVNPrice
 const NIMCPrice = require("../models/NIMCPrice");
 const BVNPrice = require("../models/BVNPrice");
 // @desc    Assign monthly targets to a Supervisor
+// Maimakon require daga utils, mun saka shi a nan kai tsaye
+const sendNotification = async (userId, title, message) => {
+  try {
+    const user = await User.findById(userId);
+    if (user) {
+      if (!user.notifications) user.notifications = [];
+      user.notifications.push({
+        title,
+        message,
+        date: new Date(),
+        isRead: false,
+      });
+      await user.save();
+    }
+  } catch (error) {
+    console.error("Notification failed:", error);
+  }
+};
 const assignTarget = async (req, res) => {
   try {
     const { supervisorId, agentGoal, dataGoal, month } = req.body;
