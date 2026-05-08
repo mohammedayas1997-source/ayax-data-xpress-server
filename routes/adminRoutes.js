@@ -6,10 +6,11 @@ const { protect, authorize } = require("../middleware/authMiddleware");
 
 // 2. Controllers
 const adminController = require("../controllers/adminController");
-const dataPlanController = require("../controllers/dataPlanController");
-const notificationController = require("../controllers/notificationController");
+// const dataPlanController = require("../controllers/dataPlanController");
+// const notificationController = require("../controllers/notificationController");
 
 // --- ADMIN PROTECTION ---
+// Duk wani route da yake kasa da wannan layin, dole sai admin ko superadmin ya shiga
 router.use(protect);
 router.use(authorize("admin", "superadmin"));
 
@@ -21,7 +22,7 @@ router.put("/assign-target", adminController.assignTarget);
 router.patch("/suspend-user/:id", adminController.suspendUser);
 router.patch("/update-role", adminController.updateUserRole);
 
-// --- NEW ADMIN POWERS (Added without changing structure) ---
+// --- NEW ADMIN POWERS ---
 router.patch("/toggle-wallet-status", adminController.toggleWalletStatus);
 router.post("/debit-user", adminController.debitUser);
 
@@ -29,17 +30,24 @@ router.post("/debit-user", adminController.debitUser);
 router.get("/pending-refunds", adminController.getPendingRefunds);
 router.post("/approve-refund/:id", adminController.approveRefund);
 
-// --- 5. ACTIVITY LOGS ---
+// --- 5. ACTIVITY LOGS & SUPPORT ---
 router.get("/activities", adminController.getSupportActivities);
-// --- SUPPORT TRACKING & REQUESTS ---
+
+// Binciken kudi (Track Transaction)
 router.get(
   "/track-transaction/:transactionId",
   adminController.trackTransaction,
-); // Binciken kudi
-router.post("/request-admin-fix", adminController.requestAdminFix); // Tura wa Admin bukatar gyara
+);
+
+// Tura wa Admin bukatar gyara (Request Fix)
+router.post("/request-admin-fix", adminController.requestAdminFix);
+
+// Ganin dukkan rahotanni (Support Reports)
 router.get("/all-reports", adminController.getSupportRequests);
-// Admin action on support reports
+
+// Matakin Admin akan rahoton koke (Handle Report)
 router.patch("/handle-report", adminController.handleSupportRequest);
+
 // --- 6. NIMC MANAGEMENT ROUTES ---
 router.get("/nimc-requests", adminController.getAllNIMCRequests);
 router.patch("/nimc-processing/:id", adminController.updateToProcessing);
@@ -50,7 +58,7 @@ router.get("/bvn-requests", adminController.getAllBVNRequests);
 router.patch("/bvn-processing/:id", adminController.updateBVNStatus);
 router.patch("/approve-bvn/:id", adminController.approveBVNRequest);
 
-// --- 8. DATA PLANS & NOTIFICATIONS ---
+// --- 8. DATA PLANS & NOTIFICATIONS (Optional/Disabled) ---
 // router.get("/data-plans", dataPlanController.getAllPlans);
 
 module.exports = router;

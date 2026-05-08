@@ -1,17 +1,13 @@
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
-
-// GYARA: Wadannan sunayen dole su dace da files din da ka lissafa
 const NIMCRequest = require("../models/NIMCRequest");
 const BVNRequest = require("../models/BVNRequest");
 const SupportRequest = require("../models/SupportRequest");
-
-// Idan kana bukatar su, ga yadda zaka kira NIMCPrice da BVNPrice
 const NIMCPrice = require("../models/NIMCPrice");
 const BVNPrice = require("../models/BVNPrice");
-// @desc    Assign monthly targets to a Supervisor
-// Maimakon require daga utils, mun saka shi a nan kai tsaye
+
+// Helper for notifications
 const sendNotification = async (userId, title, message) => {
   try {
     const user = await User.findById(userId);
@@ -29,6 +25,9 @@ const sendNotification = async (userId, title, message) => {
     console.error("Notification failed:", error);
   }
 };
+
+// --- FUNCTIONS ---
+
 const assignTarget = async (req, res) => {
   try {
     const { supervisorId, agentGoal, dataGoal, month } = req.body;
@@ -36,14 +35,11 @@ const assignTarget = async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: "Supervisor ID is required" });
-
     const supervisor = await User.findById(supervisorId);
-    if (!supervisor || supervisor.role !== "supervisor") {
+    if (!supervisor || supervisor.role !== "supervisor")
       return res
         .status(404)
         .json({ success: false, message: "Supervisor not found" });
-    }
-
     const currentTargets = supervisor.targets || {};
     supervisor.targets = {
       agentGoal:
@@ -59,23 +55,20 @@ const assignTarget = async (req, res) => {
         currentTargets.currentMonth ||
         new Date().toLocaleString("default", { month: "long" }),
     };
-
     supervisor.markModified("targets");
     await supervisor.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Target assigned successfully",
-      data: supervisor.targets,
-    });
+    res
+      .status(200)
+      .json({
+        success: true,
+        message: "Target assigned successfully",
+        data: supervisor.targets,
+      });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// --- NIMC MANAGEMENT FUNCTIONS ---
-
-// @desc    Get all NIMC requests
 const getAllNIMCRequests = async (req, res) => {
   try {
     const requests = await NIMCRequest.find()
@@ -89,7 +82,6 @@ const getAllNIMCRequests = async (req, res) => {
   }
 };
 
-// @desc    Update NIMC to Processing
 const updateToProcessing = async (req, res) => {
   try {
     const request = await NIMCRequest.findByIdAndUpdate(
@@ -101,17 +93,18 @@ const updateToProcessing = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Request not found" });
-    res.status(200).json({
-      success: true,
-      message: "Status updated to processing",
-      data: request,
-    });
+    res
+      .status(200)
+      .json({
+        success: true,
+        message: "Status updated to processing",
+        data: request,
+      });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Approve NIMC Request
 const approveRequest = async (req, res) => {
   try {
     const request = await NIMCRequest.findById(req.params.id);
@@ -119,19 +112,14 @@ const approveRequest = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Request not found" });
-
     request.status = "completed";
     await request.save();
-
     res.status(200).json({ success: true, message: "NIMC request approved" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// --- BVN MANAGEMENT FUNCTIONS ---
-
-// @desc    Get all BVN requests
 const getAllBVNRequests = async (req, res) => {
   try {
     const requests = await BVNRequest.find()
@@ -145,7 +133,6 @@ const getAllBVNRequests = async (req, res) => {
   }
 };
 
-// @desc    Update BVN Status (Processing)
 const updateBVNStatus = async (req, res) => {
   try {
     const request = await BVNRequest.findByIdAndUpdate(
@@ -163,7 +150,6 @@ const updateBVNStatus = async (req, res) => {
   }
 };
 
-// @desc    Approve BVN Request
 const approveBVNRequest = async (req, res) => {
   try {
     const request = await BVNRequest.findById(req.params.id);
@@ -171,17 +157,13 @@ const approveBVNRequest = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "BVN request not found" });
-
     request.status = "completed";
     await request.save();
-
     res.status(200).json({ success: true, message: "BVN Request Completed" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// --- CORE ADMIN FUNCTIONS ---
 
 const getSupervisors = async (req, res) => {
   try {
@@ -208,33 +190,27 @@ const getAgents = async (req, res) => {
 const approveRefund = async (req, res) => {
   try {
     const transaction = await Transaction.findById(req.params.id);
-    if (!transaction || transaction.status !== "pending-refund") {
+    if (!transaction || transaction.status !== "pending-refund")
       return res
         .status(400)
         .json({ success: false, message: "Invalid refund request" });
-    }
-
     const userId = transaction.user || transaction.userId;
     const user = await User.findById(userId);
     if (!user)
       return res
         .status(404)
         .json({ success: false, message: "User not found" });
-
     user.walletBalance = (user.walletBalance || 0) + Number(transaction.amount);
     transaction.status = "refunded";
     transaction.approvedBy = req.user._id;
     transaction.resolvedAt = Date.now();
-
     await Promise.all([user.save(), transaction.save()]);
-
     await Activity.create({
       staffId: req.user._id,
       action: "REFUND_APPROVED",
       details: `Refunded ${transaction.amount}`,
       targetUser: user._id,
     });
-
     res.status(200).json({ success: true, message: "Refund processed" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -307,45 +283,31 @@ const getPendingRefunds = async (req, res) => {
   }
 };
 
-// 1. BLOCK/UNBLOCK WALLET LOGIC
-exports.toggleWalletStatus = async (req, res) => {
+const toggleWalletStatus = async (req, res) => {
   const { userId, status } = req.body;
-
   try {
     const user = await User.findByIdAndUpdate(
       userId,
       { walletStatus: status },
       { new: true },
     );
-
     if (!user) return res.status(404).json({ message: "User not found" });
-
-    res.status(200).json({
-      success: true,
-      message: `Wallet ${status} successfully`,
-      user,
-    });
+    res
+      .status(200)
+      .json({ success: true, message: `Wallet ${status} successfully`, user });
   } catch (error) {
     res.status(500).json({ message: "Server error", error });
   }
 };
 
-// 2. DIRECT DEBIT LOGIC
-exports.debitUser = async (req, res) => {
+const debitUser = async (req, res) => {
   const { userId, amount, reason } = req.body;
-
   try {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
-
-    if (user.balance < amount) {
-      return res
-        .status(400)
-        .json({ message: "Insufficient balance in user's wallet" });
-    }
-
+    if (user.balance < amount)
+      return res.status(400).json({ message: "Insufficient balance" });
     user.balance -= amount;
-
     user.transactions.push({
       type: "debit",
       amount,
@@ -353,43 +315,39 @@ exports.debitUser = async (req, res) => {
       description: `Admin Debit: ${reason}`,
       date: new Date(),
     });
-
     await user.save();
-
-    res.status(200).json({
-      success: true,
-      message: `₦${amount} debited and logged successfully`,
-      newBalance: user.balance,
-    });
+    res
+      .status(200)
+      .json({
+        success: true,
+        message: `₦${amount} debited`,
+        newBalance: user.balance,
+      });
   } catch (error) {
     res.status(500).json({ message: "Server error", error });
   }
 };
-// 1. TRACK TRANSACTION (Nemo matsala ta ID)
-exports.trackTransaction = async (req, res) => {
+
+const trackTransaction = async (req, res) => {
   try {
     const { transactionId } = req.params;
-
-    // Nemo user din da yake da wannan transaction din
     const user = await User.findOne({
       "transactions.transactionId": transactionId,
     });
-
-    if (!user) {
+    if (!user)
       return res
         .status(404)
         .json({ success: false, message: "Transaction ID not found" });
-    }
-
     const transaction = user.transactions.find(
       (t) => t.transactionId === transactionId,
     );
-
-    res.status(200).json({
-      success: true,
-      userData: { id: user._id, name: user.name, phone: user.phone },
-      transaction,
-    });
+    res
+      .status(200)
+      .json({
+        success: true,
+        userData: { id: user._id, name: user.name, phone: user.phone },
+        transaction,
+      });
   } catch (error) {
     res
       .status(500)
@@ -397,11 +355,9 @@ exports.trackTransaction = async (req, res) => {
   }
 };
 
-// 2. REQUEST ADMIN FIX (Tura koke zuwa Admin)
-exports.requestAdminFix = async (req, res) => {
+const requestAdminFix = async (req, res) => {
   try {
     const { transactionId, userId, reason, supportNote } = req.body;
-
     const newRequest = await SupportRequest.create({
       transactionId,
       userId,
@@ -409,29 +365,30 @@ exports.requestAdminFix = async (req, res) => {
       reason,
       supportNote,
     });
-
-    res.status(201).json({
-      success: true,
-      message: "Issue reported to Admin successfully",
-      data: newRequest,
-    });
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: "Issue reported successfully",
+        data: newRequest,
+      });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to send report",
-      error: error.message,
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to send report",
+        error: error.message,
+      });
   }
 };
 
-// 3. GET ALL REQUESTS (Wanda Admin zai rika gani)
-exports.getSupportRequests = async (req, res) => {
+const getSupportRequests = async (req, res) => {
   try {
     const requests = await SupportRequest.find()
       .populate("userId", "name phone")
       .populate("requestedBy", "name")
       .sort("-createdAt");
-
     res.status(200).json({ success: true, requests });
   } catch (error) {
     res
@@ -439,55 +396,47 @@ exports.getSupportRequests = async (req, res) => {
       .json({ success: false, message: "Error fetching requests" });
   }
 };
-exports.handleSupportRequest = async (req, res) => {
+
+const handleSupportRequest = async (req, res) => {
   try {
     const { requestId, action, adminNote } = req.body;
-
     const request = await SupportRequest.findById(requestId).populate("userId");
     if (!request) return res.status(404).json({ message: "Request not found" });
-
     if (action === "resolve") {
       const user = request.userId;
       const transaction = user.transactions.find(
         (t) => t.transactionId === request.transactionId,
       );
-
       if (transaction && transaction.status !== "refunded") {
-        // 1. Mayar da kudi
         user.balance += transaction.amount;
         transaction.status = "refunded";
         request.status = "resolved";
-
-        // 2. Tura Notification
         await sendNotification(
           user._id,
           "Wallet Refunded",
-          `Your transaction of ₦${transaction.amount} has been refunded due to: ${request.reason}.`,
+          `Your transaction of ₦${transaction.amount} has been refunded.`,
         );
-
         await user.save();
       }
     } else if (action === "reject") {
       request.status = "rejected";
-
-      // Sanar da User cewa an ki karbar kukan sa
       await sendNotification(
         request.userId._id,
         "Support Request Update",
-        `Your support request for Transaction ID ${request.transactionId} was declined. Note: ${adminNote}`,
+        `Declined. Note: ${adminNote}`,
       );
     }
-
     await request.save();
-
-    res.status(200).json({
-      success: true,
-      message: `Action '${action}' completed and user notified.`,
-    });
+    res
+      .status(200)
+      .json({ success: true, message: `Action '${action}' completed.` });
   } catch (error) {
     res.status(500).json({ message: "Process failed", error: error.message });
   }
 };
+
+// --- FINAL EXPORT ---
+// Mun hada kowane function a nan domin kar a samu "undefined" a routes
 module.exports = {
   assignTarget,
   getAllNIMCRequests,
@@ -504,4 +453,10 @@ module.exports = {
   suspendUser,
   getSupportActivities,
   getPendingRefunds,
+  toggleWalletStatus,
+  debitUser,
+  trackTransaction,
+  requestAdminFix,
+  getSupportRequests,
+  handleSupportRequest,
 };
