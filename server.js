@@ -31,8 +31,8 @@ app.use(
   cors({
     origin: function (origin, callback) {
       if (!origin) return callback(null, true);
-      const isAllowed = allowedOrigins.some(
-        (domain) => origin.startsWith(origin) || origin.includes(domain),
+      const isAllowed = allowedOrigins.some((domain) =>
+        origin.includes(domain),
       );
       if (isAllowed) {
         callback(null, true);
@@ -46,8 +46,10 @@ app.use(
   }),
 );
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ limit: "10mb", extended: true }));
+// --- BODY PARSERS (MUST BE BEFORE ROUTES) ---
+// Mun mayar da shi 50mb a nan sama domin duk wani hoto ya samu damar wucewa
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // --- ROUTES IMPORTS ---
 const authRoutes = require("./routes/authRoutes");
@@ -55,7 +57,7 @@ const supportRoutes = require("./routes/supportRoutes");
 const walletRoutes = require("./routes/walletRoutes");
 const vtuRoutes = require("./routes/vtuRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
-const paymentRoutes = require("./routes/paymentRoutes");
+const paymentRoutes = require("./rules/paymentRoutes"); // Tabbatar wannan folder din 'rules' ne ko 'routes'
 const agentRoutes = require("./routes/agentRoutes");
 const leaderRoutes = require("./routes/leaderRoutes");
 const supervisorRoutes = require("./routes/supervisorRoutes");
@@ -106,10 +108,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// --- SERVER INITIALIZATION ---
-// Render yana sanya PORT a matsayin environment variable kai tsaye
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server fully optimized and running on port ${PORT}`);
 });
