@@ -5,9 +5,18 @@ const axios = require("axios");
 
 // --- Helper: Generate and Send JWT Token ---
 const sendToken = (user, statusCode, res) => {
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: "30d",
-  });
+  // Tabbatar JWT_SECRET yana nan
+  if (!process.env.JWT_SECRET) {
+    console.error("JWT_SECRET is missing!");
+  }
+
+  const token = jwt.sign(
+    { id: user._id },
+    process.env.JWT_SECRET || "fallback_secret",
+    {
+      expiresIn: "30d",
+    },
+  );
 
   res.status(statusCode).json({
     success: true,
@@ -17,7 +26,7 @@ const sendToken = (user, statusCode, res) => {
       name: user.name,
       email: user.email,
       phone: user.phone,
-      balance: user.walletBalance,
+      balance: user.walletBalance || 0,
       role: user.role,
     },
   });
@@ -29,6 +38,15 @@ exports.register = async (req, res) => {
     const { name, email, phone, password, role, state, lga, address } =
       req.body;
 
+    // 1. Duba ko user ya riga ya kasance
+    const userExists = await User.findOne({ email });
+    if (userExists) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Email already registered" });
+    }
+
+    // 2. Kirkirar User
     const user = await User.create({
       name,
       email,
@@ -40,11 +58,18 @@ exports.register = async (req, res) => {
       address: role === "agent" ? address : undefined,
     });
 
-    // Create Paystack Dedicated Account (Background)
-    createDedicatedAccount(user);
+    // 3. MUHIMMI: Kira Paystack bayan an riga an halitta user
+    // Muna sa shi a 'try-catch' daban don ko Paystack ya bada error, user din ya riga ya halitta
+    try {
+      await createDedicatedAccount(user);
+    } catch (payError) {
+      console.error("Paystack Account Creation Failed:", payError.message);
+      // Kar mu dakatar da register saboda Paystack, za mu iya kirkiro account din daga baya
+    }
 
     sendToken(user, 201, res);
   } catch (error) {
+    console.error("Registration Error:", error.message);
     res.status(400).json({ success: false, message: error.message });
   }
 };
@@ -60,8 +85,18 @@ exports.login = async (req, res) => {
         .json({ success: false, message: "Please provide email and password" });
     }
 
+    // Neman user da password dinsa
     const user = await User.findOne({ email }).select("+password");
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+
+    if (!user) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
+    }
+
+    // Gwada password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
@@ -69,11 +104,12 @@ exports.login = async (req, res) => {
 
     sendToken(user, 200, res);
   } catch (error) {
+    console.error("Login Error:", error.message);
     res.status(500).json({ success: false, message: "Server Error" });
   }
 };
 
-// @desc    Get current logged in user (Sabo - Wannan kake nema a routes)
+// @desc    Get current logged in user
 exports.getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -83,25 +119,17 @@ exports.getMe = async (req, res) => {
   }
 };
 
-// --- Password & Reset Placeholder (Don server ya tashi) ---
-// Idan baka rubuta logic din su ba tukuna, bar su a haka don kar server ya bada error
-exports.forgotPassword = async (req, res) => {
-  res.status(500).json({ message: "Not implemented" });
-};
-exports.resetPassword = async (req, res) => {
-  res.status(500).json({ message: "Not implemented" });
-};
-exports.updatePassword = async (req, res) => {
-  res.status(500).json({ message: "Not implemented" });
-};
-exports.updatePin = async (req, res) => {
-  res.status(500).json({ message: "Not implemented" });
-};
-
 // --- Paystack Dedicated Account Logic ---
 const createDedicatedAccount = async (user) => {
   try {
-    const customer = await axios.post(
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+    if (!secretKey) {
+      console.log("Paystack Secret Key is missing in .env");
+      return;
+    }
+
+    // A. Create Customer
+    const customerResponse = await axios.post(
       "https://api.paystack.co/customer",
       {
         email: user.email,
@@ -110,28 +138,46 @@ const createDedicatedAccount = async (user) => {
         phone: user.phone,
       },
       {
-        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
+        headers: { Authorization: `Bearer ${secretKey}` },
       },
     );
 
-    const account = await axios.post(
+    const customerCode = customerResponse.data.data.customer_code;
+
+    // B. Create Dedicated Account
+    const accountResponse = await axios.post(
       "https://api.paystack.co/dedicated_account",
       {
-        customer: customer.data.data.customer_code,
+        customer: customerCode,
         preferred_bank: "wema-bank",
       },
       {
-        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
+        headers: { Authorization: `Bearer ${secretKey}` },
       },
     );
 
+    // C. Update User in DB
     await User.findByIdAndUpdate(user._id, {
-      paystackCustomerCode: customer.data.data.customer_code,
-      bankName: account.data.data.bank.name,
-      accountNumber: account.data.data.account_number,
-      accountName: account.data.data.account_name,
+      paystackCustomerCode: customerCode,
+      bankName: accountResponse.data.data.bank.name,
+      accountNumber: accountResponse.data.data.account_number,
+      accountName: accountResponse.data.data.account_name,
     });
+
+    console.log(`Dedicated account created for ${user.email}`);
   } catch (error) {
-    console.log("Paystack Error:", error.message);
+    // Kara duba error din daga Paystack
+    const msg = error.response?.data?.message || error.message;
+    console.log("Paystack API Error:", msg);
   }
 };
+
+// Placeholders for other routes
+exports.forgotPassword = (req, res) =>
+  res.status(501).json({ message: "Not implemented" });
+exports.resetPassword = (req, res) =>
+  res.status(501).json({ message: "Not implemented" });
+exports.updatePassword = (req, res) =>
+  res.status(501).json({ message: "Not implemented" });
+exports.updatePin = (req, res) =>
+  res.status(501).json({ message: "Not implemented" });
