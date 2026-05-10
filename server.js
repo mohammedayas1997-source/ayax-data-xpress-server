@@ -18,31 +18,28 @@ startDB();
 
 const app = express();
 
-// --- CORS CONFIGURATION ---
+// --- CORS CONFIGURATION (GYARARRE) ---
 const allowedOrigins = [
   "https://www.ayaxdata.online",
   "https://ayaxdata.online",
   "https://ayax-data-xpress-server.vercel.app",
-  "https://ayax-api-v2.vercel.app",
-  "http://localhost:3000",
-  "http://localhost:8081",
 ];
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      // 1. Idan request ya fito daga Mobile App ko Postman (ba shi da origin)
+      // 1. Bar Mobile Apps, Postman, ko Server-to-Server requests su wuce
       if (!origin) return callback(null, true);
 
-      // 2. Duba idan asalin sunan domain din yana cikin allowedOrigins
-      if (
-        allowedOrigins.indexOf(origin) !== -1 ||
-        origin.endsWith(".vercel.app")
-      ) {
+      // 2. Duba idan asalin sunan domain din yana cikin jerinmu
+      const isAllowed =
+        allowedOrigins.includes(origin) || origin.endsWith(".vercel.app");
+
+      if (isAllowed) {
         callback(null, true);
       } else {
-        console.log("CORS Blocked this origin:", origin);
-        callback(new Error("Not allowed by CORS"));
+        console.error("CORS Blocked this origin:", origin);
+        callback(new Error("Not allowed by CORS Policy"));
       }
     },
     credentials: true,
@@ -52,11 +49,12 @@ app.use(
       "Authorization",
       "X-Requested-With",
       "Accept",
+      "Accept-Version", // Na kara wannan don Vercel
     ],
   }),
 );
 
-// MUHIMMI: Ka tabbatar OPTIONS request yana wucewa (Pre-flight)
+// MUHIMMI: Wannan layin ne yake bawa Browser damar gudanar da "Pre-flight" request
 app.options("*", cors());
 // --- BODY PARSERS (MUST BE BEFORE ROUTES) ---
 // Mun mayar da shi 50mb a nan sama domin duk wani hoto ya samu damar wucewa
