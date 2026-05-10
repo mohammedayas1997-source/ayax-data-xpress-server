@@ -1,29 +1,33 @@
 const mongoose = require("mongoose");
 
 const connectDB = async () => {
-  // 1. Idan har akwai connection (1 = connected, 2 = connecting), kar a sake bude wani
+  // 1. Idan akwai connection riga da aka yi (1 = connected, 2 = connecting), kar a sake bude wani
   if (mongoose.connection.readyState >= 1) {
     return;
   }
 
   try {
-    // 2. Tabbatar da MONGO_URI yana nan
-    if (!process.env.MONGO_URI) {
-      console.error("MONGO_URI is not defined in environment variables");
+    // 2. MUHIMMI: Mun sauya sunan daga MONGO_URI zuwa MONGODB_URI don ya dace da Vercel
+    const dbUri = process.env.MONGODB_URI;
+
+    if (!dbUri) {
+      console.error(
+        "❌ ERROR: MONGODB_URI is not defined in Vercel Environment Variables.",
+      );
       return;
     }
 
-    const conn = await mongoose.connect(process.env.MONGO_URI, {
-      // Wadannan options din sun dace da Mongoose 6+
-      serverSelectionTimeoutMS: 10000, // Na kara zuwa sakan 10 don Vercel ya samu lokaci
+    // 3. Bude alakar da Database
+    const conn = await mongoose.connect(dbUri, {
+      // Wadannan sune settings mafi kyau ga Vercel Serverless Functions
+      serverSelectionTimeoutMS: 15000, // Kara lokaci zuwa sakan 15 don kaucewa timeout
       socketTimeoutMS: 45000,
     });
 
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
+    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
   } catch (error) {
-    console.error(`MongoDB Connection Error: ${error.message}`);
-    // A Vercel, kar mu kira process.exit(1) domin zai kashe function din gaba daya
-    // Mun bar shi ya yi throw don server.js ya sani
+    console.error(`❌ MongoDB Connection Error: ${error.message}`);
+    // Muna jefa error din don server.js ya san cewa database bata hadu ba
     throw error;
   }
 };
