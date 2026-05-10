@@ -33,12 +33,36 @@ const sendToken = (user, statusCode, res) => {
 };
 
 // @desc    Register a new user
+// @desc    Register a new user// @desc    Register a new user
 exports.register = async (req, res) => {
   try {
-    const { name, email, phone, password, role, state, lga, address } =
-      req.body;
+    // 1. Extract firstName and surname from the request body
+    const {
+      firstName,
+      surname,
+      otherName,
+      email,
+      phone,
+      password,
+      role,
+      state,
+      lga,
+      address,
+    } = req.body;
 
-    // 1. Duba ko user ya riga ya kasance
+    // 2. Validate essential fields manually before hitting the DB
+    if (!firstName || !surname || !email || !password || !phone) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Mandatory fields: firstName, surname, email, phone, and password are required.",
+      });
+    }
+
+    // 3. Create a unified 'name' for the database/Paystack if your model needs it
+    const fullName = `${firstName} ${surname}`.trim();
+
+    // 4. Check if user exists
     const userExists = await User.findOne({ email });
     if (userExists) {
       return res
@@ -46,9 +70,12 @@ exports.register = async (req, res) => {
         .json({ success: false, message: "Email already registered" });
     }
 
-    // 2. Kirkirar User
+    // 5. Create User with the mapped fields
     const user = await User.create({
-      name,
+      firstName, // Matches your Mongoose Schema
+      surname, // Matches your Mongoose Schema
+      name: fullName, // Optional: in case your schema uses 'name'
+      otherName,
       email,
       phone,
       password,
@@ -58,64 +85,17 @@ exports.register = async (req, res) => {
       address: role === "agent" ? address : undefined,
     });
 
-    // 3. MUHIMMI: Kira Paystack bayan an riga an halitta user
-    // Muna sa shi a 'try-catch' daban don ko Paystack ya bada error, user din ya riga ya halitta
+    // 6. Paystack Integration
     try {
       await createDedicatedAccount(user);
     } catch (payError) {
       console.error("Paystack Account Creation Failed:", payError.message);
-      // Kar mu dakatar da register saboda Paystack, za mu iya kirkiro account din daga baya
     }
 
     sendToken(user, 201, res);
   } catch (error) {
-    console.error("Registration Error:", error.message);
+    console.error("Registration Error Detail:", error);
     res.status(400).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Authenticate user & get token
-exports.login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Please provide email and password" });
-    }
-
-    // Neman user da password dinsa
-    const user = await User.findOne({ email }).select("+password");
-
-    if (!user) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid credentials" });
-    }
-
-    // Gwada password
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid credentials" });
-    }
-
-    sendToken(user, 200, res);
-  } catch (error) {
-    console.error("Login Error:", error.message);
-    res.status(500).json({ success: false, message: "Server Error" });
-  }
-};
-
-// @desc    Get current logged in user
-exports.getMe = async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-    res.status(200).json({ success: true, data: user });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
   }
 };
 
