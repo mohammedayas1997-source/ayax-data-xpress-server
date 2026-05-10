@@ -22,7 +22,7 @@ const app = express();
 const allowedOrigins = [
   "https://www.ayaxdata.online",
   "https://ayaxdata.online",
-  "https://ayax-data-xpress-server.vercel.app",
+  "https://ayax-api-v2.vercel.app",
 ];
 
 app.use(
