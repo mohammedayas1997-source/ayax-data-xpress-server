@@ -25,27 +25,39 @@ const allowedOrigins = [
   "https://ayax-data-xpress-server.vercel.app",
   "https://ayax-api-v2.vercel.app",
   "http://localhost:3000",
+  "http://localhost:8081",
 ];
 
 app.use(
   cors({
     origin: function (origin, callback) {
+      // 1. Idan request ya fito daga Mobile App ko Postman (ba shi da origin)
       if (!origin) return callback(null, true);
-      const isAllowed = allowedOrigins.some((domain) =>
-        origin.includes(domain),
-      );
-      if (isAllowed) {
+
+      // 2. Duba idan asalin sunan domain din yana cikin allowedOrigins
+      if (
+        allowedOrigins.indexOf(origin) !== -1 ||
+        origin.endsWith(".vercel.app")
+      ) {
         callback(null, true);
       } else {
-        callback(new Error("CORS policy violation"), false);
+        console.log("CORS Blocked this origin:", origin);
+        callback(new Error("Not allowed by CORS"));
       }
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+    ],
   }),
 );
 
+// MUHIMMI: Ka tabbatar OPTIONS request yana wucewa (Pre-flight)
+app.options("*", cors());
 // --- BODY PARSERS (MUST BE BEFORE ROUTES) ---
 // Mun mayar da shi 50mb a nan sama domin duk wani hoto ya samu damar wucewa
 app.use(express.json({ limit: "50mb" }));
@@ -57,7 +69,7 @@ const supportRoutes = require("./routes/supportRoutes");
 const walletRoutes = require("./routes/walletRoutes");
 const vtuRoutes = require("./routes/vtuRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
-const paymentRoutes = require("./rules/paymentRoutes"); // Tabbatar wannan folder din 'rules' ne ko 'routes'
+const paymentRoutes = require("./routes/paymentRoutes"); // Tabbatar wannan folder din 'rules' ne ko 'routes'
 const agentRoutes = require("./routes/agentRoutes");
 const leaderRoutes = require("./routes/leaderRoutes");
 const supervisorRoutes = require("./routes/supervisorRoutes");
