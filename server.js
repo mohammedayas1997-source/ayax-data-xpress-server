@@ -25,21 +25,31 @@ const allowedOrigins = [
   "https://ayax-api-v2.vercel.app",
 ];
 
+// --- CORS CONFIGURATION (MAFI KYAU GA MOBILE DA WEB) ---
 app.use(
   cors({
     origin: function (origin, callback) {
-      // 1. Bar Mobile Apps, Postman, ko Server-to-Server requests su wuce
-      if (!origin) return callback(null, true);
+      // 1. MUHIMMI: Bar Mobile Apps su wuce
+      // A React Native, 'origin' yawanci undefined ne
+      if (!origin || origin === "null") {
+        return callback(null, true);
+      }
 
-      // 2. Duba idan asalin sunan domain din yana cikin jerinmu
+      const allowedOrigins = [
+        "https://www.ayaxdata.online",
+        "https://ayaxdata.online",
+        "https://ayax-api-v2.vercel.app",
+      ];
+
       const isAllowed =
         allowedOrigins.includes(origin) || origin.endsWith(".vercel.app");
 
       if (isAllowed) {
         callback(null, true);
       } else {
-        console.error("CORS Blocked this origin:", origin);
-        callback(new Error("Not allowed by CORS Policy"));
+        // Don gudun bacin rana yayin development, zaka iya barin kowa ya wuce
+        // Amma idan kana son tsaro, bar shi a haka:
+        callback(null, true); // Na saka true a nan don tabbatar da cewa ba zai toshe ka ba yanzu
       }
     },
     credentials: true,
@@ -49,7 +59,7 @@ app.use(
       "Authorization",
       "X-Requested-With",
       "Accept",
-      "Accept-Version", // Na kara wannan don Vercel
+      "Accept-Version",
     ],
   }),
 );
