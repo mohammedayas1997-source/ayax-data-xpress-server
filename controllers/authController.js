@@ -231,3 +231,27 @@ exports.paystackWebhook = async (req, res) => {
     res.status(500).json({ status: "failed" });
   }
 };
+// Change Password
+exports.updatePassword = async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const user = await User.findById(req.user.id).select("+password");
+
+  if (!(await user.matchPassword(currentPassword))) {
+    return res
+      .status(401)
+      .json({ success: false, message: "Current password incorrect" });
+  }
+
+  user.password = newPassword;
+  await user.save();
+  res
+    .status(200)
+    .json({ success: true, message: "Password updated successfully" });
+};
+
+// Update Transaction PIN
+exports.updatePin = async (req, res) => {
+  const { newPin } = req.body;
+  await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
+  res.status(200).json({ success: true, message: "PIN updated successfully" });
+};
