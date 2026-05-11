@@ -196,6 +196,26 @@ exports.getMe = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// A cikin authController.js
+exports.paystackWebhook = async (req, res) => {
+  const event = req.body;
+
+  // Idan an yi nasarar biyan kudi
+  if (event.event === "charge.success") {
+    const email = event.data.customer.email;
+    const amount = event.data.amount / 100; // Maida shi kudi daga kobo
+
+    // Nemo User a database ka kara masa kudin
+    await User.findOneAndUpdate(
+      { email: email },
+      { $inc: { walletBalance: amount } },
+    );
+    console.log(`Wallet updated for ${email}`);
+  }
+
+  res.sendStatus(200); // Gaya wa Paystack ka karbi sakon
+};
 // Placeholders for other routes
 exports.forgotPassword = (req, res) =>
   res.status(501).json({ message: "Not implemented" });

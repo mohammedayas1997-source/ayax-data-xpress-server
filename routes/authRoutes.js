@@ -19,6 +19,7 @@ const resetPassword =
     res.status(500).json({ message: "Reset password not implemented" }));
 
 // Routes
+router.post("/webhook", authController.paystackWebhook);
 router.post("/register", register);
 router.post("/login", login);
 router.post("/forgot-password", forgotPassword);

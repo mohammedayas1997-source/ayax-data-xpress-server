@@ -166,3 +166,70 @@ exports.getMyNIMCRequests = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+exports.verifyNIMC = async (req, res) => {
+  try {
+    const { searchValue, searchType } = req.body;
+    // searchType zai iya zama: 'nin', 'phone', 'trackingId', ko 'face'
+
+    const apiKey = process.env.NIMC_API_KEY;
+    const apiBaseUrl = "https://api.yourprovider.com/v1"; // Misali: Prembly ko QoreID
+
+    let endpoint = "";
+    let payload = {};
+
+    // Saita Endpoint gwargwadon yadda mutum yake son bincike
+    switch (searchType) {
+      case "phone":
+        endpoint = `${apiBaseUrl}/nimc-phone`;
+        payload = { phone: searchValue };
+        break;
+      case "trackingId":
+        endpoint = `${apiBaseUrl}/nimc-tracking`;
+        payload = { trackingId: searchValue };
+        break;
+      case "face":
+        endpoint = `${apiBaseUrl}/nimc-face`;
+        payload = { image: searchValue }; // Base64 image
+        break;
+      default:
+        endpoint = `${apiBaseUrl}/nimc-nin`;
+        payload = { nin: searchValue };
+    }
+
+    const response = await axios.post(endpoint, payload, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (response.data.success) {
+      const citizen = response.data.data;
+
+      // Anan za ka iya cire kudi a wallet din user kafin ka nuna bayanan
+      // await User.findByIdAndUpdate(req.user.id, { $inc: { walletBalance: -100 } });
+
+      res.status(200).json({
+        success: true,
+        data: {
+          fullName: `${citizen.firstName} ${citizen.surname}`,
+          photo: citizen.photo || citizen.image, // Hoton mutum na asali
+          nin: citizen.nin,
+          phone: citizen.phone,
+          gender: citizen.gender,
+          dob: citizen.dob,
+          trackingId: citizen.trackingId,
+        },
+      });
+    } else {
+      res
+        .status(400)
+        .json({ success: false, message: "Ba a sami bayanan ba." });
+    }
+  } catch (error) {
+    console.error("NIMC Error:", error.message);
+    res
+      .status(500)
+      .json({ success: false, message: "Kuskure wajen tantancewa." });
+  }
+};
