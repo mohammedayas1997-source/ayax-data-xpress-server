@@ -15,18 +15,27 @@ exports.getBalance = async (req, res) => {
   }
 };
 
-const generateVirtualAccount = async (req, res) => {
+// --- GYARA A NAN: Na kara 'exports.' a gaba ---
+exports.generateVirtualAccount = async (req, res) => {
   try {
-    const user = req.user; // Bayanan user da ke login
+    // Nemo user daga database don tabbatar muna da latest data
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
 
     // 1. Fara kirkirar Customer a Paystack idan bashi da customer_code
+    // Na gyara phoneNumber zuwa phone (kamar yadda yake a Schema dinka)
     const customerResponse = await axios.post(
       "https://api.paystack.co/customer",
       {
         email: user.email,
         first_name: user.firstName,
-        last_name: user.lastName,
-        phone: user.phoneNumber,
+        last_name: user.surname, // Amfani da surname kamar yadda yake a Schema
+        phone: user.phone,
       },
       {
         headers: {
@@ -38,12 +47,12 @@ const generateVirtualAccount = async (req, res) => {
 
     const customerCode = customerResponse.data.data.customer_code;
 
-    // 2. Yanzu kuma ka sanya wancan link din don samar da Dedicated Account
+    // 2. Samar da Dedicated Account
     const accountResponse = await axios.post(
       "https://api.paystack.co/dedicated_account",
       {
         customer: customerCode,
-        preferred_bank: "wema-bank", // Ko "sterling-bank"
+        preferred_bank: "wema-bank",
       },
       {
         headers: {
@@ -54,20 +63,28 @@ const generateVirtualAccount = async (req, res) => {
     );
 
     if (accountResponse.data.status) {
-      // 3. Ajiye bayanan account din a Database dinka (MongoDB/MySQL)
-      const bankData = accountResponse.data.data.dedicated_account;
+      // 3. Ajiye bayanan account din a Database
+      const bankData = accountResponse.data.data;
 
+      user.paystackCustomerCode = customerCode;
       user.accountNumber = bankData.account_number;
       user.bankName = bankData.bank.name;
       user.accountName = bankData.account_name;
+
       await user.save();
 
       return res.status(200).json({
         success: true,
-        data: user,
+        message: "Virtual account generated successfully",
+        data: {
+          accountNumber: user.accountNumber,
+          bankName: user.bankName,
+          accountName: user.accountName,
+        },
       });
     }
   } catch (error) {
+    console.error("Paystack Error:", error.response?.data || error.message);
     res.status(500).json({
       success: false,
       message: error.response?.data?.message || "Failed to generate account",
@@ -95,7 +112,7 @@ exports.initializePayment = async (req, res) => {
         email: user.email,
         amount: amountInKobo,
         metadata: { userId: user._id },
-        callback_url: `${process.env.FRONTEND_URL}/wallet/verify`, // Tabbatar ka saka wannan a .env
+        callback_url: `${process.env.FRONTEND_URL}/wallet/verify`,
       },
       {
         headers: {
@@ -123,8 +140,6 @@ exports.verifyPayment = async (req, res) => {
   try {
     const { reference } = req.params;
 
-    // 1. RIGAKAFIN DOUBLE FUNDING
-    // Duba idan an riga an yi amfani da wannan reference din a Transaction model
     const alreadyProcessed = await Transaction.findOne({ reference });
     if (alreadyProcessed) {
       return res
@@ -145,14 +160,12 @@ exports.verifyPayment = async (req, res) => {
       const amountInNaira = response.data.data.amount / 100;
       const userId = response.data.data.metadata.userId;
 
-      // 2. ATOMIC UPDATE: Kara kudi ba tare da hadarin race condition ba
       const updatedUser = await User.findByIdAndUpdate(
         userId,
         { $inc: { walletBalance: amountInNaira } },
         { new: true },
       );
 
-      // 3. Record Transaction
       await Transaction.create({
         user: userId,
         type: "deposit",
