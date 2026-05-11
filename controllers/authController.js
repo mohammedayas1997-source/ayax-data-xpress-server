@@ -152,6 +152,50 @@ const createDedicatedAccount = async (user) => {
   }
 };
 
+// @desc    Authenticate user & get token
+exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Please provide email and password" });
+    }
+
+    // Neman user
+    const user = await User.findOne({ email }).select("+password");
+
+    if (!user) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
+    }
+
+    // Gwada password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
+    }
+
+    sendToken(user, 200, res);
+  } catch (error) {
+    console.error("Login Error:", error.message);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
+// @desc    Get current logged in user
+exports.getMe = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    res.status(200).json({ success: true, data: user });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 // Placeholders for other routes
 exports.forgotPassword = (req, res) =>
   res.status(501).json({ message: "Not implemented" });

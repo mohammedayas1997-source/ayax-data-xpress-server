@@ -1,20 +1,26 @@
 const express = require("express");
 const router = express.Router();
-
-// Shigo da dukkan ayyukan
 const authController = require("../controllers/authController");
 
-// Mu duba idan kowane aiki yana nan kafin mu yi amfani da shi
-const register = authController.register;
-const login = authController.login;
-const forgotPassword = authController.forgotPassword;
-const resetPassword = authController.resetPassword;
+// Tabbatar an shigo da ayyukan, idan babu su a saita su a matsayin empty function don gudun crash
+const register =
+  authController.register ||
+  ((req, res) => res.status(500).json({ message: "Register not implemented" }));
+const login =
+  authController.login ||
+  ((req, res) => res.status(500).json({ message: "Login not implemented" }));
+const forgotPassword =
+  authController.forgotPassword ||
+  ((req, res) =>
+    res.status(500).json({ message: "Forgot password not implemented" }));
+const resetPassword =
+  authController.resetPassword ||
+  ((req, res) =>
+    res.status(500).json({ message: "Reset password not implemented" }));
 
-// Idan daya daga cikinsu babu shi, Express zai bada wancan error din.
-// Tabbatar kowane daya yana da controller a authController.js
+// Routes
 router.post("/register", register);
 router.post("/login", login);
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password", resetPassword);
-
 module.exports = router;
