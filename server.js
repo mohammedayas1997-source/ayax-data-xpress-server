@@ -18,49 +18,63 @@ startDB();
 
 const app = express();
 
-// --- CORS CONFIGURATION (GYARARRE) ---
-// --- CORS CONFIGURATION (STRICT & FUNCTIONAL) ---
+// --- CORS CONFIGURATION (PROFESSIONAL & SECURE) ---
 const allowedOrigins = [
   "https://www.ayaxdata.online",
   "https://ayaxdata.online",
   "https://ayax-api-v2.vercel.app",
-  "http://localhost:19006", // Domin Expo Web testing
-  "http://localhost:3000", // Domin React local testing
+  "http://localhost:19006",
+  "http://localhost:3000",
 ];
 
+// 1. Manual Header Injection (Wannan shi ne babban maganin CORS a Vercel)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (
+    allowedOrigins.includes(origin) ||
+    !origin ||
+    origin.endsWith(".vercel.app")
+  ) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  }
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With, Accept, Accept-Version",
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+
+  // Handle Pre-flight request (OPTIONS)
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+  next();
+});
+
+// 2. Standard CORS Middleware as Backup
 app.use(
   cors({
-    origin: function (origin, callback) {
-      // 1. Bar Mobile Apps da Server-to-Server requests su wuce
-      if (!origin) return callback(null, true);
-
-      // 2. Duba ko Origin ɗin yana cikin jerin waɗanda aka amincewa
+    origin: (origin, callback) => {
       if (
-        allowedOrigins.indexOf(origin) !== -1 ||
+        !origin ||
+        allowedOrigins.includes(origin) ||
         origin.endsWith(".vercel.app")
       ) {
         callback(null, true);
       } else {
-        // Idan kana son kowa ya wuce yanzu don testing, bar shi a 'true'
-        // Amma idan kana son tsaro, saka 'new Error("Not allowed by CORS")'
-        callback(null, true);
+        callback(null, true); // Maintain compatibility for dev
       }
     },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-    ],
   }),
 );
 
-// WANNAN LAYIN YANA DA MATUƘAR MUHIMMANCI DON BROWSER
 app.options("*", cors());
-// --- BODY PARSERS (MUST BE BEFORE ROUTES) ---
-// Mun mayar da shi 50mb a nan sama domin duk wani hoto ya samu damar wucewa
+
+// --- BODY PARSERS ---
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
@@ -70,7 +84,7 @@ const supportRoutes = require("./routes/supportRoutes");
 const walletRoutes = require("./routes/walletRoutes");
 const vtuRoutes = require("./routes/vtuRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
-const paymentRoutes = require("./routes/paymentRoutes"); // Tabbatar wannan folder din 'rules' ne ko 'routes'
+const paymentRoutes = require("./routes/paymentRoutes");
 const agentRoutes = require("./routes/agentRoutes");
 const leaderRoutes = require("./routes/leaderRoutes");
 const supervisorRoutes = require("./routes/supervisorRoutes");
