@@ -19,37 +19,31 @@ startDB();
 const app = express();
 
 // --- CORS CONFIGURATION (GYARARRE) ---
+// --- CORS CONFIGURATION (STRICT & FUNCTIONAL) ---
 const allowedOrigins = [
   "https://www.ayaxdata.online",
   "https://ayaxdata.online",
   "https://ayax-api-v2.vercel.app",
+  "http://localhost:19006", // Domin Expo Web testing
+  "http://localhost:3000", // Domin React local testing
 ];
 
-// --- CORS CONFIGURATION (MAFI KYAU GA MOBILE DA WEB) ---
 app.use(
   cors({
     origin: function (origin, callback) {
-      // 1. MUHIMMI: Bar Mobile Apps su wuce
-      // A React Native, 'origin' yawanci undefined ne
-      if (!origin || origin === "null") {
-        return callback(null, true);
-      }
+      // 1. Bar Mobile Apps da Server-to-Server requests su wuce
+      if (!origin) return callback(null, true);
 
-      const allowedOrigins = [
-        "https://www.ayaxdata.online",
-        "https://ayaxdata.online",
-        "https://ayax-api-v2.vercel.app",
-      ];
-
-      const isAllowed =
-        allowedOrigins.includes(origin) || origin.endsWith(".vercel.app");
-
-      if (isAllowed) {
+      // 2. Duba ko Origin ɗin yana cikin jerin waɗanda aka amincewa
+      if (
+        allowedOrigins.indexOf(origin) !== -1 ||
+        origin.endsWith(".vercel.app")
+      ) {
         callback(null, true);
       } else {
-        // Don gudun bacin rana yayin development, zaka iya barin kowa ya wuce
-        // Amma idan kana son tsaro, bar shi a haka:
-        callback(null, true); // Na saka true a nan don tabbatar da cewa ba zai toshe ka ba yanzu
+        // Idan kana son kowa ya wuce yanzu don testing, bar shi a 'true'
+        // Amma idan kana son tsaro, saka 'new Error("Not allowed by CORS")'
+        callback(null, true);
       }
     },
     credentials: true,
@@ -59,12 +53,11 @@ app.use(
       "Authorization",
       "X-Requested-With",
       "Accept",
-      "Accept-Version",
     ],
   }),
 );
 
-// MUHIMMI: Wannan layin ne yake bawa Browser damar gudanar da "Pre-flight" request
+// WANNAN LAYIN YANA DA MATUƘAR MUHIMMANCI DON BROWSER
 app.options("*", cors());
 // --- BODY PARSERS (MUST BE BEFORE ROUTES) ---
 // Mun mayar da shi 50mb a nan sama domin duk wani hoto ya samu damar wucewa
