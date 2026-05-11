@@ -28,15 +28,12 @@ const allowedOrigins = [
 ];
 
 // 1. Manual Header Injection (Wannan shi ne babban maganin CORS a Vercel)
+// --- SA NAN TARE DA SAURAN MIDDLEWARES ---
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  // Tabbatar muna ba da damar asalin domain dinka kawai don tsaro
   if (allowedOrigins.includes(origin) || origin?.endsWith(".vercel.app")) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-  } else {
-    // Idan ba daga jerinmu yake ba, kar a bar shi ya shiga (Optional)
-    res.setHeader("Access-Control-Allow-Origin", "https://www.ayaxdata.online");
   }
 
   res.setHeader(
@@ -49,8 +46,9 @@ app.use((req, res, next) => {
   );
   res.setHeader("Access-Control-Allow-Credentials", "true");
 
+  // MUHIMMI: Browser tana bukatar 200 OK don Preflight
   if (req.method === "OPTIONS") {
-    return res.status(200).end();
+    return res.status(200).json({});
   }
   next();
 });
@@ -66,13 +64,13 @@ app.use(
       ) {
         callback(null, true);
       } else {
-        callback(null, true); // Maintain compatibility for dev
+        callback(new Error("Not allowed by CORS"));
       }
     },
     credentials: true,
+    optionsSuccessStatus: 200, // Wannan zai gyara "It does not have HTTP ok status"
   }),
 );
-
 app.options("*", cors());
 
 // --- BODY PARSERS ---
