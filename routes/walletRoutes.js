@@ -9,12 +9,13 @@ const {
 
 // Mun tabbatar da sunan authMiddleware don gudun kuskure a Vercel
 const { protect, authorize } = require("../middleware/authMiddleware");
-
+const { generateVirtualAccount } = require("../controllers/walletController");
 // --- WALLET & PAYMENT ROUTES ---
 
 // Duk waɗannan routes ɗin suna buƙatar login
 router.use(protect);
 
+router.post("/generate-virtual-account", protect, generateVirtualAccount);
 // 1. Duba kuɗin da ke cikin wallet
 router.get("/balance", getBalance);
 

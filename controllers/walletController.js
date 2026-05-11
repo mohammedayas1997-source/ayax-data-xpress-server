@@ -15,6 +15,66 @@ exports.getBalance = async (req, res) => {
   }
 };
 
+const generateVirtualAccount = async (req, res) => {
+  try {
+    const user = req.user; // Bayanan user da ke login
+
+    // 1. Fara kirkirar Customer a Paystack idan bashi da customer_code
+    const customerResponse = await axios.post(
+      "https://api.paystack.co/customer",
+      {
+        email: user.email,
+        first_name: user.firstName,
+        last_name: user.lastName,
+        phone: user.phoneNumber,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+
+    const customerCode = customerResponse.data.data.customer_code;
+
+    // 2. Yanzu kuma ka sanya wancan link din don samar da Dedicated Account
+    const accountResponse = await axios.post(
+      "https://api.paystack.co/dedicated_account",
+      {
+        customer: customerCode,
+        preferred_bank: "wema-bank", // Ko "sterling-bank"
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+
+    if (accountResponse.data.status) {
+      // 3. Ajiye bayanan account din a Database dinka (MongoDB/MySQL)
+      const bankData = accountResponse.data.data.dedicated_account;
+
+      user.accountNumber = bankData.account_number;
+      user.bankName = bankData.bank.name;
+      user.accountName = bankData.account_name;
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        data: user,
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.response?.data?.message || "Failed to generate account",
+    });
+  }
+};
+
 // @desc    Initialize Paystack Payment
 exports.initializePayment = async (req, res) => {
   try {

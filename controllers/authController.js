@@ -5,17 +5,10 @@ const axios = require("axios");
 
 // --- Helper: Generate and Send JWT Token ---
 const sendToken = (user, statusCode, res) => {
-  // Tabbatar JWT_SECRET yana nan
-  if (!process.env.JWT_SECRET) {
-    console.error("JWT_SECRET is missing!");
-  }
-
   const token = jwt.sign(
     { id: user._id },
     process.env.JWT_SECRET || "fallback_secret",
-    {
-      expiresIn: "30d",
-    },
+    { expiresIn: "30d" },
   );
 
   res.status(statusCode).json({
@@ -28,15 +21,16 @@ const sendToken = (user, statusCode, res) => {
       phone: user.phone,
       balance: user.walletBalance || 0,
       role: user.role,
+      accountNumber: user.accountNumber,
+      bankName: user.bankName,
+      accountName: user.accountName,
     },
   });
 };
 
-// @desc    Register a new user
-// @desc    Register a new user// @desc    Register a new user
+// @desc    Register a new user with Automatic Paystack Wallet
 exports.register = async (req, res) => {
   try {
-    // 1. Extract firstName and surname from the request body
     const {
       firstName,
       surname,
@@ -50,7 +44,6 @@ exports.register = async (req, res) => {
       address,
     } = req.body;
 
-    // 2. Validate essential fields manually before hitting the DB
     if (!firstName || !surname || !email || !password || !phone) {
       return res.status(400).json({
         success: false,
@@ -59,10 +52,8 @@ exports.register = async (req, res) => {
       });
     }
 
-    // 3. Create a unified 'name' for the database/Paystack if your model needs it
     const fullName = `${firstName} ${surname}`.trim();
 
-    // 4. Check if user exists
     const userExists = await User.findOne({ email });
     if (userExists) {
       return res
@@ -70,11 +61,11 @@ exports.register = async (req, res) => {
         .json({ success: false, message: "Email already registered" });
     }
 
-    // 5. Create User with the mapped fields
+    // 1. Create User in Database
     const user = await User.create({
-      firstName, // Matches your Mongoose Schema
-      surname, // Matches your Mongoose Schema
-      name: fullName, // Optional: in case your schema uses 'name'
+      firstName,
+      surname,
+      name: fullName,
       otherName,
       email,
       phone,
@@ -85,71 +76,65 @@ exports.register = async (req, res) => {
       address: role === "agent" ? address : undefined,
     });
 
-    // 6. Paystack Integration
+    // 2. Trigger Paystack Dedicated Account Creation
     try {
-      await createDedicatedAccount(user);
+      const updatedUser = await createDedicatedAccount(user);
+      // Return token with updated user details (including account numbers)
+      sendToken(updatedUser, 201, res);
     } catch (payError) {
       console.error("Paystack Account Creation Failed:", payError.message);
+      // Still send token even if Paystack fails (User can generate it later in profile)
+      sendToken(user, 201, res);
     }
-
-    sendToken(user, 201, res);
   } catch (error) {
-    console.error("Registration Error Detail:", error);
+    console.error("Registration Error:", error);
     res.status(400).json({ success: false, message: error.message });
   }
 };
 
-// --- Paystack Dedicated Account Logic ---
+// --- Paystack Dedicated Account Logic (PRIVATE) ---
 const createDedicatedAccount = async (user) => {
-  try {
-    const secretKey = process.env.PAYSTACK_SECRET_KEY;
-    if (!secretKey) {
-      console.log("Paystack Secret Key is missing in .env");
-      return;
-    }
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) throw new Error("Paystack Secret Key is missing");
 
-    // A. Create Customer
-    const customerResponse = await axios.post(
-      "https://api.paystack.co/customer",
-      {
-        email: user.email,
-        first_name: user.name.split(" ")[0] || "User",
-        last_name: user.name.split(" ")[1] || "Ayax",
-        phone: user.phone,
-      },
-      {
-        headers: { Authorization: `Bearer ${secretKey}` },
-      },
-    );
+  // Step A: Create or Get Customer on Paystack
+  const customerResponse = await axios.post(
+    "https://api.paystack.co/customer",
+    {
+      email: user.email,
+      first_name: user.firstName,
+      last_name: user.surname,
+      phone: user.phone,
+    },
+    { headers: { Authorization: `Bearer ${secretKey}` } },
+  );
 
-    const customerCode = customerResponse.data.data.customer_code;
+  const customerCode = customerResponse.data.data.customer_code;
 
-    // B. Create Dedicated Account
-    const accountResponse = await axios.post(
-      "https://api.paystack.co/dedicated_account",
-      {
-        customer: customerCode,
-        preferred_bank: "wema-bank",
-      },
-      {
-        headers: { Authorization: `Bearer ${secretKey}` },
-      },
-    );
+  // Step B: Request Dedicated Virtual Account
+  const accountResponse = await axios.post(
+    "https://api.paystack.co/dedicated_account",
+    {
+      customer: customerCode,
+      preferred_bank: "wema-bank",
+    },
+    { headers: { Authorization: `Bearer ${secretKey}` } },
+  );
 
-    // C. Update User in DB
-    await User.findByIdAndUpdate(user._id, {
+  // Step C: Save to User Record and Return Updated User
+  const bankData = accountResponse.data.data;
+  const finalizedUser = await User.findByIdAndUpdate(
+    user._id,
+    {
       paystackCustomerCode: customerCode,
-      bankName: accountResponse.data.data.bank.name,
-      accountNumber: accountResponse.data.data.account_number,
-      accountName: accountResponse.data.data.account_name,
-    });
+      bankName: bankData.bank.name,
+      accountNumber: bankData.account_number,
+      accountName: bankData.account_name,
+    },
+    { new: true }, // Returns the updated document
+  );
 
-    console.log(`Dedicated account created for ${user.email}`);
-  } catch (error) {
-    // Kara duba error din daga Paystack
-    const msg = error.response?.data?.message || error.message;
-    console.log("Paystack API Error:", msg);
-  }
+  return finalizedUser;
 };
 
 // @desc    Authenticate user & get token
@@ -160,21 +145,12 @@ exports.login = async (req, res) => {
     if (!email || !password) {
       return res
         .status(400)
-        .json({ success: false, message: "Please provide email and password" });
+        .json({ success: false, message: "Provide email and password" });
     }
 
-    // Neman user
     const user = await User.findOne({ email }).select("+password");
 
-    if (!user) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid credentials" });
-    }
-
-    // Gwada password
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
+    if (!user || !(await bcrypt.compare(password, user.password))) {
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
@@ -182,12 +158,11 @@ exports.login = async (req, res) => {
 
     sendToken(user, 200, res);
   } catch (error) {
-    console.error("Login Error:", error.message);
     res.status(500).json({ success: false, message: "Server Error" });
   }
 };
 
-// @desc    Get current logged in user
+// @desc    Get current user profile
 exports.getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -197,26 +172,34 @@ exports.getMe = async (req, res) => {
   }
 };
 
-// A cikin authController.js
+// @desc    Paystack Webhook for Automated Funding
 exports.paystackWebhook = async (req, res) => {
-  const event = req.body;
+  try {
+    // Note: In production, verify Paystack signature here for security
+    const event = req.body;
 
-  // Idan an yi nasarar biyan kudi
-  if (event.event === "charge.success") {
-    const email = event.data.customer.email;
-    const amount = event.data.amount / 100; // Maida shi kudi daga kobo
+    if (event.event === "charge.success") {
+      const { customer, amount, fees } = event.data;
+      const actualAmount = (amount - (fees || 0)) / 100; // Deduct fees if you want user to bear them
 
-    // Nemo User a database ka kara masa kudin
-    await User.findOneAndUpdate(
-      { email: email },
-      { $inc: { walletBalance: amount } },
-    );
-    console.log(`Wallet updated for ${email}`);
+      await User.findOneAndUpdate(
+        { email: customer.email },
+        { $inc: { walletBalance: actualAmount } },
+      );
+
+      console.log(
+        `[Webhook] Success: ${actualAmount} added to ${customer.email}`,
+      );
+    }
+
+    res.status(200).send("Webhook Received");
+  } catch (error) {
+    console.error("Webhook Error:", error.message);
+    res.status(500).send("Webhook Error");
   }
-
-  res.sendStatus(200); // Gaya wa Paystack ka karbi sakon
 };
-// Placeholders for other routes
+
+// Placeholders
 exports.forgotPassword = (req, res) =>
   res.status(501).json({ message: "Not implemented" });
 exports.resetPassword = (req, res) =>
