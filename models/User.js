@@ -13,9 +13,7 @@ const UserSchema = new mongoose.Schema(
       required: [true, "First name is required"],
       trim: true,
     },
-    name: {
-      type: String, // Full name for easy retrieval in Paystack/Receipts
-    },
+    name: { type: String }, // Full name for easy retrieval
     email: {
       type: String,
       required: [true, "Email is required"],
@@ -36,29 +34,25 @@ const UserSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, "Password is required"],
-      minlength: [6, "Password must be at least 6 characters"],
+      minlength: 6,
       select: false,
     },
-    walletBalance: {
-      type: Number,
-      default: 0.0,
-      min: [0, "Wallet balance cannot be negative"],
-    },
+    walletBalance: { type: Number, default: 0.0, min: 0 },
     pin: {
       type: String,
       minlength: 4,
       maxlength: 4,
-      default: "0000", // Default pin for new users
-      select: false,
+      default: "0000",
+      select: false, // Karka cire wannan, don tsaro
     },
 
-    // --- PAYSTACK DEDICATED ACCOUNTS DATA ---
+    // --- PAYSTACK DATA ---
     paystackCustomerCode: { type: String, index: true },
     bankName: { type: String },
     accountNumber: { type: String, index: true },
     accountName: { type: String },
 
-    // --- ROLE MANAGEMENT (Scalable Roles) ---
+    // --- ROLES ---
     role: {
       type: String,
       enum: [
@@ -73,7 +67,7 @@ const UserSchema = new mongoose.Schema(
       default: "user",
     },
 
-    // --- HIERARCHICAL RELATIONSHIPS ---
+    // --- RELATIONSHIPS ---
     assignedSupervisor: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -85,46 +79,32 @@ const UserSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- TARGETS & PERFORMANCE LOGIC ---
-    targets: {
-      agentGoal: { type: Number, default: 0 },
-      dataGoal: { type: Number, default: 0 }, // Goal in GB
-      supervisorGoal: { type: Number, default: 0 },
-      currentMonth: { type: String },
-    },
-
-    // --- STATUS & LOCATION ---
+    // --- STATUS ---
     isSuspended: { type: Boolean, default: false },
     state: { type: String },
     lga: { type: String },
     address: { type: String },
-
-    // Recovery Token for Password reset
-    resetPasswordToken: String,
-    resetPasswordExpire: Date,
   },
-  {
-    timestamps: true, // Automatically manages createdAt and updatedAt
-  },
+  { timestamps: true },
 );
 
 // --- MIDDLEWARES ---
 
-// Pre-save hook: Hash password, PIN, and set Full Name
 UserSchema.pre("save", async function (next) {
-  // 1. Generate Full Name automatically
+  // 1. Saita Cikakken Suna
   if (this.isModified("firstName") || this.isModified("surname")) {
     this.name = `${this.firstName} ${this.surname}`.trim();
   }
 
-  // 2. Hash Password
+  // 2. Hash Password (idan an canza shi)
   if (this.isModified("password")) {
-    const salt = await bcrypt.genSalt(12); // Higher salt for better security
+    const salt = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(this.password, salt);
   }
 
-  // 3. Hash PIN (Only if it's not the default "0000" or if it's being updated)
-  if (this.isModified("pin")) {
+  // 3. MUHIMMI: Hash PIN (Kada kayi hash idan "0000" ne na farko domin saukin login)
+  // Idan mutum ya canza PIN daga "0000" zuwa wani abu, to anan ne za'ayi hashing
+  if (this.isModified("pin") && this.pin !== "0000") {
     const salt = await bcrypt.genSalt(10);
     this.pin = await bcrypt.hash(this.pin, salt);
   }
@@ -132,17 +112,18 @@ UserSchema.pre("save", async function (next) {
   next();
 });
 
-// --- INSTANCE METHODS ---
+// --- METHODS ---
 
-// Verify Password
+// Duba Password
 UserSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// Verify PIN
+// Duba PIN
 UserSchema.methods.matchPin = async function (enteredPin) {
+  // Idan har yanzu PIN din "0000" ne kuma ba'ayi hashing ba
+  if (this.pin === "0000" && enteredPin === "0000") return true;
   return await bcrypt.compare(enteredPin, this.pin);
 };
 
-// Prevent Re-compilation of model (Critical for Vercel/Serverless)
 module.exports = mongoose.models.User || mongoose.model("User", UserSchema);
