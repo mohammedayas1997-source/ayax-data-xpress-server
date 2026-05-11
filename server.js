@@ -30,13 +30,15 @@ const allowedOrigins = [
 // 1. Manual Header Injection (Wannan shi ne babban maganin CORS a Vercel)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (
-    allowedOrigins.includes(origin) ||
-    !origin ||
-    origin.endsWith(".vercel.app")
-  ) {
-    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+
+  // Tabbatar muna ba da damar asalin domain dinka kawai don tsaro
+  if (allowedOrigins.includes(origin) || origin?.endsWith(".vercel.app")) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    // Idan ba daga jerinmu yake ba, kar a bar shi ya shiga (Optional)
+    res.setHeader("Access-Control-Allow-Origin", "https://www.ayaxdata.online");
   }
+
   res.setHeader(
     "Access-Control-Allow-Methods",
     "GET, POST, PUT, DELETE, PATCH, OPTIONS",
@@ -47,7 +49,6 @@ app.use((req, res, next) => {
   );
   res.setHeader("Access-Control-Allow-Credentials", "true");
 
-  // Handle Pre-flight request (OPTIONS)
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
