@@ -28,7 +28,6 @@ const allowedOrigins = [
 ];
 
 // 1. Manual Header Injection (Wannan shi ne babban maganin CORS a Vercel)
-// --- SA NAN TARE DA SAURAN MIDDLEWARES ---
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
@@ -68,7 +67,7 @@ app.use(
       }
     },
     credentials: true,
-    optionsSuccessStatus: 200, // Wannan zai gyara "It does not have HTTP ok status"
+    optionsSuccessStatus: 200,
   }),
 );
 app.options("*", cors());
@@ -91,8 +90,10 @@ const adminRoutes = require("./routes/adminRoutes");
 const nimcRoutes = require("./routes/nimcRoutes");
 const bvnRoutes = require("./routes/bvnRoutes");
 const superAdminRoutes = require("./routes/superAdminRoutes");
+const validationRoutes = require("./routes/validationRoutes"); // Import dinka anan
 
 // --- ROUTES REGISTRATION ---
+app.use("/api/v1/validation", validationRoutes); // Anyi amfani da v1 pattern don daidaito
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/nimc", nimcRoutes);
