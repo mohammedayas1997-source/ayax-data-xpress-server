@@ -90,10 +90,10 @@ const adminRoutes = require("./routes/adminRoutes");
 const nimcRoutes = require("./routes/nimcRoutes");
 const bvnRoutes = require("./routes/bvnRoutes");
 const superAdminRoutes = require("./routes/superAdminRoutes");
-const validationRoutes = require("./routes/validationRoutes"); // Import dinka anan
+const validationRoutes = require("./routes/ninRoutes");
 
 // --- ROUTES REGISTRATION ---
-app.use("/api/v1/validation", validationRoutes); // Anyi amfani da v1 pattern don daidaito
+app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/nimc", nimcRoutes);
