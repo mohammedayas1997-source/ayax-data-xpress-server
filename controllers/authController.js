@@ -3,6 +3,15 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const axios = require("axios");
 
+// --- Helper: Generate Referral ID for Supervisors ---
+const generateReferralId = (firstName, surname) => {
+  const firstInitial = firstName ? firstName[0] : "A";
+  const lastInitial = surname ? surname[0] : "X";
+  const initials = (firstInitial + lastInitial).toUpperCase();
+  const digits = Math.floor(1000 + Math.random() * 9000);
+  return `${initials}${digits}`;
+};
+
 // --- Helper: Generate and Send JWT Token ---
 const sendToken = (user, statusCode, res) => {
   const token = jwt.sign(
@@ -11,7 +20,6 @@ const sendToken = (user, statusCode, res) => {
     { expiresIn: "30d" },
   );
 
-  // MUHIMMI: Tabbatar an cire password kafin tura bayanan user
   res.status(statusCode).json({
     success: true,
     token,
@@ -22,6 +30,7 @@ const sendToken = (user, statusCode, res) => {
       phone: user.phone,
       balance: user.walletBalance || 0,
       role: user.role,
+      referralId: user.referralId, // Included for Supervisor Dashboard access
       accountNumber: user.accountNumber,
       bankName: user.bankName,
       accountName: user.accountName,
@@ -29,7 +38,7 @@ const sendToken = (user, statusCode, res) => {
   });
 };
 
-// @desc    Register a new user with Automatic Paystack Wallet
+// @desc    Register a new user with Automatic Paystack Wallet & Supervisor ID
 exports.register = async (req, res) => {
   try {
     const {
@@ -65,6 +74,12 @@ exports.register = async (req, res) => {
       });
     }
 
+    // --- Automatic Referral ID Logic ---
+    let referralId = undefined;
+    if (role === "supervisor") {
+      referralId = generateReferralId(firstName, surname);
+    }
+
     // 2. Create User in Database
     const user = await User.create({
       firstName,
@@ -73,8 +88,9 @@ exports.register = async (req, res) => {
       otherName,
       email: email.toLowerCase(),
       phone,
-      password, // Password hashing na faruwa a User Model pre-save
+      password,
       role: role || "user",
+      referralId: referralId, // Assigned automatically if role is supervisor
       state: state,
       lga: lga,
       address: address,
@@ -89,7 +105,6 @@ exports.register = async (req, res) => {
         "Paystack Account Creation Failed:",
         payError.response?.data || payError.message,
       );
-      // Kar mu tsayar da register idan Paystack ta samu matsala, user zai iya yi daga baya
       sendToken(user, 201, res);
     }
   } catch (error) {
@@ -103,7 +118,6 @@ const createDedicatedAccount = async (user) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey) throw new Error("Paystack Secret Key is missing in .env");
 
-  // Step A: Create Customer on Paystack
   const customerResponse = await axios.post(
     "https://api.paystack.co/customer",
     {
@@ -122,7 +136,6 @@ const createDedicatedAccount = async (user) => {
 
   const customerCode = customerResponse.data.data.customer_code;
 
-  // Step B: Request Dedicated Virtual Account
   const accountResponse = await axios.post(
     "https://api.paystack.co/dedicated_account",
     {
@@ -137,7 +150,6 @@ const createDedicatedAccount = async (user) => {
     },
   );
 
-  // Step C: Save and Return
   const bankData = accountResponse.data.data;
   return await User.findByIdAndUpdate(
     user._id,
@@ -162,7 +174,6 @@ exports.login = async (req, res) => {
         .json({ success: false, message: "Provide email and password" });
     }
 
-    // Tabbatar muna kiran email duka a lowercase
     const user = await User.findOne({ email: email.toLowerCase() }).select(
       "+password",
     );
@@ -173,7 +184,6 @@ exports.login = async (req, res) => {
         .json({ success: false, message: "Invalid credentials" });
     }
 
-    // Tabbatar muna amfani da method dake cikin User Model don matchPassword
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
       return res
@@ -205,14 +215,10 @@ exports.paystackWebhook = async (req, res) => {
   try {
     const event = req.body;
 
-    // MUHIMMI: Tabbatar kudi ne ya shigo
     if (event.event === "charge.success") {
-      const { customer, amount, fees, reference } = event.data;
-
-      // Paystack kobo take turo wa, sai mu raba da 100
+      const { customer, amount, reference } = event.data;
       const actualAmount = amount / 100;
 
-      // 1. Duba idan an riga an yi processing wannan transaction din (Security)
       const user = await User.findOneAndUpdate(
         { email: customer.email },
         { $inc: { walletBalance: actualAmount } },
@@ -224,13 +230,13 @@ exports.paystackWebhook = async (req, res) => {
       );
     }
 
-    // Dole ne a mayar wa Paystack da 200 OK
     res.status(200).json({ status: "success" });
   } catch (error) {
     console.error("Webhook Error:", error.message);
     res.status(500).json({ status: "failed" });
   }
 };
+
 // Change Password
 exports.updatePassword = async (req, res) => {
   const { currentPassword, newPassword } = req.body;

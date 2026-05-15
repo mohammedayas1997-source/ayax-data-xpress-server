@@ -79,6 +79,12 @@ const UserSchema = new mongoose.Schema(
       default: null,
     },
 
+    referralId: {
+      type: String,
+      unique: true, // Don kar mutum biyu su taba samun ID daya
+      sparse: true, // Wannan zai ba dama ga wadanda ba supervisors ba su zauna babu ID
+    },
+
     // --- STATUS ---
     isSuspended: { type: Boolean, default: false },
     state: { type: String },
