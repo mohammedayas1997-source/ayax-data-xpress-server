@@ -1,27 +1,28 @@
 const express = require("express");
 const router = express.Router();
-const authController = require("../controllers/authController");
+const {
+  register,
+  login,
+  getMe,
+  paystackWebhook,
+  updatePassword,
+  updatePin,
+} = require("../controllers/authController");
 
-// Tabbatar an shigo da ayyukan, idan babu su a saita su a matsayin empty function don gudun crash
-const register =
-  authController.register ||
-  ((req, res) => res.status(500).json({ message: "Register not implemented" }));
-const login =
-  authController.login ||
-  ((req, res) => res.status(500).json({ message: "Login not implemented" }));
-const forgotPassword =
-  authController.forgotPassword ||
-  ((req, res) =>
-    res.status(500).json({ message: "Forgot password not implemented" }));
-const resetPassword =
-  authController.resetPassword ||
-  ((req, res) =>
-    res.status(500).json({ message: "Reset password not implemented" }));
+// --- Public Routes ---
 
-// Routes
-router.post("/webhook", authController.paystackWebhook);
+// @route   POST /api/v1/auth/register
 router.post("/register", register);
+
+// @route   POST /api/v1/auth/login
 router.post("/login", login);
-router.post("/forgot-password", forgotPassword);
-router.post("/reset-password", resetPassword);
+
+// @route   POST /api/v1/auth/webhook (Paystack)
+router.post("/webhook", paystackWebhook);
+
+// --- Protected Routes (Idan kana da protect middleware) ---
+// router.get("/me", protect, getMe);
+// router.put("/updatepassword", protect, updatePassword);
+// router.put("/updatepin", protect, updatePin);
+
 module.exports = router;
