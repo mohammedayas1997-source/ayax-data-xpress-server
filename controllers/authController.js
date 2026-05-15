@@ -1,6 +1,5 @@
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
 const axios = require("axios");
 
 // --- Helper: Generate Referral ID for Supervisors ---
@@ -30,7 +29,7 @@ const sendToken = (user, statusCode, res) => {
       phone: user.phone,
       balance: user.walletBalance || 0,
       role: user.role,
-      referralId: user.referralId, // Included for Supervisor Dashboard access
+      referralId: user.referralId,
       accountNumber: user.accountNumber,
       bankName: user.bankName,
       accountName: user.accountName,
@@ -38,7 +37,7 @@ const sendToken = (user, statusCode, res) => {
   });
 };
 
-// @desc    Register a new user with Automatic Paystack Wallet & Supervisor ID
+// @desc    Register a new user with Automated Paystack Virtual Account
 exports.register = async (req, res) => {
   try {
     const {
@@ -54,70 +53,83 @@ exports.register = async (req, res) => {
       address,
     } = req.body;
 
-    // 1. Validation check
+    // 1. Critical Validation
     if (!firstName || !surname || !email || !password || !phone) {
       return res.status(400).json({
         success: false,
-        message:
-          "Mandatory fields: firstName, surname, email, phone, and password are required.",
+        message: "Registration failed: Mandatory data fields are missing.",
       });
     }
 
+    const normalizedEmail = email.toLowerCase().trim();
     const userExists = await User.findOne({
-      $or: [{ email: email.toLowerCase() }, { phone: phone }],
+      $or: [{ email: normalizedEmail }, { phone: phone.trim() }],
     });
 
     if (userExists) {
       return res.status(400).json({
         success: false,
-        message: "User with this email or phone already exists",
+        message:
+          "Identifier conflict: Email or phone string already exists in the database.",
       });
     }
 
-    // --- Automatic Referral ID Logic ---
+    // 2. Automated Referral Logic
     let referralId = undefined;
-    if (role === "supervisor") {
+    if (role === "supervisor" || role === "agent") {
       referralId = generateReferralId(firstName, surname);
     }
 
-    // 2. Create User in Database
+    // 3. Persistent Storage (Database Entry)
     const user = await User.create({
-      firstName,
-      surname,
+      firstName: firstName.trim(),
+      surname: surname.trim(),
       name: `${firstName} ${surname}`.trim(),
-      otherName,
-      email: email.toLowerCase(),
-      phone,
+      otherName: otherName ? otherName.trim() : "",
+      email: normalizedEmail,
+      phone: phone.trim(),
       password,
       role: role || "user",
-      referralId: referralId, // Assigned automatically if role is supervisor
-      state: state,
-      lga: lga,
-      address: address,
+      referralId,
+      state,
+      lga,
+      address,
     });
 
-    // 3. Trigger Paystack Dedicated Account Creation
+    // 4. Paystack Virtual Account Provisioning
     try {
       const updatedUser = await createDedicatedAccount(user);
-      sendToken(updatedUser, 201, res);
-    } catch (payError) {
+      return sendToken(updatedUser, 201, res);
+    } catch (paystackError) {
       console.error(
-        "Paystack Account Creation Failed:",
-        payError.response?.data || payError.message,
+        "Paystack Provisioning Failure:",
+        paystackError.response?.data || paystackError.message,
       );
-      sendToken(user, 201, res);
+      // Return user without account details if Paystack API fails
+      return sendToken(user, 201, res);
     }
   } catch (error) {
-    console.error("Registration Error:", error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Critical Registration Error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Internal server processing failure." });
   }
 };
 
-// --- Paystack Dedicated Account Logic (PRIVATE) ---
+// --- Paystack Dedicated Account Logic (Internal Protocol) ---
 const createDedicatedAccount = async (user) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
-  if (!secretKey) throw new Error("Paystack Secret Key is missing in .env");
+  if (!secretKey)
+    throw new Error("Infrastructure Error: Paystack Secret Key undefined.");
 
+  const axiosConfig = {
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/json",
+    },
+  };
+
+  // Step A: Create or Retrieve Paystack Customer Object
   const customerResponse = await axios.post(
     "https://api.paystack.co/customer",
     {
@@ -126,31 +138,24 @@ const createDedicatedAccount = async (user) => {
       last_name: user.surname,
       phone: user.phone,
     },
-    {
-      headers: {
-        Authorization: `Bearer ${secretKey}`,
-        "Content-Type": "application/json",
-      },
-    },
+    axiosConfig,
   );
 
   const customerCode = customerResponse.data.data.customer_code;
 
+  // Step B: Initialize Dedicated Virtual Account (Wema Bank Default)
   const accountResponse = await axios.post(
     "https://api.paystack.co/dedicated_account",
     {
       customer: customerCode,
       preferred_bank: "wema-bank",
     },
-    {
-      headers: {
-        Authorization: `Bearer ${secretKey}`,
-        "Content-Type": "application/json",
-      },
-    },
+    axiosConfig,
   );
 
   const bankData = accountResponse.data.data;
+
+  // Step C: Update User Record with Real-Time Banking Parameters
   return await User.findByIdAndUpdate(
     user._id,
     {
@@ -163,101 +168,85 @@ const createDedicatedAccount = async (user) => {
   );
 };
 
-// @desc    Authenticate user & get token
+// @desc    Authenticate user & session initialization
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-
     if (!email || !password) {
       return res
         .status(400)
-        .json({ success: false, message: "Provide email and password" });
+        .json({ success: false, message: "Credentials required." });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() }).select(
-      "+password",
-    );
-
-    if (!user) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid credentials" });
-    }
-
-    const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid credentials" });
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+    }).select("+password");
+    if (!user || !(await user.matchPassword(password))) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication failed: Invalid parameters.",
+      });
     }
 
     sendToken(user, 200, res);
   } catch (error) {
-    console.error("Login Error:", error);
+    console.error("Login Protocol Error:", error);
     res
       .status(500)
-      .json({ success: false, message: "Server Error during login" });
+      .json({ success: false, message: "Authentication server error." });
   }
 };
 
-// @desc    Get current user profile
-exports.getMe = async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-    res.status(200).json({ success: true, data: user });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Paystack Webhook for Automated Funding
+// @desc    Paystack Webhook for Real-Time Wallet Funding
 exports.paystackWebhook = async (req, res) => {
   try {
     const event = req.body;
 
     if (event.event === "charge.success") {
-      const { customer, amount, reference } = event.data;
-      const actualAmount = amount / 100;
+      const { customer, amount } = event.data;
+      const creditValue = amount / 100; // Convert Kobo to Naira
 
-      const user = await User.findOneAndUpdate(
+      await User.findOneAndUpdate(
         { email: customer.email },
-        { $inc: { walletBalance: actualAmount } },
-        { new: true },
+        { $inc: { walletBalance: creditValue } },
       );
 
       console.log(
-        `[Webhook Success] Credited ${customer.email} with N${actualAmount}`,
+        `[REAL-TIME FUNDING] Account ${customer.email} credited with NGN ${creditValue}`,
       );
     }
 
     res.status(200).json({ status: "success" });
   } catch (error) {
-    console.error("Webhook Error:", error.message);
+    console.error("Webhook Synchronization Failure:", error.message);
     res.status(500).json({ status: "failed" });
   }
 };
 
-// Change Password
+// Change Password Parameters
 exports.updatePassword = async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const user = await User.findById(req.user.id).select("+password");
 
   if (!(await user.matchPassword(currentPassword))) {
-    return res
-      .status(401)
-      .json({ success: false, message: "Current password incorrect" });
+    return res.status(401).json({
+      success: false,
+      message: "Security check failed: Current key incorrect.",
+    });
   }
 
   user.password = newPassword;
   await user.save();
   res
     .status(200)
-    .json({ success: true, message: "Password updated successfully" });
+    .json({ success: true, message: "Security parameters updated." });
 };
 
-// Update Transaction PIN
+// Update Transaction PIN Logic
 exports.updatePin = async (req, res) => {
   const { newPin } = req.body;
   await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
-  res.status(200).json({ success: true, message: "PIN updated successfully" });
+  res
+    .status(200)
+    .json({ success: true, message: "Transaction PIN synchronized." });
 };
