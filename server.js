@@ -113,15 +113,24 @@ app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
 
-// --- NEW DIRECT ENDPOINT FOR CUSTOMER PROFILE SYNC ---
+// --- Nemo wannan bangaren a server.js ka sauya shi zuwa haka ---
 app.get("/api/v1/user/profile", protect, async (req, res) => {
   try {
+    // req.user yana samuwa ne idan protect middleware ya wuce lafiya
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: No user attached to request",
+      });
+    }
+
     const user = await User.findById(req.user.id);
     if (!user) {
       return res
         .status(404)
         .json({ success: false, message: "User not found" });
     }
+
     res.status(200).json({
       status: "success",
       success: true,
@@ -131,20 +140,6 @@ app.get("/api/v1/user/profile", protect, async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
-// --- ROOT ENDPOINT ---
-app.get("/", (req, res) => {
-  res.status(200).send(`
-        <div style="font-family: sans-serif; text-align: center; padding: 50px;">
-            <h1 style="color: #1e3a8a;">Ayax API v2 is ONLINE</h1>
-            <p style="color: #666;">High-Performance Backend System Active.</p>
-            <div style="display: inline-block; padding: 10px 20px; background: #f1f5f9; border-radius: 8px; font-weight: bold; color: #1e3a8a;">
-                System Status: Production Ready
-            </div>
-        </div>
-    `);
-});
-
 // --- 404 HANDLER ---
 app.use("*", (req, res) => {
   res.status(404).json({ success: false, message: "API Route not found" });
