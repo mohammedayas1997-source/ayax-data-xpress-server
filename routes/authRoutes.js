@@ -1,36 +1,60 @@
 const express = require("express");
 const router = express.Router();
+const User = require("../models/User"); // Tabbatar sunan model dinka User ne kuma yana nan
+
 const {
   register,
   login,
-  getMe,
   paystackWebhook,
   updatePassword,
   updatePin,
 } = require("../controllers/authController");
 
-// Muna bukatar protect middleware dinka domin kiyaye sirrin asusu
-const { protect } = require("../middleware/authMiddleware"); // Tabbatar sunan file din da folder dinsa haka suke
+// Muna amfani da protect middleware dinka
+const { protect } = require("../middleware/authMiddleware");
 
 // --- Public Routes ---
-
-// @route   POST /api/v1/auth/register
 router.post("/register", register);
-
-// @route   POST /api/v1/auth/login
 router.post("/login", login);
-
-// @route   POST /api/v1/auth/webhook (Paystack)
 router.post("/webhook", paystackWebhook);
 
-// --- Protected Routes (An bude su kuma an gyara kofar profile) ---
+// --- Protected Routes ---
 
-// 1. Wannan zai karbi kiran da frontend ke yi na Customer profile
-router.get("/profile", protect, getMe);
+// Mun gina aikin profile din a nan kai-tsaye domin magance [Undefined] callback error
+router.get("/profile", protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res
+        .status(404)
+        .json({ status: "fail", message: "User not found" });
+    }
+    res.status(200).json({
+      status: "success",
+      data: user, // Ko kuma { user } dangane da yadda frontend dinka ke tsammani
+    });
+  } catch (error) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
 
-// 2. Wadannan ma mun bude su domin su yi aiki lokacin da aka nemi sauya password ko fili
-router.get("/me", protect, getMe);
-router.put("/updatepassword", protect, updatePassword);
-router.put("/updatepin", protect, updatePin);
+// Haka ma ga wannan kofar idan frontend tana bukata
+router.get("/me", protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res
+        .status(404)
+        .json({ status: "fail", message: "User not found" });
+    }
+    res.status(200).json({ status: "success", data: user });
+  } catch (error) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// Wadannan idan suna da callback a controller, zaka iya barinsu
+if (updatePassword) router.put("/updatepassword", protect, updatePassword);
+if (updatePin) router.put("/updatepin", protect, updatePin);
 
 module.exports = router;
