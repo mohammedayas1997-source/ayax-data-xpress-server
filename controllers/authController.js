@@ -79,7 +79,9 @@ const sendToken = (user, statusCode, res) => {
 
   res.status(statusCode).json({
     success: true,
+    status: "success", // An sanya wannan don ya yi daidai da 'response.data.status === "success"' na frontend
     token,
+    role: user.role, // An fito da role a matakin farko na json domin cika sharadin 'response.data.role'
     user: {
       id: user._id,
       name: user.name,
@@ -91,6 +93,21 @@ const sendToken = (user, statusCode, res) => {
       accountNumber: user.accountNumber || "Initialization Pending",
       bankName: user.bankName || "Wema Bank",
       accountName: user.accountName || user.name,
+    },
+    data: {
+      // An kara wannan tsarin don tabbatar da 'response.data.data.user' na frentend shima ya wuce
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        balance: user.walletBalance || 0,
+        role: user.role,
+        referralId: user.referralId,
+        accountNumber: user.accountNumber || "Initialization Pending",
+        bankName: user.bankName || "Wema Bank",
+        accountName: user.accountName || user.name,
+      },
     },
   });
 };
@@ -244,27 +261,34 @@ exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Credentials required." });
+      return res.status(400).json({
+        success: false,
+        status: "fail",
+        message: "Credentials required.",
+      });
     }
 
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
     }).select("+password");
+
     if (!user || !(await user.matchPassword(password))) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Invalid parameters.",
+        status: "fail",
+        message: "Authentication failed: Invalid email or password.",
       });
     }
 
+    // Kiran helper function din da aka inganta tsarin bayanan sa sama
     sendToken(user, 200, res);
   } catch (error) {
     console.error("Login Protocol Error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Authentication server error." });
+    res.status(500).json({
+      success: false,
+      status: "error",
+      message: "Authentication server error.",
+    });
   }
 };
 
