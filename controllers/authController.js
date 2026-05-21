@@ -345,3 +345,29 @@ exports.updatePin = async (req, res) => {
     .status(200)
     .json({ success: true, message: "Transaction PIN synchronized." });
 };
+// Duba ko zaka ga wuri mai kama da wannan a authController.js ko userRoutes.js
+exports.getUserProfile = async (req, res) => {
+  try {
+    // req.user.id yana fitowa ne daga 'protect' middleware dinka
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        status: "fail",
+        message: "User not found with this ID",
+      });
+    }
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        user,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "error",
+      message: error.message,
+    });
+  }
+};
