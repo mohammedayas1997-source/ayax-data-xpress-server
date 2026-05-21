@@ -93,6 +93,10 @@ const bvnRoutes = require("./routes/bvnRoutes");
 const superAdminRoutes = require("./routes/superAdminRoutes");
 const validationRoutes = require("./routes/ninRoutes");
 
+// --- INJECTING MIDDLEWARE & USER MODEL FOR THE DIRECT ROUTE ---
+const { protect } = require("./middleware/authMiddleware");
+const User = require("./models/User");
+
 // --- ROUTES REGISTRATION ---
 app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/auth", authRoutes);
@@ -108,6 +112,25 @@ app.use("/api/v1/leader", leaderRoutes);
 app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
+
+// --- NEW DIRECT ENDPOINT FOR CUSTOMER PROFILE SYNC ---
+app.get("/api/v1/user/profile", protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+    res.status(200).json({
+      status: "success",
+      success: true,
+      data: user,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 // --- ROOT ENDPOINT ---
 app.get("/", (req, res) => {
