@@ -268,12 +268,10 @@ exports.login = async (req, res) => {
       });
     }
 
-    // AN GYARA NAN: Maimakon kwaso password kadai, mun tilasta wa Mongoose ya fito da duka bayanan Agent radau ba tare da wani ya bace ba
+    // GYARA NA KWARAI: An sanya +password kadai (wanda shi ne kadai ke da select: false a Schema), sauran an bar su a matsayin default selection
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
-    }).select(
-      "+password +role +state +lga +address +firstName +surname +name +phone +walletBalance +referralId +accountNumber +bankName +accountName",
-    );
+    }).select("+password");
 
     if (!user || !(await user.matchPassword(password))) {
       return res.status(401).json({
@@ -339,10 +337,10 @@ exports.updatePassword = async (req, res) => {
     .json({ success: true, message: "Security parameters updated." });
 };
 
-// Update Transaction PIN Logic
+// Update Transaction PIN Logic - AN GYARA PIN FIELD ANAN
 exports.updatePin = async (req, res) => {
   const { newPin } = req.body;
-  await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
+  await User.findByIdAndUpdate(req.user.id, { pin: newPin });
   res
     .status(200)
     .json({ success: true, message: "Transaction PIN synchronized." });
