@@ -176,8 +176,8 @@ exports.register = async (req, res) => {
     try {
       const updatedUser = await createDedicatedAccount(user);
 
-      // DISPATCH REAL-TIME EMAIL NOTIFICATION
-      await sendWelcomeEmail(updatedUser);
+      // GYARA NA KWARAI: An cire 'await' a nan don aiko da Email a bayan fage, ba tare da ya tsaida frontend tana juyawa ba
+      sendWelcomeEmail(updatedUser);
 
       return sendToken(updatedUser, 201, res);
     } catch (paystackError) {
@@ -196,7 +196,8 @@ exports.register = async (req, res) => {
         { new: true },
       );
 
-      await sendWelcomeEmail(fallbackUser);
+      // GYARA NA KWARAI: An cire 'await' a nan ma don gudun jinkiri idan an fada fallback
+      sendWelcomeEmail(fallbackUser);
       return sendToken(fallbackUser, 201, res);
     }
   } catch (error) {
@@ -268,7 +269,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // GYARA NA KWARAI: An sanya +password kadai (wanda shi ne kadai ke da select: false a Schema), sauran an bar su a matsayin default selection
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
     }).select("+password");
@@ -337,7 +337,7 @@ exports.updatePassword = async (req, res) => {
     .json({ success: true, message: "Security parameters updated." });
 };
 
-// Update Transaction PIN Logic - AN GYARA PIN FIELD ANAN
+// Update Transaction PIN Logic
 exports.updatePin = async (req, res) => {
   const { newPin } = req.body;
   await User.findByIdAndUpdate(req.user.id, { pin: newPin });
@@ -345,10 +345,10 @@ exports.updatePin = async (req, res) => {
     .status(200)
     .json({ success: true, message: "Transaction PIN synchronized." });
 };
-// Duba ko zaka ga wuri mai kama da wannan a authController.js ko userRoutes.js
+
+// Get User Profile Method
 exports.getUserProfile = async (req, res) => {
   try {
-    // req.user.id yana fitowa ne daga 'protect' middleware dinka
     const user = await User.findById(req.user.id);
 
     if (!user) {
