@@ -79,9 +79,9 @@ const sendToken = (user, statusCode, res) => {
 
   res.status(statusCode).json({
     success: true,
-    status: "success", // An sanya wannan don ya yi daidai da 'response.data.status === "success"' na frontend
+    status: "success",
     token,
-    role: user.role, // An fito da role a matakin farko na json domin cika sharadin 'response.data.role'
+    role: user.role,
     user: {
       id: user._id,
       name: user.name,
@@ -93,9 +93,11 @@ const sendToken = (user, statusCode, res) => {
       accountNumber: user.accountNumber || "Initialization Pending",
       bankName: user.bankName || "Wema Bank",
       accountName: user.accountName || user.name,
+      state: user.state,
+      lga: user.lga,
+      address: user.address,
     },
     data: {
-      // An kara wannan tsarin don tabbatar da 'response.data.data.user' na frentend shima ya wuce
       user: {
         id: user._id,
         name: user.name,
@@ -107,6 +109,9 @@ const sendToken = (user, statusCode, res) => {
         accountNumber: user.accountNumber || "Initialization Pending",
         bankName: user.bankName || "Wema Bank",
         accountName: user.accountName || user.name,
+        state: user.state,
+        lga: user.lga,
+        address: user.address,
       },
     },
   });
@@ -181,7 +186,6 @@ exports.register = async (req, res) => {
         paystackError.response?.data || paystackError.message,
       );
 
-      // Graceful fallback values inside MongoDB if Paystack declines production compliance checks
       const fallbackUser = await User.findByIdAndUpdate(
         user._id,
         {
@@ -192,7 +196,6 @@ exports.register = async (req, res) => {
         { new: true },
       );
 
-      // Fallback: Notify user even if banking entity generation delayed
       await sendWelcomeEmail(fallbackUser);
       return sendToken(fallbackUser, 201, res);
     }
@@ -217,7 +220,6 @@ const createDedicatedAccount = async (user) => {
     },
   };
 
-  // Step 1: Create or Fetch existing Paystack Customer Profile
   const customerResponse = await axios.post(
     "https://api.paystack.co/customer",
     {
@@ -231,7 +233,6 @@ const createDedicatedAccount = async (user) => {
 
   const customerCode = customerResponse.data.data.customer_code;
 
-  // Step 2: Provision Dedicated Virtual Account Mapping Node
   const accountResponse = await axios.post(
     "https://api.paystack.co/dedicated_account",
     {
@@ -243,7 +244,6 @@ const createDedicatedAccount = async (user) => {
 
   const bankData = accountResponse.data.data;
 
-  // Step 3: Record successfully instantiated secure virtual bank structures
   return await User.findByIdAndUpdate(
     user._id,
     {
@@ -268,9 +268,12 @@ exports.login = async (req, res) => {
       });
     }
 
+    // AN GYARA NAN: Maimakon kwaso password kadai, mun tilasta wa Mongoose ya fito da duka bayanan Agent radau ba tare da wani ya bace ba
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
-    }).select("+password");
+    }).select(
+      "+password +role +state +lga +address +firstName +surname +name +phone +walletBalance +referralId +accountNumber +bankName +accountName",
+    );
 
     if (!user || !(await user.matchPassword(password))) {
       return res.status(401).json({
@@ -280,7 +283,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Kiran helper function din da aka inganta tsarin bayanan sa sama
     sendToken(user, 200, res);
   } catch (error) {
     console.error("Login Protocol Error:", error);
