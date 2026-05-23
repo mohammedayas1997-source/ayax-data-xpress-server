@@ -4,16 +4,23 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const connectDB = require("./config/db");
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 
 dotenv.config();
 
 // --- DATABASE CONNECTION ---
 const startDB = async () => {
   try {
-    await connectDB();
-    console.log("MongoDB Connected Successfully");
+    await connectDB(); // Assuming this calls mongoose.connect(process.env.MONGO_URI)
+
+    // ADD THIS LINE TO DEBUG:
+    console.log("✅ MongoDB Connected Successfully");
+    console.log(
+      "🔍 Currently connected to database:",
+      mongoose.connection.name,
+    );
   } catch (err) {
-    console.error("MongoDB Connection Failed:", err.message);
+    console.error("❌ MongoDB Connection Failed:", err.message);
   }
 };
 startDB();
