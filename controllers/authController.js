@@ -261,6 +261,8 @@ const createDedicatedAccount = async (user) => {
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    // Tabbatar da cewa akwai bayanai
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -269,11 +271,17 @@ exports.login = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({
-      email: email.toLowerCase().trim(),
-    }).select("+password");
+    const normalizedEmail = email.toLowerCase().trim();
+    console.log("🔍 Searching for user in DB:", normalizedEmail);
 
-    if (!user || !(await user.matchPassword(password))) {
+    // Neman user a database
+    const user = await User.findOne({ email: normalizedEmail }).select(
+      "+password",
+    );
+
+    // Idan babu user, kada ka ce "Invalid password", ka ce "Invalid credentials"
+    if (!user) {
+      console.log("❌ User not found with email:", normalizedEmail);
       return res.status(401).json({
         success: false,
         status: "fail",
@@ -281,9 +289,23 @@ exports.login = async (req, res) => {
       });
     }
 
+    // Tabbatar da password
+    const isMatch = await user.matchPassword(password);
+    console.log("🔐 Password match status for", normalizedEmail, ":", isMatch);
+
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        status: "fail",
+        message: "Authentication failed: Invalid email or password.",
+      });
+    }
+
+    // Idan komai ya tafi daidai
+    console.log("✅ Login successful for:", normalizedEmail);
     sendToken(user, 200, res);
   } catch (error) {
-    console.error("Login Protocol Error:", error);
+    console.error("🚨 Login Protocol Error:", error);
     res.status(500).json({
       success: false,
       status: "error",
