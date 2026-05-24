@@ -5,6 +5,7 @@ const User = require("../models/User"); // Tabbatar sunan model dinka User ne ku
 const {
   register,
   login,
+  supervisorLogin,
   paystackWebhook,
   updatePassword,
   updatePin,
@@ -16,6 +17,7 @@ const { protect } = require("../middleware/authMiddleware");
 // --- Public Routes ---
 router.post("/register", register);
 router.post("/login", login);
+router.post("/supervisor-login", supervisorLogin);
 router.post("/webhook", paystackWebhook);
 
 // --- Protected Routes ---

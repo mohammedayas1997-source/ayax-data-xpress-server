@@ -319,14 +319,19 @@ exports.paystackWebhook = async (req, res) => {
   try {
     const event = req.body;
 
+    // ... ciki na paystackWebhook
     if (event.event === "charge.success") {
       const { customer, amount } = event.data;
       const creditValue = amount / 100;
 
+      // GA GYARAN: Kada ka yi amfani da 'email' nan, ka yi amfani da 'customer.email'
+      console.log("🔍 Processing funding for:", customer.email);
+
       await User.findOneAndUpdate(
-        { email: customer.email },
+        { email: customer.email }, // Ka tabbatar wannan shi ne key
         { $inc: { walletBalance: creditValue } },
       );
+      // ...
 
       console.log(
         `[REAL-TIME FUNDING] Account ${customer.email} credited with NGN ${creditValue}`,
