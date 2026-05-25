@@ -1,12 +1,6 @@
 const express = require("express");
 const router = express.Router();
-
-const User = require("../models/User");
-
-// ================================
-// CONTROLLERS
-// ================================
-const authController = require("../controllers/authController");
+const User = require("../models/User"); // Tabbatar sunan model dinka User ne kuma yana nan
 
 const {
   register,
@@ -15,114 +9,54 @@ const {
   paystackWebhook,
   updatePassword,
   updatePin,
-} = authController;
+} = require("../controllers/authController");
 
-// ================================
-// MIDDLEWARE
-// ================================
+// Muna amfani da protect middleware dinka
 const { protect } = require("../middleware/authMiddleware");
 
-// ================================
-// DEBUG (OPTIONAL)
-// ================================
-console.log("AUTH CONTROLLERS LOADED:");
-console.log(Object.keys(authController));
-
-// ================================
-// VALIDATION (DEV SAFETY CHECK)
-// ================================
-const requiredControllers = {
-  register,
-  login,
-  supervisorLogin,
-  paystackWebhook,
-};
-
-Object.entries(requiredControllers).forEach(([name, fn]) => {
-  if (typeof fn !== "function") {
-    throw new Error(`❌ Controller missing: ${name}`);
-  }
-});
-
-// ================================
-// PUBLIC ROUTES
-// ================================
+// --- Public Routes ---
 router.post("/register", register);
-
 router.post("/login", login);
-
 router.post("/supervisor-login", supervisorLogin);
-
 router.post("/webhook", paystackWebhook);
 
-// ================================
-// PROTECTED ROUTES
-// ================================
+// --- Protected Routes ---
 
-// USER PROFILE
+// Mun gina aikin profile din a nan kai-tsaye domin magance [Undefined] callback error
 router.get("/profile", protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("-password");
-
+    const user = await User.findById(req.user.id);
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+      return res
+        .status(404)
+        .json({ status: "fail", message: "User not found" });
     }
-
     res.status(200).json({
-      success: true,
-      data: user,
+      status: "success",
+      data: user, // Ko kuma { user } dangane da yadda frontend dinka ke tsammani
     });
   } catch (error) {
-    console.log("PROFILE ERROR:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ status: "error", message: error.message });
   }
 });
 
-// CURRENT USER
+// Haka ma ga wannan kofar idan frontend tana bukata
 router.get("/me", protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("-password");
-
+    const user = await User.findById(req.user.id);
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+      return res
+        .status(404)
+        .json({ status: "fail", message: "User not found" });
     }
-
-    res.status(200).json({
-      success: true,
-      data: user,
-    });
+    res.status(200).json({ status: "success", data: user });
   } catch (error) {
-    console.log("ME ERROR:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ status: "error", message: error.message });
   }
 });
 
-// ================================
-// OPTIONAL UPDATES
-// ================================
-if (typeof updatePassword === "function") {
-  router.put("/updatepassword", protect, updatePassword);
-}
+// Wadannan idan suna da callback a controller, zaka iya barinsu
+if (updatePassword) router.put("/updatepassword", protect, updatePassword);
+if (updatePin) router.put("/updatepin", protect, updatePin);
 
-if (typeof updatePin === "function") {
-  router.put("/updatepin", protect, updatePin);
-}
-
-// ================================
-// EXPORT
-// ================================
 module.exports = router;
