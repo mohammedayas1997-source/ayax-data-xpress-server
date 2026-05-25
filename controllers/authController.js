@@ -399,37 +399,73 @@ exports.getUserProfile = async (req, res) => {
   }
 };
 // @desc    Special login for supervisors
-exports.supervisorLogin = async (req, res) => {
+const supervisorLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    // Validate
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Provide credentials." });
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required",
+      });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
-    const user = await User.findOne({ email: normalizedEmail }).select(
-      "+password",
+    // Find supervisor
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+      role: "supervisor",
+    }).select("+password");
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials.",
+      });
+    }
+
+    // Compare password
+    const isMatch = await user.matchPassword(password);
+
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials.",
+      });
+    }
+
+    // Generate JWT
+    const token = jwt.sign(
+      {
+        id: user._id,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "7d",
+      },
     );
 
-    // Tabbatar da cewa user din ya wanzu kuma matsayinsa Supervisor ne
-    if (!user || user.role !== "supervisor") {
-      return res
-        .status(401)
-        .json({ success: false, message: "Unauthorized access." });
-    }
-
-    const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid credentials." });
-    }
-
-    sendToken(user, 200, res);
+    res.status(200).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error." });
+    console.log("Supervisor Login Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+    });
   }
+};
+
+module.exports = {
+  supervisorLogin,
 };

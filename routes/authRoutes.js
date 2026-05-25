@@ -13,7 +13,7 @@ const {
 
 // Muna amfani da protect middleware dinka
 const { protect } = require("../middleware/authMiddleware");
-
+const { supervisorLogin } = require("../controllers/authController");
 // --- Public Routes ---
 router.post("/register", register);
 router.post("/login", login);
