@@ -235,8 +235,6 @@ const login = async (req, res) => {
 
 const supervisorLogin = async (req, res) => {
   try {
-    const { email, password } = req.body;
-
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
       role: "supervisor",
