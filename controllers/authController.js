@@ -235,10 +235,21 @@ const login = async (req, res) => {
 
 const supervisorLogin = async (req, res) => {
   try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required",
+      });
+    }
+
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
       role: "supervisor",
     }).select("+password");
+
+    console.log("SUPERVISOR FOUND:", user);
 
     if (!user) {
       return res.status(401).json({
@@ -247,22 +258,49 @@ const supervisorLogin = async (req, res) => {
       });
     }
 
-    const match = await user.matchPassword(password);
+    if (!user.password) {
+      return res.status(500).json({
+        success: false,
+        message: "Password missing in DB",
+      });
+    }
 
-    if (!match) {
+    const isMatch = await user.matchPassword(password);
+
+    console.log("PASSWORD MATCH:", isMatch);
+
+    if (!isMatch) {
       return res.status(401).json({
         success: false,
         message: "Invalid credentials",
       });
     }
 
-    return sendToken(user, 200, res);
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" },
+    );
+
+    return res.status(200).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
   } catch (error) {
-    console.log("SUPERVISOR LOGIN ERROR:", error);
-    res.status(500).json({ success: false });
+    console.error("SUPERVISOR LOGIN ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
-
 // ================================
 // WEBHOOK
 // ================================
