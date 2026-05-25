@@ -1,61 +1,152 @@
 const express = require("express");
 const router = express.Router();
-const User = require("../models/User"); // Tabbatar sunan model dinka User ne kuma yana nan
 
-const {
-  register,
-  login,
-  supervisorLogin,
-  paystackWebhook,
-  updatePassword,
-  updatePin,
-} = require("../controllers/authController");
+const User = require("../models/User");
 
-// Muna amfani da protect middleware dinka
+// ================================
+// CONTROLLERS
+// ================================
+const authController = require("../controllers/authController");
+
+const register =
+  authController.register ||
+  ((req, res) => {
+    res.status(500).json({
+      success: false,
+      message: "Register controller missing",
+    });
+  });
+
+const login =
+  authController.login ||
+  ((req, res) => {
+    res.status(500).json({
+      success: false,
+      message: "Login controller missing",
+    });
+  });
+
+const supervisorLogin =
+  authController.supervisorLogin ||
+  ((req, res) => {
+    res.status(500).json({
+      success: false,
+      message: "Supervisor login controller missing",
+    });
+  });
+
+const paystackWebhook =
+  authController.paystackWebhook ||
+  ((req, res) => {
+    res.status(200).json({
+      success: true,
+      message: "Webhook received",
+    });
+  });
+
+const updatePassword =
+  authController.updatePassword ||
+  ((req, res) => {
+    res.status(500).json({
+      success: false,
+      message: "Update password controller missing",
+    });
+  });
+
+const updatePin =
+  authController.updatePin ||
+  ((req, res) => {
+    res.status(500).json({
+      success: false,
+      message: "Update pin controller missing",
+    });
+  });
+
+// ================================
+// MIDDLEWARE
+// ================================
 const { protect } = require("../middleware/authMiddleware");
-// --- Public Routes ---
+
+// ================================
+// DEBUG LOGS
+// ================================
+console.log("AUTH CONTROLLERS:");
+console.log(Object.keys(authController));
+
+// ================================
+// PUBLIC ROUTES
+// ================================
 router.post("/register", register);
+
 router.post("/login", login);
+
 router.post("/supervisor-login", supervisorLogin);
+
 router.post("/webhook", paystackWebhook);
 
-// --- Protected Routes ---
+// ================================
+// PROTECTED ROUTES
+// ================================
 
-// Mun gina aikin profile din a nan kai-tsaye domin magance [Undefined] callback error
+// USER PROFILE
 router.get("/profile", protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("-password");
+
     if (!user) {
-      return res
-        .status(404)
-        .json({ status: "fail", message: "User not found" });
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
     }
+
     res.status(200).json({
-      status: "success",
-      data: user, // Ko kuma { user } dangane da yadda frontend dinka ke tsammani
+      success: true,
+      data: user,
     });
   } catch (error) {
-    res.status(500).json({ status: "error", message: error.message });
+    console.log("PROFILE ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
-// Haka ma ga wannan kofar idan frontend tana bukata
+// CURRENT USER
 router.get("/me", protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("-password");
+
     if (!user) {
-      return res
-        .status(404)
-        .json({ status: "fail", message: "User not found" });
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
     }
-    res.status(200).json({ status: "success", data: user });
+
+    res.status(200).json({
+      success: true,
+      data: user,
+    });
   } catch (error) {
-    res.status(500).json({ status: "error", message: error.message });
+    console.log("ME ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 });
 
-// Wadannan idan suna da callback a controller, zaka iya barinsu
-if (updatePassword) router.put("/updatepassword", protect, updatePassword);
-if (updatePin) router.put("/updatepin", protect, updatePin);
+// UPDATE PASSWORD
+router.put("/updatepassword", protect, updatePassword);
 
+// UPDATE PIN
+router.put("/updatepin", protect, updatePin);
+
+// ================================
+// EXPORT
+// ================================
 module.exports = router;
