@@ -422,20 +422,15 @@ const handleSupportRequest = async (req, res) => {
     res.status(500).json({ message: "Process failed", error: error.message });
   }
 };
-exports.createSupervisor = async (req, res) => {
+const createSupervisor = async (req, res) => {
   try {
     const { firstName, surname, email, phone, password } = req.body;
-
-    // Tabbatar duk bayanan da ake bukata suna nan
     if (!firstName || !surname || !email || !password || !phone) {
       return res.status(400).json({
         success: false,
         message: "Please provide all required fields",
       });
     }
-
-    // Create new supervisor
-    // UserSchema zai gane 'password' kuma ya yi masa HASH ta atomatik
     const supervisor = await User.create({
       firstName,
       surname,
@@ -446,14 +441,10 @@ exports.createSupervisor = async (req, res) => {
       role: "supervisor",
       status: "active",
     });
-
-    res.status(201).json({
-      success: true,
-      message: "Supervisor created successfully",
-      data: supervisor,
-    });
+    res
+      .status(201)
+      .json({ success: true, message: "Supervisor created", data: supervisor });
   } catch (error) {
-    console.error("Error creating supervisor:", error);
     res.status(400).json({ success: false, message: error.message });
   }
 };
