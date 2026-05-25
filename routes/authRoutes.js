@@ -8,59 +8,14 @@ const User = require("../models/User");
 // ================================
 const authController = require("../controllers/authController");
 
-const register =
-  authController.register ||
-  ((req, res) => {
-    res.status(500).json({
-      success: false,
-      message: "Register controller missing",
-    });
-  });
-
-const login =
-  authController.login ||
-  ((req, res) => {
-    res.status(500).json({
-      success: false,
-      message: "Login controller missing",
-    });
-  });
-
-const supervisorLogin =
-  authController.supervisorLogin ||
-  ((req, res) => {
-    res.status(500).json({
-      success: false,
-      message: "Supervisor login controller missing",
-    });
-  });
-
-const paystackWebhook =
-  authController.paystackWebhook ||
-  ((req, res) => {
-    res.status(200).json({
-      success: true,
-      message: "Webhook received",
-    });
-  });
-
-const updatePassword =
-  authController.updatePassword ||
-  ((req, res) => {
-    res.status(500).json({
-      success: false,
-      message: "Update password controller missing",
-    });
-  });
-
-const updatePin =
-  authController.updatePin ||
-  ((req, res) => {
-    res.status(500).json({
-      success: false,
-      message: "Update pin controller missing",
-    });
-  });
+const {
+  register,
+  login,
+  supervisorLogin,
+  paystackWebhook,
+  updatePassword,
+  updatePin,
+} = authController;
 
 // ================================
 // MIDDLEWARE
@@ -68,10 +23,26 @@ const updatePin =
 const { protect } = require("../middleware/authMiddleware");
 
 // ================================
-// DEBUG LOGS
+// DEBUG (OPTIONAL)
 // ================================
-console.log("AUTH CONTROLLERS:");
+console.log("AUTH CONTROLLERS LOADED:");
 console.log(Object.keys(authController));
+
+// ================================
+// VALIDATION (DEV SAFETY CHECK)
+// ================================
+const requiredControllers = {
+  register,
+  login,
+  supervisorLogin,
+  paystackWebhook,
+};
+
+Object.entries(requiredControllers).forEach(([name, fn]) => {
+  if (typeof fn !== "function") {
+    throw new Error(`❌ Controller missing: ${name}`);
+  }
+});
 
 // ================================
 // PUBLIC ROUTES
@@ -140,11 +111,16 @@ router.get("/me", protect, async (req, res) => {
   }
 });
 
-// UPDATE PASSWORD
-router.put("/updatepassword", protect, updatePassword);
+// ================================
+// OPTIONAL UPDATES
+// ================================
+if (typeof updatePassword === "function") {
+  router.put("/updatepassword", protect, updatePassword);
+}
 
-// UPDATE PIN
-router.put("/updatepin", protect, updatePin);
+if (typeof updatePin === "function") {
+  router.put("/updatepin", protect, updatePin);
+}
 
 // ================================
 // EXPORT
