@@ -2,21 +2,20 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
+const bcrypt = require("bcryptjs");
 
 // ================================
 // HELPERS
 // ================================
 
-const generateReferralId = (firstName, surname) => {
-  const firstInitial = firstName ? firstName[0] : "A";
-  const lastInitial = surname ? surname[0] : "X";
-  return `${(firstInitial + lastInitial).toUpperCase()}${Math.floor(
+const generateReferralId = (firstName = "A", surname = "X") => {
+  return `${firstName[0]}${surname[0]}${Math.floor(
     1000 + Math.random() * 9000,
-  )}`;
+  )}`.toUpperCase();
 };
 
 // ================================
-// EMAIL SYSTEM
+// EMAIL
 // ================================
 
 const sendWelcomeEmail = async (user) => {
@@ -30,9 +29,9 @@ const sendWelcomeEmail = async (user) => {
     });
 
     await transporter.sendMail({
-      from: `"Ayax Data Xpress" <${process.env.EMAIL_USER}>`,
+      from: `"Ayax System" <${process.env.EMAIL_USER}>`,
       to: user.email,
-      subject: "Welcome to Ayax Data Xpress",
+      subject: "Welcome",
       html: `<h2>Welcome ${user.firstName}</h2>`,
     });
   } catch (err) {
@@ -41,17 +40,17 @@ const sendWelcomeEmail = async (user) => {
 };
 
 // ================================
-// JWT
+// TOKEN
 // ================================
 
-const sendToken = (user, statusCode, res) => {
+const sendToken = (user, res) => {
   const token = jwt.sign(
     { id: user._id, role: user.role },
-    process.env.JWT_SECRET,
+    process.env.JWT_SECRET || "secret",
     { expiresIn: "30d" },
   );
 
-  res.status(statusCode).json({
+  res.status(200).json({
     success: true,
     token,
     user: {
@@ -65,137 +64,55 @@ const sendToken = (user, statusCode, res) => {
 };
 
 // ================================
-// PAYSTACK ACCOUNT CREATION
-// ================================
-
-const createDedicatedAccount = async (user) => {
-  try {
-    const secretKey = process.env.PAYSTACK_SECRET_KEY;
-
-    const config = {
-      headers: {
-        Authorization: `Bearer ${secretKey}`,
-        "Content-Type": "application/json",
-      },
-    };
-
-    const customer = await axios.post(
-      "https://api.paystack.co/customer",
-      {
-        email: user.email,
-        first_name: user.firstName,
-        last_name: user.surname,
-        phone: user.phone,
-      },
-      config,
-    );
-
-    const customerCode = customer.data.data.customer_code;
-
-    const account = await axios.post(
-      "https://api.paystack.co/dedicated_account",
-      {
-        customer: customerCode,
-        preferred_bank: "wema-bank",
-      },
-      config,
-    );
-
-    const data = account.data.data;
-
-    return await User.findByIdAndUpdate(
-      user._id,
-      {
-        paystackCustomerCode: customerCode,
-        bankName: data.bank.name,
-        accountNumber: data.account_number,
-        accountName: data.account_name,
-      },
-      { new: true },
-    );
-  } catch (error) {
-    throw error;
-  }
-};
-
-// ================================
 // REGISTER
 // ================================
 
 const register = async (req, res) => {
   try {
-    const {
-      firstName,
-      surname,
-      email,
-      phone,
-      password,
-      role,
-      state,
-      lga,
-      address,
-    } = req.body;
+    const { firstName, surname, email, phone, password, role } = req.body;
 
-    const emailCheck = email.toLowerCase().trim();
+    if (!email || !password || !phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing fields",
+      });
+    }
 
-    const exists = await User.findOne({
-      $or: [{ email: emailCheck }, { phone }],
-    });
+    const cleanEmail = email.toLowerCase().trim();
+
+    const exists = await User.findOne({ email: cleanEmail });
 
     if (exists) {
       return res.status(400).json({
         success: false,
-        message: "User already exists",
+        message: "User exists already",
       });
     }
-
-    const referralId =
-      role === "supervisor" || role === "agent"
-        ? generateReferralId(firstName, surname)
-        : undefined;
 
     const user = await User.create({
       firstName,
       surname,
       name: `${firstName} ${surname}`,
-      email: emailCheck,
+      email: cleanEmail,
       phone,
       password,
-      role,
-      referralId,
-      state,
-      lga,
-      address,
+      role: role || "user",
+      referralId:
+        role === "agent" || role === "supervisor"
+          ? generateReferralId(firstName, surname)
+          : undefined,
     });
 
-    try {
-      const updated = await createDedicatedAccount(user);
-      sendWelcomeEmail(updated);
-      return sendToken(updated, 201, res);
-    } catch (err) {
-      console.log("Paystack error:", err.message);
-
-      const fallback = await User.findByIdAndUpdate(
-        user._id,
-        {
-          bankName: "Wema Bank",
-          accountNumber: "Pending",
-          accountName: user.name,
-        },
-        { new: true },
-      );
-
-      sendWelcomeEmail(fallback);
-      return sendToken(fallback, 201, res);
-    }
-  } catch (error) {
-    console.log("REGISTER ERROR:", error);
+    sendWelcomeEmail(user);
+    return sendToken(user, res);
+  } catch (err) {
+    console.log(err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
 // ================================
-// LOGIN
+// LOGIN (SAFE FIXED)
 // ================================
 
 const login = async (req, res) => {
@@ -203,71 +120,17 @@ const login = async (req, res) => {
     const { email, password } = req.body;
 
     const user = await User.findOne({
-      email: email.toLowerCase().trim(),
+      email: email?.toLowerCase().trim(),
     }).select("+password");
 
-    if (!user) {
+    if (!user || !user.password) {
       return res.status(401).json({
         success: false,
         message: "Invalid credentials",
       });
     }
 
-    const match = await user.matchPassword(password);
-
-    if (!match) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid credentials",
-      });
-    }
-
-    return sendToken(user, 200, res);
-  } catch (error) {
-    console.log("LOGIN ERROR:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-// ================================
-// SUPERVISOR LOGIN
-// ================================
-
-const supervisorLogin = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Email and password are required",
-      });
-    }
-
-    const user = await User.findOne({
-      email: email.toLowerCase().trim(),
-      role: "supervisor",
-    }).select("+password");
-
-    console.log("SUPERVISOR FOUND:", user);
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid credentials",
-      });
-    }
-
-    if (!user.password) {
-      return res.status(500).json({
-        success: false,
-        message: "Password missing in DB",
-      });
-    }
-
-    const isMatch = await user.matchPassword(password);
-
-    console.log("PASSWORD MATCH:", isMatch);
+    const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
       return res.status(401).json({
@@ -276,107 +139,55 @@ const supervisorLogin = async (req, res) => {
       });
     }
 
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" },
-    );
-
-    return res.status(200).json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
-    });
-  } catch (error) {
-    console.error("SUPERVISOR LOGIN ERROR:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-// ================================
-// WEBHOOK
-// ================================
-
-const paystackWebhook = async (req, res) => {
-  try {
-    const event = req.body;
-
-    if (event.event === "charge.success") {
-      const email = event.data.customer.email;
-      const amount = event.data.amount / 100;
-
-      await User.findOneAndUpdate(
-        { email },
-        { $inc: { walletBalance: amount } },
-      );
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ success: false });
+    return sendToken(user, res);
+  } catch (err) {
+    console.log("LOGIN ERROR:", err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
 // ================================
-// UPDATE PASSWORD
+// SUPERVISOR LOGIN (FIXED)
 // ================================
 
-const updatePassword = async (req, res) => {
+const supervisorLogin = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("+password");
+    const { email, password } = req.body;
 
-    const match = await user.matchPassword(req.body.currentPassword);
+    const user = await User.findOne({
+      email: email?.toLowerCase().trim(),
+      role: "supervisor",
+    }).select("+password");
 
-    if (!match) {
+    if (!user || !user.password) {
       return res.status(401).json({
         success: false,
-        message: "Wrong password",
+        message: "Invalid credentials",
       });
     }
 
-    user.password = req.body.newPassword;
-    await user.save();
+    const isMatch = await bcrypt.compare(password, user.password);
 
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ success: false });
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    return sendToken(user, res);
+  } catch (err) {
+    console.log("SUPERVISOR LOGIN ERROR:", err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
 // ================================
-// UPDATE PIN
-// ================================
-
-const updatePin = async (req, res) => {
-  try {
-    await User.findByIdAndUpdate(req.user.id, {
-      pin: req.body.newPin,
-    });
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ success: false });
-  }
-};
-
-// ================================
-// EXPORT (FIXED - NO OVERWRITE)
+// EXPORT
 // ================================
 
 module.exports = {
   register,
   login,
   supervisorLogin,
-  paystackWebhook,
-  updatePassword,
-  updatePin,
 };

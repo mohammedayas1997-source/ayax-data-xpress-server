@@ -433,7 +433,6 @@ const createSupervisor = async (req, res) => {
       });
     }
 
-    // CHECK EXISTING USER
     const existingUser = await User.findOne({
       email: email.toLowerCase().trim(),
     });
@@ -445,22 +444,19 @@ const createSupervisor = async (req, res) => {
       });
     }
 
-    // HASH PASSWORD
-    const hashedPassword = await bcrypt.hash(password, 10);
-
     const supervisor = await User.create({
       firstName,
       surname,
       name: `${firstName} ${surname}`,
       email: email.toLowerCase().trim(),
       phone,
-      password: hashedPassword,
+      password, // ✅ let schema handle hashing
       role: "supervisor",
       status: "active",
       walletBalance: 0,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Supervisor created successfully",
       data: {
@@ -471,7 +467,9 @@ const createSupervisor = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Create Supervisor Error:", error);
+
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
