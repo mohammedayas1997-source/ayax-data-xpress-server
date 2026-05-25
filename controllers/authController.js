@@ -398,3 +398,38 @@ exports.getUserProfile = async (req, res) => {
     });
   }
 };
+// @desc    Special login for supervisors
+exports.supervisorLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Provide credentials." });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ email: normalizedEmail }).select(
+      "+password",
+    );
+
+    // Tabbatar da cewa user din ya wanzu kuma matsayinsa Supervisor ne
+    if (!user || user.role !== "supervisor") {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized access." });
+    }
+
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials." });
+    }
+
+    sendToken(user, 200, res);
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error." });
+  }
+};
