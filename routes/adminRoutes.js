@@ -8,7 +8,10 @@ const { protect, authorize } = require("../middleware/authMiddleware");
 const adminController = require("../controllers/adminController");
 const dataPlanController = require("../controllers/dataPlanController");
 const notificationController = require("../controllers/notificationController");
-const { createSupervisor } = require("../controllers/adminController");
+const {
+  createSupervisor,
+  // ... sauran abubuwa
+} = require("../controllers/adminController");
 // --- ADMIN PROTECTION ---
 // Duk wani route da yake kasa da wannan layin, dole sai admin ko superadmin ya shiga
 router.use(protect);

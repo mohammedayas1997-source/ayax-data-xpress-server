@@ -482,4 +482,5 @@ module.exports = {
   requestAdminFix,
   getSupportRequests,
   handleSupportRequest,
+  createSupervisor,
 };
