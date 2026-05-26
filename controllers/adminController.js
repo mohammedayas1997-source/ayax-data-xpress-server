@@ -6,7 +6,7 @@ const BVNRequest = require("../models/BVNRequest");
 const SupportRequest = require("../models/SupportRequest");
 const NIMCPrice = require("../models/NIMCPrice");
 const BVNPrice = require("../models/BVNPrice");
-const bcrypt = require("bcryptjs");
+
 // Helper for notifications
 const sendNotification = async (userId, title, message) => {
   try {
@@ -422,59 +422,7 @@ const handleSupportRequest = async (req, res) => {
     res.status(500).json({ message: "Process failed", error: error.message });
   }
 };
-const createSupervisor = async (req, res) => {
-  try {
-    const { firstName, surname, email, phone, password } = req.body;
 
-    if (!firstName || !surname || !email || !password || !phone) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide all required fields",
-      });
-    }
-
-    const existingUser = await User.findOne({
-      email: email.toLowerCase().trim(),
-    });
-
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: "Supervisor already exists",
-      });
-    }
-
-    const supervisor = await User.create({
-      firstName,
-      surname,
-      name: `${firstName} ${surname}`,
-      email: email.toLowerCase().trim(),
-      phone,
-      password, // ✅ let schema handle hashing
-      role: "supervisor",
-      status: "active",
-      walletBalance: 0,
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: "Supervisor created successfully",
-      data: {
-        id: supervisor._id,
-        name: supervisor.name,
-        email: supervisor.email,
-        role: supervisor.role,
-      },
-    });
-  } catch (error) {
-    console.error("Create Supervisor Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
 // --- FINAL EXPORT ---
 // Mun hada kowane function a nan domin kar a samu "undefined" a routes
 module.exports = {
@@ -499,5 +447,4 @@ module.exports = {
   requestAdminFix,
   getSupportRequests,
   handleSupportRequest,
-  createSupervisor,
 };
