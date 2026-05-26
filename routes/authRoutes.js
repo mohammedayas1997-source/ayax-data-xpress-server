@@ -1,31 +1,39 @@
 const express = require("express");
 const router = express.Router();
 
-const authController = require("../controllers/authController");
+const {
+  register,
+  login,
+  supervisorLogin,
+  paystackWebhook,
+  updatePassword,
+  updatePin,
+  getUserProfile,
+} = require("../controllers/authController");
 
-// ===============================
+// ================================
 // AUTH ROUTES
-// ===============================
+// ================================
 
-// REGISTER
-router.post("/register", authController.register);
+// Register User
+router.post("/register", register);
 
-// LOGIN
-router.post("/login", authController.login);
+// Normal Login
+router.post("/login", login);
 
-// SUPERVISOR LOGIN
-router.post("/supervisor-login", authController.supervisorLogin);
+// Supervisor Login
+router.post("/supervisor-login", supervisorLogin);
 
-// PAYSTACK WEBHOOK
-router.post("/paystack-webhook", authController.paystackWebhook);
+// Paystack Webhook
+router.post("/paystack/webhook", paystackWebhook);
 
-// UPDATE PASSWORD
-router.put("/update-password", authController.updatePassword);
+// Update Password
+router.put("/update-password", updatePassword);
 
-// UPDATE PIN
-router.put("/update-pin", authController.updatePin);
+// Update PIN
+router.put("/update-pin", updatePin);
 
-// GET PROFILE
-router.get("/profile", authController.getUserProfile);
+// Get User Profile
+router.get("/profile", getUserProfile);
 
 module.exports = router;
