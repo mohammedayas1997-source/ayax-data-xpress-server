@@ -398,3 +398,12 @@ exports.getUserProfile = async (req, res) => {
     });
   }
 };
+
+module.exports = {
+  register,
+  login,
+  supervisorLogin,
+  paystackWebhook,
+  updatePassword,
+  updatePin,
+};
