@@ -1,36 +1,31 @@
 const express = require("express");
 const router = express.Router();
-const User = require("../models/User");
 
-// 1. Shigo da dukkan functions sau ɗaya kawai
-const {
-  register,
-  login,
-  supervisorLogin,
-  paystackWebhook,
-  updatePassword,
-  updatePin,
-} = require("../controllers/authController");
+const authController = require("../controllers/authController");
 
-const { protect } = require("../middleware/authMiddleware");
+// ===============================
+// AUTH ROUTES
+// ===============================
 
-// --- Public Routes ---
-router.post("/register", register);
-router.post("/login", login);
-router.post("/supervisor-login", supervisorLogin);
-router.post("/webhook", paystackWebhook);
+// REGISTER
+router.post("/register", authController.register);
 
-// --- Protected Routes ---
-// Sauran routes naka...
-router.get("/profile", protect, async (req, res) => {
-  /* ... */
-});
-router.get("/me", protect, async (req, res) => {
-  /* ... */
-});
+// LOGIN
+router.post("/login", authController.login);
 
-// Amfani da check don hana crash
-if (updatePassword) router.put("/updatepassword", protect, updatePassword);
-if (updatePin) router.put("/updatepin", protect, updatePin);
+// SUPERVISOR LOGIN
+router.post("/supervisor-login", authController.supervisorLogin);
+
+// PAYSTACK WEBHOOK
+router.post("/paystack-webhook", authController.paystackWebhook);
+
+// UPDATE PASSWORD
+router.put("/update-password", authController.updatePassword);
+
+// UPDATE PIN
+router.put("/update-pin", authController.updatePin);
+
+// GET PROFILE
+router.get("/profile", authController.getUserProfile);
 
 module.exports = router;
