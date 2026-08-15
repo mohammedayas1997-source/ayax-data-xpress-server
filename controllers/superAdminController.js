@@ -42,7 +42,7 @@ exports.getAllGlobalTransactions = async (req, res) => {
     const transactions = await Transaction.find()
       .populate("user", "surname firstName email phone role")
       .sort({ createdAt: -1 })
-      .limit(500); // Mun takaita don gudun nauyi, amma ana iya kara tacewa (pagination)
+      .limit(500); // Mun takaita don gudun nauyi
 
     res
       .status(200)
@@ -99,7 +99,7 @@ exports.manageUserRole = async (req, res) => {
   }
 };
 
-// @desc    Create a new Admin (Wanda ka fara yi)
+// @desc    Create a new Admin
 exports.makeAdmin = async (req, res) => {
   try {
     const { userId } = req.body;
@@ -113,5 +113,71 @@ exports.makeAdmin = async (req, res) => {
       .json({ success: true, message: "User is now an Admin", data: user });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Admin creates a new staff (supervisor or agent)
+exports.createStaff = async (req, res) => {
+  try {
+    const { firstName, surname, email, password, phone, role } = req.body;
+
+    // 1. Tabbatar an cika duk bayanan da ake bukata
+    if (!firstName || !surname || !email || !password || !phone || !role) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide all required fields: firstName, surname, email, password, phone, and role",
+      });
+    }
+
+    // 2. Tabbatar idan role din da aka ba shi daidai ne
+    const allowedRoles = ["supervisor", "agent", "admin"];
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid role specified.",
+      });
+    }
+
+    // 3. Duba ko akwai wani mai amfani da wannan email din ko phone a baya
+    const normalizedEmail = email.toLowerCase().trim();
+    const existingUser = await User.findOne({
+      $or: [{ email: normalizedEmail }, { phone: phone.trim() }],
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: "A user with this email or phone already exists.",
+      });
+    }
+
+    // 4. Ƙirƙirar sabon staff
+    const newStaff = await User.create({
+      firstName: firstName.trim(),
+      surname: surname.trim(),
+      name: `${firstName} ${surname}`.trim(),
+      email: normalizedEmail,
+      phone: phone.trim(),
+      password,
+      role,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `${role.charAt(0).toUpperCase() + role.slice(1)} created successfully!`,
+      data: {
+        id: newStaff._id,
+        name: newStaff.name,
+        email: newStaff.email,
+        role: newStaff.role,
+      },
+    });
+
+  } catch (error) {
+    console.error("Create Staff Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while creating staff.",
+    });
   }
 };
