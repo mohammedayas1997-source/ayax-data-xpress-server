@@ -257,3 +257,12 @@ exports.fundWalletManual = async (req, res) => {
     res.status(500).json({ success: false, message: "Server Error", error: error.message });
   }
 };
+
+// A karshen controllers/walletController.js, tabbatar kana da wadannan:
+module.exports = {
+  getBalance,
+  initializePayment,
+  verifyPayment,
+  fundWalletManual,
+  generateVirtualAccount,
+};
