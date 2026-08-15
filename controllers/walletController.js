@@ -40,7 +40,6 @@ exports.generateVirtualAccount = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Idan mai amfani yana da asusun banki riga, dawo da shi kai tsaye
     if (user.virtualAccount && user.virtualAccount.accountNumber) {
       return res.status(200).json({
         success: true,
@@ -49,8 +48,6 @@ exports.generateVirtualAccount = async (req, res) => {
       });
     }
 
-    // Idan babu, sai a ƙirƙira ta hanyar Paystack Customer & Dedicated Account API
-    // Na farko: Tabbatar ko an riga an yi creating din customer a Paystack ko a ƙirƙira sabo
     let customerCode = user.paystackCustomerCode;
 
     if (!customerCode) {
@@ -76,18 +73,16 @@ exports.generateVirtualAccount = async (req, res) => {
         await user.save();
       } catch (custError) {
         console.error("Paystack Customer Creation Error:", custError.response?.data || custError.message);
-        // Idan customer din ya riga ya wanzu, zaka iya amfani da email dinsa ko ci gaba
       }
     }
 
-    // Na biyu: Ƙirƙirar Dedicated Virtual Account
     let dvaResponse;
     try {
       dvaResponse = await axios.post(
         "https://api.paystack.co/dedicated_account",
         {
           customer: customerCode || user.email,
-          preferred_bank: "wema-bank", // Ko wani banki da Paystack ke goyon baya
+          preferred_bank: "wema-bank",
         },
         {
           headers: {
@@ -203,7 +198,6 @@ exports.verifyPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "Transaction reference is required" });
     }
 
-    // Rigakafin Double Funding
     const alreadyProcessed = await Transaction.findOne({ reference });
     if (alreadyProcessed) {
       return res
@@ -249,7 +243,6 @@ exports.verifyPayment = async (req, res) => {
       }
       await user.save();
 
-      // Ajiye Transaction
       const transactionId = `DEP${Date.now()}${Math.floor(Math.random() * 1000)}`;
       await Transaction.create({
         user: user._id,
@@ -262,7 +255,6 @@ exports.verifyPayment = async (req, res) => {
         details: `Wallet funding via Paystack App (Ref: ${reference})`,
       });
 
-      // Activity Log & Notification
       await Activity.create({
         staffId: user._id,
         action: "VERIFY_PAYMENT_FUND",
@@ -356,13 +348,4 @@ exports.fundWalletManual = async (req, res) => {
     console.error("Fund Wallet Manual Error:", error);
     res.status(500).json({ success: false, message: "Server Error", error: error.message });
   }
-};
-
-// Fitar da dukkan ayyukan (exports)
-module.exports = {
-  getBalance,
-  generateVirtualAccount,
-  initializePayment,
-  verifyPayment,
-  fundWalletManual,
 };
