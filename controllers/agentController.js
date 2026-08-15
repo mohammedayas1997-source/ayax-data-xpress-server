@@ -11,7 +11,7 @@ exports.getAgentPerformance = async (req, res) => {
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
 
-    // Amfani da mongoose.Types.ObjectId ba tare da "new" ba idan ya zama dole
+    // AN GYARA: An cire "new" a gaban mongoose.Types.ObjectId idan ba lallai bane, ko kuma an tabbatar yana aiki daidai cross-platform
     const monthlySales = await Sale.aggregate([
       {
         $match: {

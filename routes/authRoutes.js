@@ -1,28 +1,39 @@
 const express = require("express");
 const router = express.Router();
+
 const {
   register,
   login,
-  getMe,
+  supervisorLogin,
   paystackWebhook,
   updatePassword,
   updatePin,
+  getUserProfile,
 } = require("../controllers/authController");
 
-// --- Public Routes ---
+// ================================
+// AUTH ROUTES
+// ================================
 
-// @route   POST /api/v1/auth/register
+// Register User
 router.post("/register", register);
 
-// @route   POST /api/v1/auth/login
+// Normal Login
 router.post("/login", login);
 
-// @route   POST /api/v1/auth/webhook (Paystack)
-router.post("/webhook", paystackWebhook);
+// Supervisor Login
+router.post("/supervisor-login", supervisorLogin);
 
-// --- Protected Routes (Idan kana da protect middleware) ---
-// router.get("/me", protect, getMe);
-// router.put("/updatepassword", protect, updatePassword);
-// router.put("/updatepin", protect, updatePin);
+// Paystack Webhook
+router.post("/paystack/webhook", paystackWebhook);
+
+// Update Password
+router.put("/update-password", updatePassword);
+
+// Update PIN
+router.put("/update-pin", updatePin);
+
+// Get User Profile
+router.get("/profile", getUserProfile);
 
 module.exports = router;

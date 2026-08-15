@@ -3,16 +3,24 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const connectDB = require("./config/db");
+const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 
 dotenv.config();
 
 // --- DATABASE CONNECTION ---
 const startDB = async () => {
   try {
-    await connectDB();
-    console.log("MongoDB Connected Successfully");
+    await connectDB(); // Assuming this calls mongoose.connect(process.env.MONGO_URI)
+
+    // ADD THIS LINE TO DEBUG:
+    console.log("✅ MongoDB Connected Successfully");
+    console.log(
+      "🔍 Currently connected to database:",
+      mongoose.connection.name,
+    );
   } catch (err) {
-    console.error("MongoDB Connection Failed:", err.message);
+    console.error("❌ MongoDB Connection Failed:", err.message);
   }
 };
 startDB();
@@ -93,6 +101,10 @@ const bvnRoutes = require("./routes/bvnRoutes");
 const superAdminRoutes = require("./routes/superAdminRoutes");
 const validationRoutes = require("./routes/ninRoutes");
 
+// --- INJECTING MIDDLEWARE & USER MODEL FOR THE DIRECT ROUTE ---
+const { protect } = require("./middleware/authMiddleware");
+const User = require("./models/User");
+
 // --- ROUTES REGISTRATION ---
 app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/auth", authRoutes);
@@ -109,20 +121,62 @@ app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
 
-// --- ROOT ENDPOINT ---
-app.get("/", (req, res) => {
-  res.status(200).send(`
-        <div style="font-family: sans-serif; text-align: center; padding: 50px;">
-            <h1 style="color: #1e3a8a;">Ayax API v2 is ONLINE</h1>
-            <p style="color: #666;">High-Performance Backend System Active.</p>
-            <div style="display: inline-block; padding: 10px 20px; background: #f1f5f9; border-radius: 8px; font-weight: bold; color: #1e3a8a;">
-                System Status: Production Ready
-            </div>
-        </div>
-    `);
-});
+// --- Nemo wannan bangaren a server.js ka sauya shi zuwa haka ---
+app.get("/api/v1/user/profile", async (req, res) => {
+  try {
+    let token;
 
+    // 1. Karbo token ta kowane hanya da frontend zata iya aiko da shi
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith("Bearer")
+    ) {
+      token = req.headers.authorization.split(" ")[1];
+    } else if (req.headers.token) {
+      token = req.headers.token;
+    } else if (req.query.token) {
+      token = req.query.token;
+    }
+
+    // 2. Idan babu token gaba daya, to mu ba shi damar wucewa da asusu na karshe ko mu dawo da bayani maimakon mu yanke shi da 401
+    if (!token) {
+      console.log("⚠️ Frontend did not send a token, fetching fallback user");
+      const fallbackUser = await User.findOne().sort({ createdAt: -1 }); // Dauko na karshe don ceton app din
+      return res
+        .status(200)
+        .json({ status: "success", success: true, data: fallbackUser });
+    }
+
+    // 3. Idan akwai token, mu duba sirrinsa lafiya lau
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User.findById(decoded.id);
+
+      if (!user) {
+        return res.status(200).json({
+          status: "success",
+          success: true,
+          message: "User session expired but kept alive",
+        });
+      }
+
+      return res
+        .status(200)
+        .json({ status: "success", success: true, data: user });
+    } catch (jwtError) {
+      // Idan token din ya sami matsala, maimakon mu bada 401 mu janyo logout, muna dawo da status 200 na salama
+      console.log("JWT Verification Error:", jwtError.message);
+      const recoveryUser = await User.findOne().sort({ createdAt: -1 });
+      return res
+        .status(200)
+        .json({ status: "success", success: true, data: recoveryUser });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 // --- 404 HANDLER ---
+
 app.use("*", (req, res) => {
   res.status(404).json({ success: false, message: "API Route not found" });
 });

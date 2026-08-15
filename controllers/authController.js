@@ -3,12 +3,12 @@ const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
 
-// --- Helper: Generate Referral ID for Supervisors ---
 const generateReferralId = (firstName, surname) => {
   const firstInitial = firstName ? firstName[0] : "A";
   const lastInitial = surname ? surname[0] : "X";
   const initials = (firstInitial + lastInitial).toUpperCase();
   const digits = Math.floor(1000 + Math.random() * 9000);
+
   return `${initials}${digits}`;
 };
 
@@ -72,25 +72,34 @@ const sendWelcomeEmail = async (user) => {
 // --- Helper: Generate and Send JWT Token ---
 const sendToken = (user, statusCode, res) => {
   const token = jwt.sign(
-    { id: user._id },
+    {
+      id: user._id,
+      role: user.role,
+    },
     process.env.JWT_SECRET || "fallback_secret",
-    { expiresIn: "30d" },
+    {
+      expiresIn: "30d",
+    },
   );
 
-  res.status(statusCode).json({
+  return res.status(statusCode).json({
     success: true,
     token,
+    role: user.role,
     user: {
       id: user._id,
       name: user.name,
       email: user.email,
       phone: user.phone,
-      balance: user.walletBalance || 0,
       role: user.role,
+      walletBalance: user.walletBalance || 0,
       referralId: user.referralId,
-      accountNumber: user.accountNumber,
-      bankName: user.bankName,
-      accountName: user.accountName,
+      bankName: user.bankName || "Wema Bank",
+      accountNumber: user.accountNumber || "Pending",
+      accountName: user.accountName || user.name,
+      state: user.state,
+      lga: user.lga,
+      address: user.address,
     },
   });
 };
@@ -163,20 +172,20 @@ exports.register = async (req, res) => {
     if (!firstName || !surname || !email || !password || !phone) {
       return res.status(400).json({
         success: false,
-        message: "Registration failed: Mandatory data fields are missing.",
+        message: "Please provide all required fields",
       });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    const userExists = await User.findOne({
+
+    const existingUser = await User.findOne({
       $or: [{ email: normalizedEmail }, { phone: phone.trim() }],
     });
 
-    if (userExists) {
+    if (existingUser) {
       return res.status(400).json({
         success: false,
-        message:
-          "Identifier conflict: Email or phone string already exists in the database.",
+        message: "User already exists",
       });
     }
 
@@ -188,8 +197,8 @@ exports.register = async (req, res) => {
     const user = await User.create({
       firstName: firstName.trim(),
       surname: surname.trim(),
-      name: `${firstName} ${surname}`.trim(),
-      otherName: otherName ? otherName.trim() : "",
+      otherName: otherName || "",
+      name: `${firstName} ${surname}`,
       email: normalizedEmail,
       phone: phone.trim(),
       password,
@@ -287,56 +296,104 @@ exports.supervisorLogin = async (req, res) => {
   }
 };
 
-// @desc    Paystack Webhook for Real-Time Wallet Funding
+// =======================================
+// PAYSTACK WEBHOOK
+// =======================================
+
 exports.paystackWebhook = async (req, res) => {
   try {
     const event = req.body;
 
     if (event.event === "charge.success") {
       const { customer, amount } = event.data;
-      const creditValue = amount / 100;
+      const customerEmail = customer.email;
+      const creditValue = amount / 100; // Akwai shi idan kana son amfani da shi wajen ƙarin kuɗi
 
       await User.findOneAndUpdate(
-        { email: customer.email },
-        { $inc: { walletBalance: creditValue } },
+        { email: customerEmail },
+        {
+          $inc: {
+            walletBalance: creditValue, // An gyara daga amount zuwa creditValue (Naira)
+          },
+        },
       );
 
-      console.log(
-        `[REAL-TIME FUNDING] Account ${customer.email} credited with NGN ${creditValue}`,
-      );
+      console.log(`✅ Wallet funded: ${customerEmail} - ₦${creditValue}`);
     }
 
-    res.status(200).json({ status: "success" });
+    return res.status(200).json({
+      success: true,
+    });
   } catch (error) {
-    console.error("Webhook Synchronization Failure:", error.message);
-    res.status(500).json({ status: "failed" });
+    console.log("❌ WEBHOOK ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+    });
   }
 };
 
-// Change Password Parameters
-exports.updatePassword = async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
-  const user = await User.findById(req.user.id).select("+password");
+// =======================================
+// UPDATE PASSWORD
+// =======================================
 
-  if (!(await user.matchPassword(currentPassword))) {
-    return res.status(401).json({
+exports.updatePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide current and new passwords.",
+      });
+    }
+
+    const user = await User.findById(req.user.id).select("+password");
+
+    if (!(await user.matchPassword(currentPassword))) {
+      return res.status(401).json({
+        success: false,
+        message: "Security check failed: Current key incorrect.",
+      });
+    }
+
+    user.password = newPassword;
+    await user.save();
+    
+    return res
+      .status(200)
+      .json({ success: true, message: "Security parameters updated." });
+  } catch (error) {
+    console.error("Update Password Error:", error);
+    return res.status(500).json({
       success: false,
-      message: "Security check failed: Current key incorrect.",
+      message: "Server error while updating password.",
     });
   }
-
-  user.password = newPassword;
-  await user.save();
-  res
-    .status(200)
-    .json({ success: true, message: "Security parameters updated." });
 };
 
 // Update Transaction PIN Logic
 exports.updatePin = async (req, res) => {
-  const { newPin } = req.body;
-  await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
-  res
-    .status(200)
-    .json({ success: true, message: "Transaction PIN synchronized." });
+  try {
+    const { newPin } = req.body;
+    
+    if (!newPin) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide the new PIN.",
+      });
+    }
+
+    await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
+    
+    return res
+      .status(200)
+      .json({ success: true, message: "Transaction PIN synchronized." });
+  } catch (error) {
+    console.error("Update PIN Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while updating PIN.",
+    });
+  }
 };

@@ -57,13 +57,11 @@ const assignTarget = async (req, res) => {
     };
     supervisor.markModified("targets");
     await supervisor.save();
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: "Target assigned successfully",
-        data: supervisor.targets,
-      });
+    res.status(200).json({
+      success: true,
+      message: "Target assigned successfully",
+      data: supervisor.targets,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -93,13 +91,11 @@ const updateToProcessing = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Request not found" });
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: "Status updated to processing",
-        data: request,
-      });
+    res.status(200).json({
+      success: true,
+      message: "Status updated to processing",
+      data: request,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -316,13 +312,11 @@ const debitUser = async (req, res) => {
       date: new Date(),
     });
     await user.save();
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: `₦${amount} debited`,
-        newBalance: user.balance,
-      });
+    res.status(200).json({
+      success: true,
+      message: `₦${amount} debited`,
+      newBalance: user.balance,
+    });
   } catch (error) {
     res.status(500).json({ message: "Server error", error });
   }
@@ -341,13 +335,11 @@ const trackTransaction = async (req, res) => {
     const transaction = user.transactions.find(
       (t) => t.transactionId === transactionId,
     );
-    res
-      .status(200)
-      .json({
-        success: true,
-        userData: { id: user._id, name: user.name, phone: user.phone },
-        transaction,
-      });
+    res.status(200).json({
+      success: true,
+      userData: { id: user._id, name: user.name, phone: user.phone },
+      transaction,
+    });
   } catch (error) {
     res
       .status(500)
@@ -365,21 +357,17 @@ const requestAdminFix = async (req, res) => {
       reason,
       supportNote,
     });
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: "Issue reported successfully",
-        data: newRequest,
-      });
+    res.status(201).json({
+      success: true,
+      message: "Issue reported successfully",
+      data: newRequest,
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to send report",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to send report",
+      error: error.message,
+    });
   }
 };
 

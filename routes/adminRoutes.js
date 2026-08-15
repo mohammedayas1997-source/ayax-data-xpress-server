@@ -59,6 +59,6 @@ router.patch("/bvn-processing/:id", adminController.updateBVNStatus);
 router.patch("/approve-bvn/:id", adminController.approveBVNRequest);
 
 // --- 8. DATA PLANS & NOTIFICATIONS (Optional/Disabled) ---
-// router.get("/data-plans", dataPlanController.getAllPlans);
+//router.get("/data-plans", dataPlanController.getAllPlans);
 
 module.exports = router;
