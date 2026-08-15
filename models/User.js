@@ -20,7 +20,7 @@ const UserSchema = new mongoose.Schema(
     },
     name: {
       type: String,
-      index: true, // Indexed for rapid identity retrieval
+      index: true,
     },
     email: {
       type: String,
@@ -51,14 +51,22 @@ const UserSchema = new mongoose.Schema(
       type: Number,
       default: 0.0,
       min: 0,
-      set: (v) => Math.round(v * 100) / 100, // Ensures precision to 2 decimal places
+      set: (v) => Math.round(v * 100) / 100,
     },
     pin: {
       type: String,
       minlength: 4,
-      maxlength: 64, // Expanded to accommodate BCRYPT hash length
+      maxlength: 64,
       default: "0000",
       select: false,
+    },
+
+    // --- PASSWORD RESET OTP ENTITIES ---
+    resetPasswordToken: {
+      type: String,
+    },
+    resetPasswordExpire: {
+      type: Date,
     },
 
     // --- AUTOMATED PAYSTACK ENTITIES ---
@@ -115,7 +123,7 @@ const UserSchema = new mongoose.Schema(
     referralId: {
       type: String,
       unique: true,
-      sparse: true, // Critical for non-null unique constraint on specific roles
+      sparse: true,
       index: true,
     },
 
@@ -148,19 +156,15 @@ const UserSchema = new mongoose.Schema(
 // --- PROTOCOL MIDDLEWARES ---
 
 UserSchema.pre("save", async function (next) {
-  // 1. Dynamic Identity Construction
   if (this.isModified("firstName") || this.isModified("surname")) {
     this.name = `${this.firstName} ${this.surname}`.toUpperCase().trim();
   }
 
-  // 2. Cryptographic Hashing for Password
   if (this.isModified("password")) {
     const salt = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(this.password, salt);
   }
 
-  // 3. Transactional PIN Cryptography
-  // Note: Only hashes if the PIN is modified and deviated from the default "0000"
   if (this.isModified("pin") && this.pin !== "0000" && !this.pin.startsWith("$2a$")) {
     const salt = await bcrypt.genSalt(10);
     this.pin = await bcrypt.hash(this.pin, salt);
@@ -171,18 +175,15 @@ UserSchema.pre("save", async function (next) {
 
 // --- OPERATIONAL METHODS ---
 
-// Validate Authentication Key
 UserSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// Validate Transactional PIN
 UserSchema.methods.matchPin = async function (enteredPin) {
   if (this.pin === "0000" && enteredPin === "0000") return true;
   return await bcrypt.compare(enteredPin, this.pin);
 };
 
-// Ingantattun compound indexes don gaggauta binciken hierarchy da gudanar da rahotanni
 UserSchema.index({ role: 1, isSuspended: 1 });
 UserSchema.index({ assignedSupervisor: 1, role: 1 });
 

@@ -432,6 +432,41 @@ exports.updatePassword = async (req, res) => {
 
 
 // @desc    Update Transaction PIN using Account Password
+// @desc    Create Transaction PIN (First time)
+exports.createPin = async (req, res) => {
+  try {
+    const { newPin } = req.body;
+
+    if (!newPin || newPin.length !== 4) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid 4-digit PIN required.",
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
+
+    user.pin = newPin; // An yi amfani da .pin daidai da schema
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Transaction PIN successfully created.",
+    });
+  } catch (error) {
+    console.error("Create PIN Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while creating PIN.",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Update Transaction PIN using Account Password
 exports.updatePin = async (req, res) => {
   try {
     const { password, newPin } = req.body;
@@ -450,7 +485,6 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    // Dauko user tare da password dinsa tunda a wasu schema ana boye shi (select: false)
     const user = await User.findById(req.user.id).select("+password");
 
     if (!user) {
@@ -460,7 +494,6 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    // Tabbatar da kalmar sirri (password) ta yi daidai
     const isPasswordMatch = await user.matchPassword(password);
     if (!isPasswordMatch) {
       return res.status(401).json({
@@ -469,8 +502,7 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    // Ajiye sabon PIN
-    user.transactionPin = newPin;
+    user.pin = newPin; // An yi amfani da .pin daidai da schema
     await user.save();
 
     return res.status(200).json({
@@ -478,38 +510,10 @@ exports.updatePin = async (req, res) => {
       message: "Transaction PIN successfully updated.",
     });
   } catch (error) {
-    console.error("Update PIN Server Error:", error);
+    console.error("Update PIN Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Server error while updating transaction PIN.",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Create Transaction PIN (First time)
-exports.createPin = async (req, res) => {
-  try {
-    const { newPin } = req.body;
-
-    if (!newPin || newPin.length !== 4) {
-      return res.status(400).json({
-        success: false,
-        message: "Valid 4-digit PIN required.",
-      });
-    }
-
-    await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
-
-    return res.status(200).json({
-      success: true,
-      message: "Transaction PIN successfully created.",
-    });
-  } catch (error) {
-    console.error("Create PIN Server Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error while creating transaction PIN.",
+      message: "Server error while updating PIN.",
       error: error.message,
     });
   }
