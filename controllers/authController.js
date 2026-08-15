@@ -258,6 +258,7 @@ exports.supervisorLogin = exports.login;
 // FORGOT PASSWORD & OTP SYSTEM
 // =======================================
 
+// @desc    Send OTP to user's registered email and phone for password reset
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -267,22 +268,18 @@ exports.forgotPassword = async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
-      // Don tsaron account, muna bada sakon nasara ko babu shi a tsarin
       return res.status(200).json({
         success: true,
         message: "If an account exists with this email, an OTP has been sent.",
       });
     }
 
-    // Generate 4-digit or 6-digit OTP
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     
-    // Save OTP and expiry (10 minutes from now)
     user.resetPasswordToken = otp;
     user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
     await user.save({ validateBeforeSave: false });
 
-    // Send OTP via Email
     try {
       const transporter = nodemailer.createTransport({
         service: "gmail",
@@ -312,7 +309,6 @@ exports.forgotPassword = async (req, res) => {
       console.error("OTP Email Dispatch Error:", mailErr.message);
     }
 
-    // A nan zaka iya haɗa SMS Gateway API (kamar Termii ko Twilio) domin tura OTP zuwa wayar user: user.phone
     console.log(`[OTP Generated for ${user.phone} / ${user.email}]: ${otp}`);
 
     return res.status(200).json({
@@ -325,7 +321,7 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
-// Verify OTP & Reset Password
+// @desc    Verify OTP and update user password
 exports.resetPassword = async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
@@ -433,41 +429,88 @@ exports.updatePassword = async (req, res) => {
   }
 };
 
-exports.createPin = async (req, res) => {
+
+
+// @desc    Update Transaction PIN using Account Password
+exports.updatePin = async (req, res) => {
   try {
-    const { newPin } = req.body;
-    if (!newPin || newPin.length !== 4) {
-      return res.status(400).json({ success: false, message: "Valid 4-digit PIN required." });
+    const { password, newPin } = req.body;
+
+    if (!password || !newPin) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide your account password and the new PIN.",
+      });
     }
 
-    await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
-    return res.status(200).json({ success: true, message: "Transaction PIN created successfully." });
+    if (newPin.length !== 4) {
+      return res.status(400).json({
+        success: false,
+        message: "Transaction PIN must be exactly 4 digits.",
+      });
+    }
+
+    // Dauko user tare da password dinsa tunda a wasu schema ana boye shi (select: false)
+    const user = await User.findById(req.user.id).select("+password");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User account not found.",
+      });
+    }
+
+    // Tabbatar da kalmar sirri (password) ta yi daidai
+    const isPasswordMatch = await user.matchPassword(password);
+    if (!isPasswordMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Incorrect account password. Authorization failed.",
+      });
+    }
+
+    // Ajiye sabon PIN
+    user.transactionPin = newPin;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Transaction PIN successfully updated.",
+    });
   } catch (error) {
-    console.error("Create PIN Error:", error);
-    return res.status(500).json({ success: false, message: "Server error while creating PIN." });
+    console.error("Update PIN Server Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while updating transaction PIN.",
+      error: error.message,
+    });
   }
 };
 
-exports.updatePin = async (req, res) => {
+// @desc    Create Transaction PIN (First time)
+exports.createPin = async (req, res) => {
   try {
-    const { oldPin, newPin } = req.body;
-    
+    const { newPin } = req.body;
+
     if (!newPin || newPin.length !== 4) {
-      return res.status(400).json({ success: false, message: "Valid new 4-digit PIN required." });
+      return res.status(400).json({
+        success: false,
+        message: "Valid 4-digit PIN required.",
+      });
     }
 
-    const user = await User.findById(req.user.id).select("+transactionPin");
-    
-    if (user.transactionPin && user.transactionPin !== oldPin) {
-      return res.status(400).json({ success: false, message: "Incorrect current PIN." });
-    }
+    await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
 
-    user.transactionPin = newPin;
-    await user.save();
-    
-    return res.status(200).json({ success: true, message: "Transaction PIN updated successfully." });
+    return res.status(200).json({
+      success: true,
+      message: "Transaction PIN successfully created.",
+    });
   } catch (error) {
-    console.error("Update PIN Error:", error);
-    return res.status(500).json({ success: false, message: "Server error while updating PIN." });
+    console.error("Create PIN Server Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while creating transaction PIN.",
+      error: error.message,
+    });
   }
 };

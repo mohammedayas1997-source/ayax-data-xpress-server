@@ -6,21 +6,24 @@ const {
   supervisorLogin,
   paystackWebhook,
   updatePassword,
+  createPin,
   updatePin
 } = require("../controllers/authController");
 
 const { protect } = require("../middleware/authMiddleware");
 
-// Routes na jama'a (Public Routes)
+// Public Routes
 router.post("/register", register);
 router.post("/login", login);
 router.post("/supervisor-login", supervisorLogin);
 
-// Paystack ko Ayax Webhook (Baya buƙatar authentication amma yana buƙatar a hankali wajen karbar data)
+// Webhook
 router.post("/paystack-webhook", paystackWebhook);
 
-// Routes masu buƙatar mai amfani ya shiga (Protected Routes)
+// Protected Routes (An sanya POST da PUT duka suyi aiki don guje wa matsala)
 router.put("/update-password", protect, updatePassword);
-router.put("/update-pin", protect, updatePin);
+router.post("/create-pin", protect, createPin);
+router.post("/update-pin", protect, updatePin);
+router.put("/update-pin", protect, updatePin); // Idan wani wuri yayi amfani da PUT
 
 module.exports = router;
