@@ -3,9 +3,10 @@ const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const Notification = require("../models/Notification");
+// Idan kana da waniaban Model ko Controller na Data Xpress ko Marketplace, zaka iya import nasu anan idan sun sha bamban
 
 /**
- * @desc    Paystack Webhook for automated background wallet funding
+ * @desc    Paystack Webhook for automated background wallet funding (Unified for Marketplace & Data Xpress)
  * @route   POST /api/v1/payment/webhook
  * @access  Public (Called securely by Paystack Servers)
  */
@@ -33,9 +34,9 @@ exports.handlePaystackWebhook = async (req, res) => {
     if (event && event.event === "charge.success") {
       const { amount, reference, metadata, customer } = event.data;
       
-      // Nemo userId daga metadata ko email idan babu metadata
       let userId = metadata && metadata.userId ? metadata.userId : null;
       const userEmail = customer && customer.email ? customer.email.toLowerCase().trim() : null;
+      const platform = metadata && metadata.platform ? metadata.platform : "ayax_marketplace"; // Default zuwa marketplace idan babu
 
       const amountInNaira = Number(amount) / 100;
 
@@ -71,7 +72,7 @@ exports.handlePaystackWebhook = async (req, res) => {
 
       const transactionId = `WWEB${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
-      // 5. Ajiye Record na Transaction
+      // 5. Ajiye Record na Transaction (Zamu iya nuna platform din a details ko metadata)
       await Transaction.create({
         user: user._id,
         transactionId,
@@ -80,14 +81,14 @@ exports.handlePaystackWebhook = async (req, res) => {
         amount: amountInNaira,
         status: "success",
         reference: reference,
-        details: `Auto-funding via Paystack Webhook (Ref: ${reference})`,
+        details: `Auto-funding via Paystack Webhook for [${platform.toUpperCase()}] (Ref: ${reference})`,
       });
 
       // 6. Rubuta Activity Log
       await Activity.create({
         staffId: user._id,
         action: "PAYSTACK_WEBHOOK_FUND",
-        details: `Auto-funded wallet with ₦${amountInNaira} via Paystack Webhook. Ref: ${reference}`,
+        details: `Auto-funded wallet with ₦${amountInNaira} via Paystack Webhook (${platform}). Ref: ${reference}`,
         targetUser: user._id,
       });
 
@@ -95,18 +96,25 @@ exports.handlePaystackWebhook = async (req, res) => {
       await Notification.create({
         recipient: user._id,
         title: "Wallet Funded via Webhook",
-        message: `Your wallet has been automatically credited with ₦${amountInNaira}. Reference: ${reference}`,
+        message: `Your wallet has been automatically credited with ₦${amountInNaira} on ${platform.replace('_', ' ').toUpperCase()}. Reference: ${reference}`,
         type: "wallet",
       });
 
-      console.log(`✅ [AYAX Webhook] Wallet successfully funded for: ${user.email} - ₦${amountInNaira}`);
+      // (Optional) Idan kana da wani karin aikin da kake son yi idan na Data Xpress ne ko Marketplace ne kadai:
+      if (platform === "ayax_data_xpress") {
+        console.log(`🚀 [Data Xpress Specific Action] Processing for user: ${user.email}`);
+        // A nan zaka iya sanya duk wani karin code da kake so ya zama na Data Xpress kadai
+      } else if (platform === "ayax_marketplace") {
+        console.log(`🛒 [Marketplace Specific Action] Processing for user: ${user.email}`);
+        // A nan zaka iya sanya duk wani karin code na Marketplace
+      }
+
+      console.log(`✅ [AYAX Webhook] Wallet successfully funded for: ${user.email} on ${platform} - ₦${amountInNaira}`);
     }
 
-    // 8. Dole ne a tura 200 OK koda ma event din ba 'charge.success' ba ne domin Paystack ya dakatar da turo saƙon sau da yawa (Retry logic)
     return res.status(200).send("Webhook Received");
   } catch (error) {
     console.error("❌ Webhook Processing Error:", error.message);
-    // Ko da an samu error, muna tura 200 don Paystack ya daina turo mana sakon maimaituwa
     return res.status(200).send("Internal error but acknowledged");
   }
 };
