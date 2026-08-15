@@ -100,10 +100,12 @@ const nimcRoutes = require("./routes/nimcRoutes");
 const bvnRoutes = require("./routes/bvnRoutes");
 const superAdminRoutes = require("./routes/superAdminRoutes");
 const validationRoutes = require("./routes/ninRoutes");
+const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 
 // --- INJECTING MIDDLEWARE & USER MODEL FOR THE DIRECT ROUTE ---
 const { protect } = require("./middleware/authMiddleware");
 const User = require("./models/User");
+
 
 // --- ROUTES REGISTRATION ---
 app.use("/api/v1/validation", validationRoutes);
@@ -120,6 +122,8 @@ app.use("/api/v1/leader", leaderRoutes);
 app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
+app.use("/api/v1/virtual-account", virtualAccountRoutes);
+
 
 // --- Nemo wannan bangaren a server.js ka sauya shi zuwa haka ---
 app.get("/api/v1/user/profile", async (req, res) => {
