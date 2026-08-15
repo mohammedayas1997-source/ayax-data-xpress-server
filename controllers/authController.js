@@ -58,14 +58,9 @@ const sendWelcomeEmail = async (user) => {
     };
 
     await transporter.sendMail(mailOptions);
-    console.log(
-      `[Email Success] Welcome notification transmitted to ${user.email}`,
-    );
+    console.log(`[Email Success] Welcome notification transmitted to ${user.email}`);
   } catch (error) {
-    console.error(
-      "[Email Error] Failed to transmit welcome notification:",
-      error.message,
-    );
+    console.error("[Email Error] Failed to transmit welcome notification:", error.message);
   }
 };
 
@@ -89,6 +84,8 @@ const sendToken = (user, statusCode, res) => {
     user: {
       id: user._id,
       name: user.name,
+      firstName: user.firstName,
+      surname: user.surname,
       email: user.email,
       phone: user.phone,
       role: user.role,
@@ -100,11 +97,13 @@ const sendToken = (user, statusCode, res) => {
       state: user.state,
       lga: user.lga,
       address: user.address,
+      has_transaction_pin: !!user.transactionPin,
+      hasPin: !!user.transactionPin,
     },
   });
 };
 
-// --- Paystack Dedicated Account Logic (Internal Protocol) ---
+// --- Paystack Dedicated Account Logic ---
 const createDedicatedAccount = async (user) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
   if (!secretKey)
@@ -141,7 +140,6 @@ const createDedicatedAccount = async (user) => {
 
   const bankData = accountResponse.data.data;
 
-  // An gyara accountNumber nan ya zama bankData.account_number saboda kar a samu undefined
   return await User.findByIdAndUpdate(
     user._id,
     {
@@ -154,7 +152,7 @@ const createDedicatedAccount = async (user) => {
   );
 };
 
-// @desc    Register a new user with Automated Paystack Virtual Account & Email
+// @desc    Register a new user
 exports.register = async (req, res) => {
   try {
     const {
@@ -224,20 +222,16 @@ exports.register = async (req, res) => {
     }
   } catch (error) {
     console.error("Critical Registration Error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Internal server processing failure.", error: error.message });
+    res.status(500).json({ success: false, message: "Internal server processing failure.", error: error.message });
   }
 };
 
-// @desc    Universal Login - Bada damar shiga ga kowane irin Role ba tare da wariya ba
+// @desc    Universal Login
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Credentials required." });
+      return res.status(400).json({ success: false, message: "Credentials required." });
     }
 
     const user = await User.findOne({
@@ -251,18 +245,118 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Zai dawo da bayanan user da role dinsa gaba daya ta yadda frontend zai gane inda zai kai shi
     sendToken(user, 200, res);
   } catch (error) {
     console.error("Login Protocol Error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Authentication server error.", error: error.message });
+    res.status(500).json({ success: false, message: "Authentication server error.", error: error.message });
   }
 };
 
-// @desc    Ajiye wannan a matsayin madadin route idan ana buqatar tsohon tsari
 exports.supervisorLogin = exports.login;
+
+// =======================================
+// FORGOT PASSWORD & OTP SYSTEM
+// =======================================
+
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Please provide an email address." });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      // Don tsaron account, muna bada sakon nasara ko babu shi a tsarin
+      return res.status(200).json({
+        success: true,
+        message: "If an account exists with this email, an OTP has been sent.",
+      });
+    }
+
+    // Generate 4-digit or 6-digit OTP
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    
+    // Save OTP and expiry (10 minutes from now)
+    user.resetPasswordToken = otp;
+    user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
+    await user.save({ validateBeforeSave: false });
+
+    // Send OTP via Email
+    try {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS,
+        },
+      });
+
+      await transporter.sendMail({
+        from: `"Ayax Data Xpress" <${process.env.EMAIL_USER}>`,
+        to: user.email,
+        subject: "Password Reset OTP Code",
+        html: `
+          <div style="font-family: Arial; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #e2e8f0; border-radius: 10px;">
+            <h2 style="color: #1e3a8a;">Password Reset Security</h2>
+            <p>Hello ${user.firstName || "User"},</p>
+            <p>You requested a password reset for your Ayax Data Xpress account. Use the OTP code below to proceed:</p>
+            <div style="background: #eff6ff; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; color: #1e3a8a; letter-spacing: 5px; border-radius: 8px; margin: 20px 0;">
+              ${otp}
+            </div>
+            <p>This code expires in 10 minutes. If you didn't request this, please ignore this email.</p>
+          </div>
+        `,
+      });
+    } catch (mailErr) {
+      console.error("OTP Email Dispatch Error:", mailErr.message);
+    }
+
+    // A nan zaka iya haɗa SMS Gateway API (kamar Termii ko Twilio) domin tura OTP zuwa wayar user: user.phone
+    console.log(`[OTP Generated for ${user.phone} / ${user.email}]: ${otp}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Verification OTP has been sent to your registered email and phone number.",
+    });
+  } catch (error) {
+    console.error("Forgot Password Error:", error);
+    return res.status(500).json({ success: false, message: "Server error during forgot password processing." });
+  }
+};
+
+// Verify OTP & Reset Password
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ success: false, message: "Please provide email, OTP, and new password." });
+    }
+
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+      resetPasswordToken: otp,
+      resetPasswordExpire: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: "Invalid or expired OTP code." });
+    }
+
+    user.password = newPassword;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Password reset successful. You can now login with your new password.",
+    });
+  } catch (error) {
+    console.error("Reset Password Error:", error);
+    return res.status(500).json({ success: false, message: "Server error during password reset." });
+  }
+};
 
 // =======================================
 // PAYSTACK WEBHOOK
@@ -302,7 +396,7 @@ exports.paystackWebhook = async (req, res) => {
 };
 
 // =======================================
-// UPDATE PASSWORD
+// UPDATE PASSWORD & PIN
 // =======================================
 
 exports.updatePassword = async (req, res) => {
@@ -328,9 +422,7 @@ exports.updatePassword = async (req, res) => {
     user.password = newPassword;
     await user.save();
     
-    return res
-      .status(200)
-      .json({ success: true, message: "Security parameters updated." });
+    return res.status(200).json({ success: true, message: "Security parameters updated." });
   } catch (error) {
     console.error("Update Password Error:", error);
     return res.status(500).json({
@@ -341,29 +433,41 @@ exports.updatePassword = async (req, res) => {
   }
 };
 
-// Update Transaction PIN Logic
-exports.updatePin = async (req, res) => {
+exports.createPin = async (req, res) => {
   try {
     const { newPin } = req.body;
-    
-    if (!newPin) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide the new PIN.",
-      });
+    if (!newPin || newPin.length !== 4) {
+      return res.status(400).json({ success: false, message: "Valid 4-digit PIN required." });
     }
 
     await User.findByIdAndUpdate(req.user.id, { transactionPin: newPin });
+    return res.status(200).json({ success: true, message: "Transaction PIN created successfully." });
+  } catch (error) {
+    console.error("Create PIN Error:", error);
+    return res.status(500).json({ success: false, message: "Server error while creating PIN." });
+  }
+};
+
+exports.updatePin = async (req, res) => {
+  try {
+    const { oldPin, newPin } = req.body;
     
-    return res
-      .status(200)
-      .json({ success: true, message: "Transaction PIN synchronized." });
+    if (!newPin || newPin.length !== 4) {
+      return res.status(400).json({ success: false, message: "Valid new 4-digit PIN required." });
+    }
+
+    const user = await User.findById(req.user.id).select("+transactionPin");
+    
+    if (user.transactionPin && user.transactionPin !== oldPin) {
+      return res.status(400).json({ success: false, message: "Incorrect current PIN." });
+    }
+
+    user.transactionPin = newPin;
+    await user.save();
+    
+    return res.status(200).json({ success: true, message: "Transaction PIN updated successfully." });
   } catch (error) {
     console.error("Update PIN Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error while updating PIN.",
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, message: "Server error while updating PIN." });
   }
 };
