@@ -146,7 +146,7 @@ const createDedicatedAccount = async (user) => {
     {
       paystackCustomerCode: customerCode,
       bankName: bankData.bank.name,
-      accountNumber: bankData.account_number,
+      accountNumber: accountData.account_number,
       accountName: bankData.account_name,
     },
     { new: true },
@@ -190,7 +190,7 @@ exports.register = async (req, res) => {
     }
 
     let referralId = undefined;
-    if (role === "supervisor" || role === "agent") {
+    if (role === "supervisor" || role === "agent" || role === "staff") {
       referralId = generateReferralId(firstName, surname);
     }
 
@@ -211,18 +211,13 @@ exports.register = async (req, res) => {
 
     try {
       const updatedUser = await createDedicatedAccount(user);
-
-      // DISPATCH REAL-TIME EMAIL NOTIFICATION
       await sendWelcomeEmail(updatedUser);
-
       return sendToken(updatedUser, 201, res);
     } catch (paystackError) {
       console.error(
         "Paystack Provisioning Failure:",
         paystackError.response?.data || paystackError.message,
       );
-
-      // Fallback: Notify user even if banking entity generation delayed
       await sendWelcomeEmail(user);
       return sendToken(user, 201, res);
     }
@@ -234,7 +229,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// @desc    Authenticate user & session initialization
+// @desc    Universal Login - Bada damar shiga ga kowane irin Role ba tare da wariya ba
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -247,6 +242,7 @@ exports.login = async (req, res) => {
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
     }).select("+password");
+
     if (!user || !(await user.matchPassword(password))) {
       return res.status(401).json({
         success: false,
@@ -254,6 +250,7 @@ exports.login = async (req, res) => {
       });
     }
 
+    // Zai dawo da bayanan user da role dinsa gaba daya ta yadda frontend zai gane inda zai kai shi
     sendToken(user, 200, res);
   } catch (error) {
     console.error("Login Protocol Error:", error);
@@ -263,42 +260,8 @@ exports.login = async (req, res) => {
   }
 };
 
-// @desc    Authenticate Supervisor & session initialization
-// @desc    Authenticate Supervisor / Management & session initialization
-exports.supervisorLogin = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Credentials required.",
-      });
-    }
-
-    const user = await User.findOne({
-      email: email.toLowerCase().trim(),
-    }).select("+password");
-
-    // Tsarin kwararru: Tabbatar cewa mai shiga nan yana da mukamin gudanarwa (Supervisor ko Superadmin)
-    const allowedManagementRoles = ["supervisor", "superadmin"];
-    
-    if (!user || !(await user.matchPassword(password)) || !allowedManagementRoles.includes(user.role)) {
-      return res.status(401).json({
-        success: false,
-        message: "Authentication failed: Unauthorized management parameters.",
-      });
-    }
-
-    sendToken(user, 200, res);
-  } catch (error) {
-    console.error("Management Login Protocol Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Authentication server error.",
-    });
-  }
-};
+// @desc    Ajiye wannan a matsayin madadin route idan ana buqatar tsohon tsari
+exports.supervisorLogin = exports.login;
 
 // =======================================
 // PAYSTACK WEBHOOK
@@ -311,13 +274,13 @@ exports.paystackWebhook = async (req, res) => {
     if (event.event === "charge.success") {
       const { customer, amount } = event.data;
       const customerEmail = customer.email;
-      const creditValue = amount / 100; // Akwai shi idan kana son amfani da shi wajen ƙarin kuɗi
+      const creditValue = amount / 100;
 
       await User.findOneAndUpdate(
         { email: customerEmail },
         {
           $inc: {
-            walletBalance: creditValue, // An gyara daga amount zuwa creditValue (Naira)
+            walletBalance: creditValue,
           },
         },
       );
@@ -330,7 +293,6 @@ exports.paystackWebhook = async (req, res) => {
     });
   } catch (error) {
     console.log("❌ WEBHOOK ERROR:", error);
-
     return res.status(500).json({
       success: false,
     });
