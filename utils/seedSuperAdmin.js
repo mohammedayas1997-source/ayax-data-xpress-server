@@ -2,46 +2,41 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 
-const seedSuperAdmin = async () => {
+const fixSuperAdmin = async () => {
   try {
     const mongoURI = "mongodb+srv://mohammedayas102_db_user:Ayas1997@cluster0.vkv1jlq.mongodb.net/AyaxXpressDB?retryWrites=true&w=majority";
 
     await mongoose.connect(mongoURI);
-    console.log("MongoDB Connected for Seeding...");
-
-    const superAdminEmail = "admin@ayaxdigital.solutions";
-
-    // Cire tsohon mai amfani tukunna
-    await User.deleteOne({ email: superAdminEmail });
+    console.log("MongoDB Connected...");
 
     const salt = await bcrypt.genSalt(12);
     const hashedPassword = await bcrypt.hash("Password123!", salt);
 
-    // Amfani da collection.insertOne kai tsaye don tsallake duk wani Schema validation error
-    await User.collection.insertOne({
-      surname: "SuperAdmin",
-      firstName: "Ayax",
-      otherName: "",
-      name: "AYAX SUPERADMIN",
-      email: superAdminEmail,
-      phone: "09033738409",
-      password: hashedPassword, 
-      walletBalance: 0.0,
-      pin: "0000",
-      bankName: "Wema Bank",
-      role: "superadmin",
-      isSuspended: false,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
+    // Za mu sabunta ko kuma mu kirkira da karfin tsiya (Direct update)
+    const result = await User.updateOne(
+      { email: "admin@ayaxdigital.solutions" },
+      {
+        $set: {
+          surname: "SuperAdmin",
+          firstName: "Ayax",
+          name: "AYAX SUPERADMIN",
+          password: hashedPassword,
+          role: "superadmin",
+          isSuspended: false,
+          walletBalance: 0.0,
+          pin: "0000",
+          bankName: "Wema Bank"
+        }
+      },
+      { upsert: true } // Idan babu shi zai kirkiro shi, idan akwai zai gyara shi
+    );
 
-    console.log(`[Success] Superadmin successfully forced into DB with email: ${superAdminEmail} and password: Password123!`);
+    console.log("[Success] Superadmin account fixed directly in DB!", result);
     process.exit(0);
-
   } catch (error) {
-    console.error("[Error] Seeding failed:", error.message);
+    console.error("[Error] Fix failed:", error.message);
     process.exit(1);
   }
 };
 
-seedSuperAdmin();
+fixSuperAdmin();
