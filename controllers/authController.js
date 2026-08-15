@@ -264,6 +264,7 @@ exports.login = async (req, res) => {
 };
 
 // @desc    Authenticate Supervisor & session initialization
+// @desc    Authenticate Supervisor / Management & session initialization
 exports.supervisorLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -279,16 +280,19 @@ exports.supervisorLogin = async (req, res) => {
       email: email.toLowerCase().trim(),
     }).select("+password");
 
-    if (!user || !(await user.matchPassword(password)) || user.role !== "supervisor") {
+    // Tsarin kwararru: Tabbatar cewa mai shiga nan yana da mukamin gudanarwa (Supervisor ko Superadmin)
+    const allowedManagementRoles = ["supervisor", "superadmin"];
+    
+    if (!user || !(await user.matchPassword(password)) || !allowedManagementRoles.includes(user.role)) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Unauthorized supervisor parameters.",
+        message: "Authentication failed: Unauthorized management parameters.",
       });
     }
 
     sendToken(user, 200, res);
   } catch (error) {
-    console.error("Supervisor Login Protocol Error:", error);
+    console.error("Management Login Protocol Error:", error);
     res.status(500).json({
       success: false,
       message: "Authentication server error.",
