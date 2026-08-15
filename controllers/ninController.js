@@ -227,4 +227,18 @@ exports.submitValidation = async (req, res) => {
       error: error.message 
     });
   }
+};// A cikin controllers/ninController.js
+exports.getAllValidationRequests = async (req, res) => {
+  try {
+    // Saka abin da kake so database ya kawo (Misali ValidationRequest ko NINRequest)
+    const requests = await ValidationRequest.find().populate("user", "name email phone");
+    res.status(200).json({
+      success: true,
+      count: requests.length,
+      data: requests,
+    });
+  } catch (error) {
+    console.error("Get All Validation Requests Error:", error);
+    res.status(500).json({ success: false, message: "Server Error", error: error.message });
+  }
 };
