@@ -1,25 +1,23 @@
 const mongoose = require("mongoose");
 const User = require("../models/User");
+const bcrypt = require("bcryptjs");
 
 const seedSuperAdmin = async () => {
   try {
-    // Ka saka ainihin link ɗinka a nan (cikin waɗannan alamomin dogon zance)
     const mongoURI = "mongodb+srv://mohammedayas102_db_user:Ayas1997@cluster0.vkv1jlq.mongodb.net/AyaxXpressDB?retryWrites=true&w=majority";
 
     await mongoose.connect(mongoURI);
     console.log("MongoDB Connected for Seeding...");
 
     const superAdminEmail = "admin@ayaxdigital.solutions";
-    
-    const existingAdmin = await User.findOne({ email: superAdminEmail });
 
-    if (existingAdmin) {
-      existingAdmin.role = "superadmin";
-      await existingAdmin.save();
-      console.log(`[Success] Existing user ${superAdminEmail} promoted to Superadmin.`);
-      process.exit(0);
-    }
+    // Cire tsohon mai amfani tukunna
+    await User.deleteOne({ email: superAdminEmail });
 
+    const salt = await bcrypt.genSalt(12);
+    const hashedPassword = await bcrypt.hash("Password123!", salt);
+
+    // Amfani da collection.insertOne kai tsaye don tsallake duk wani Schema validation error
     await User.collection.insertOne({
       surname: "SuperAdmin",
       firstName: "Ayax",
@@ -27,7 +25,7 @@ const seedSuperAdmin = async () => {
       name: "AYAX SUPERADMIN",
       email: superAdminEmail,
       phone: "09033738409",
-      password: "$2a$12$TemporaryHashedPasswordPlaceholderToBypassValidation", 
+      password: hashedPassword, 
       walletBalance: 0.0,
       pin: "0000",
       bankName: "Wema Bank",
@@ -37,7 +35,7 @@ const seedSuperAdmin = async () => {
       updatedAt: new Date()
     });
 
-    console.log(`[Success] Superadmin created successfully with email: ${superAdminEmail}`);
+    console.log(`[Success] Superadmin successfully forced into DB with email: ${superAdminEmail} and password: Password123!`);
     process.exit(0);
 
   } catch (error) {
