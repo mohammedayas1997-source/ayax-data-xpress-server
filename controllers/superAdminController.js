@@ -1,12 +1,14 @@
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
-const Activity = require("../models/Activity"); // Don ganin ayyukan ma'aikata
+const Activity = require("../models/Activity");
 
 // @desc    Get System Overview (Statistics)
+// @route   GET /api/v1/admin/stats
+// @access  Private/Admin
 exports.getSystemStats = async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
-    const totalAdmins = await User.countDocuments({ role: "admin" });
+    const totalAdmins = await User.countDocuments({ role: { $in: ["admin", "superadmin"] } });
     const totalSupervisors = await User.countDocuments({ role: "supervisor" });
     const totalAgents = await User.countDocuments({ role: "agent" });
 
@@ -32,47 +34,68 @@ exports.getSystemStats = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Get System Stats Error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Get All Transactions in the System (Kowa da kowa)
+// @desc    Get All Transactions in the System (Global)
+// @route   GET /api/v1/admin/transactions
+// @access  Private/Admin
 exports.getAllGlobalTransactions = async (req, res) => {
   try {
     const transactions = await Transaction.find()
       .populate("user", "surname firstName email phone role")
       .sort({ createdAt: -1 })
-      .limit(500); // Mun takaita don gudun nauyi
+      .limit(500)
+      .lean();
 
-    res
-      .status(200)
-      .json({ success: true, count: transactions.length, data: transactions });
+    res.status(200).json({ 
+      success: true, 
+      count: transactions.length, 
+      data: transactions 
+    });
   } catch (error) {
+    console.error("Get Global Transactions Error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Get All Admin & Staff Activities (Ganin aikin kowane ma'aikaci)
+// @desc    Get All Admin & Staff Activities (Audit Logs)
+// @route   GET /api/v1/admin/audit-logs
+// @access  Private/Admin
 exports.getAuditLogs = async (req, res) => {
   try {
     const logs = await Activity.find()
       .populate("staffId", "surname firstName role email")
-      .populate("targetUser", "surname firstName role")
-      .sort({ createdAt: -1 });
+      .populate("targetUser", "surname firstName role email")
+      .sort({ createdAt: -1 })
+      .lean();
 
-    res.status(200).json({ success: true, data: logs });
+    res.status(200).json({ 
+      success: true, 
+      count: logs.length, 
+      data: logs 
+    });
   } catch (error) {
+    console.error("Get Audit Logs Error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Change Any User Role (Superadmin can demote/promote anyone)
+// @desc    Change Any User Role
+// @route   PATCH /api/v1/admin/manage-role
+// @access  Private/Admin
 exports.manageUserRole = async (req, res) => {
   try {
     const { userId, newRole } = req.body;
 
+    if (!userId || !newRole) {
+      return res.status(400).json({ success: false, message: "Please provide userId and newRole" });
+    }
+
     // Kare kai: Superadmin ba zai iya rage wa kansa matsayi ba ta nan
-    if (userId === req.user.id && newRole !== "superadmin") {
+    if (userId === req.user.id && newRole !== "superadmin" && newRole !== "admin") {
       return res
         .status(400)
         .json({ success: false, message: "You cannot demote yourself!" });
@@ -84,10 +107,17 @@ exports.manageUserRole = async (req, res) => {
       { new: true },
     ).select("-password");
 
-    if (!user)
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Rubuta Activity Log
+    await Activity.create({
+      staffId: req.user._id,
+      action: "MANAGE_USER_ROLE",
+      details: `Changed role for user ${user.name} (${user.email}) to ${newRole}`,
+      targetUser: userId,
+    });
 
     res.status(200).json({
       success: true,
@@ -95,31 +125,57 @@ exports.manageUserRole = async (req, res) => {
       data: user,
     });
   } catch (error) {
+    console.error("Manage User Role Error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // @desc    Create a new Admin
+// @route   POST /api/v1/admin/make-admin
+// @access  Private/Superadmin
 exports.makeAdmin = async (req, res) => {
   try {
     const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "Please provide userId" });
+    }
+
     const user = await User.findByIdAndUpdate(
       userId,
       { role: "admin" },
       { new: true },
-    );
-    res
-      .status(200)
-      .json({ success: true, message: "User is now an Admin", data: user });
+    ).select("-password");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Rubuta Activity Log
+    await Activity.create({
+      staffId: req.user._id,
+      action: "MAKE_ADMIN",
+      details: `Promoted user ${user.name} (${user.email}) to Admin`,
+      targetUser: userId,
+    });
+
+    res.status(200).json({ 
+      success: true, 
+      message: "User is now an Admin", 
+      data: user 
+    });
   } catch (error) {
+    console.error("Make Admin Error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Admin creates a new staff (supervisor or agent)
+// @desc    Admin creates a new staff (supervisor, agent, or admin)
+// @route   POST /api/v1/admin/create-staff
+// @access  Private/Admin
 exports.createStaff = async (req, res) => {
   try {
-    const { firstName, surname, email, password, phone, role } = req.body;
+    const { firstName, surname, email, password, phone, role, state, lga, address } = req.body;
 
     // 1. Tabbatar an cika duk bayanan da ake bukata
     if (!firstName || !surname || !email || !password || !phone || !role) {
@@ -134,7 +190,7 @@ exports.createStaff = async (req, res) => {
     if (!allowedRoles.includes(role)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid role specified.",
+        message: "Invalid role specified. Allowed roles: supervisor, agent, admin",
       });
     }
 
@@ -160,6 +216,17 @@ exports.createStaff = async (req, res) => {
       phone: phone.trim(),
       password,
       role,
+      state: state || "",
+      lga: lga || "",
+      address: address || "",
+    });
+
+    // 5. Rubuta Activity Log
+    await Activity.create({
+      staffId: req.user._id,
+      action: "CREATE_STAFF",
+      details: `Created new ${role} account for ${newStaff.name} (${normalizedEmail})`,
+      targetUser: newStaff._id,
     });
 
     res.status(201).json({
@@ -169,6 +236,7 @@ exports.createStaff = async (req, res) => {
         id: newStaff._id,
         name: newStaff.name,
         email: newStaff.email,
+        phone: newStaff.phone,
         role: newStaff.role,
       },
     });
@@ -178,6 +246,7 @@ exports.createStaff = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Server error while creating staff.",
+      error: error.message,
     });
   }
 };

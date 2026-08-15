@@ -5,28 +5,29 @@ const {
   initializePayment,
   verifyPayment,
   fundWalletManual,
+  generateVirtualAccount,
 } = require("../controllers/walletController");
 
-// Mun tabbatar da sunan authMiddleware don gudun kuskure a Vercel
 const { protect, authorize } = require("../middleware/authMiddleware");
-const { generateVirtualAccount } = require("../controllers/walletController");
+
 // --- WALLET & PAYMENT ROUTES ---
 
-// Duk waɗannan routes ɗin suna buƙatar login
+// Duk waɗannan routes ɗin suna buƙatar mai amfani ya yi login (Authenticated)
 router.use(protect);
 
-router.post("/generate-virtual-account", protect, generateVirtualAccount);
-// 1. Duba kuɗin da ke cikin wallet
+// 1. Ƙirƙira ko sabunta Paystack Virtual Account (Asusun banki na musamman na mai amfani)
+router.post("/generate-virtual-account", generateVirtualAccount);
+
+// 2. Duba kuɗin da ke cikin wallet (Balance)
 router.get("/balance", getBalance);
 
-// 2. Fara biyan kuɗi ta Paystack (Zai dawo da authorization_url)
+// 3. Fara biyan kuɗi ko saka kudi ta Paystack (Zai dawo da authorization_url)
 router.post("/initialize", initializePayment);
 
-// 3. Tabbatar da biyan kuɗi (Manual verification daga Frontend)
+// 4. Tabbatar da biyan kuɗin Paystack (Verification ta hanyar reference)
 router.get("/verify/:reference", verifyPayment);
 
-// 4. Saka kuɗi na gwaji ko Manual Funding (ADMIN KAWAI)
-// MUHIMMI: Mun sanya authorize('admin') don kare wannan route ɗin
-router.post("/fund-manual", authorize("admin"), fundWalletManual);
+// 5. Saka kuɗi da hannu ko Manual Funding (ADMIN / SUPERADMIN KAWAI)
+router.post("/fund-manual", authorize("admin", "superadmin"), fundWalletManual);
 
 module.exports = router;

@@ -1,16 +1,21 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
-// 1. Protect Middleware (Tabbatar user ya yi login)
+/**
+ * @desc    Protect Middleware - Tabbatar mai amfani ya yi login kuma token dinsa yana aiki
+ */
 const protect = async (req, res, next) => {
   let token;
 
-  // Duba ko akwai Token a cikin Headers
+  // Duba ko akwai Token a cikin Authorization Headers
   if (
     req.headers.authorization &&
     req.headers.authorization.startsWith("Bearer")
   ) {
     token = req.headers.authorization.split(" ")[1];
+  } else if (req.cookies && req.cookies.token) {
+    // Tallafawa cookies idan ana amfani da su
+    token = req.cookies.token;
   }
 
   if (!token) {
@@ -24,38 +29,49 @@ const protect = async (req, res, next) => {
     // Tabbatar Token din na kwarai ne
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Nemo User amma kada mu dauko password dinsa (.select('-password'))
-    // Mun yi amfani da .lean() don gudun nauyin data a Vercel
-    req.user = await User.findById(decoded.id).select("-password").lean();
+    // Nemo User ba tare da password ba. Muna amfani da Mongoose document (ba lean ba) 
+    // domin ba da damar yin .save() idan an buƙata a gaba a cikin controllers.
+    const user = await User.findById(decoded.id).select("-password");
 
-    if (!req.user) {
+    if (!user) {
       return res.status(401).json({
         success: false,
         message: "User no longer exists",
       });
     }
 
-    // RIGAKAFIN TSARO: Idan an suspended din user, kar ya iya komai
-    if (req.user.isSuspended) {
+    // RIGAKAFIN TSARO: Idan an dakatar da account din user, kar ya iya yin komai
+    if (user.isSuspended) {
       return res.status(403).json({
         success: false,
         message: "Your account has been suspended. Please contact support.",
       });
     }
 
+    // Sanya user a cikin req don amfani da shi a gaba
+    req.user = user;
     next();
   } catch (error) {
+    console.error("Auth Middleware Error:", error.message);
+    let message = "Session expired, please login again";
+    if (error.name === "JsonWebTokenError") {
+      message = "Invalid token, authorization denied";
+    } else if (error.name === "TokenExpiredError") {
+      message = "Token expired, please login again";
+    }
+
     return res.status(401).json({
       success: false,
-      message: "Session expired, please login again",
+      message,
     });
   }
 };
 
-// 2. Authorize Middleware (Yanke ikon kowane Role)
+/**
+ * @desc    Authorize Middleware - Yanke ikon shiga bisa ga matsayi (Roles)
+ */
 const authorize = (...roles) => {
   return (req, res, next) => {
-    // Tabbatar role din user yana cikin jerin roles din da aka halatta
     if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
@@ -66,7 +82,9 @@ const authorize = (...roles) => {
   };
 };
 
-// 3. Admin Only (Domin dacewa da kiran da kake yi a sauran routes)
+/**
+ * @desc    Admin Only Middleware - Domin tabbatar cewa Admin ko Superadmin ne kawai zai iya shiga
+ */
 const adminOnly = (req, res, next) => {
   if (
     req.user &&
@@ -81,5 +99,4 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-// GYARA: Mun fitar da su duka a nan domin sauran files su iya gani
 module.exports = { protect, authorize, adminOnly };

@@ -28,6 +28,7 @@ const UserSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
+      index: true,
       match: [
         /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
         "Protocol Error: Invalid email syntax provided",
@@ -38,6 +39,7 @@ const UserSchema = new mongoose.Schema(
       required: [true, "Data Integrity Error: Phone number is required"],
       unique: true,
       trim: true,
+      index: true,
     },
     password: {
       type: String,
@@ -66,14 +68,20 @@ const UserSchema = new mongoose.Schema(
       unique: true,
       sparse: true,
     },
-    bankName: { type: String, default: "Wema Bank" },
+    bankName: { 
+      type: String, 
+      default: "Wema Bank" 
+    },
     accountNumber: {
       type: String,
       index: true,
       unique: true,
       sparse: true,
     },
-    accountName: { type: String },
+    accountName: { 
+      type: String,
+      trim: true,
+    },
 
     // --- ACCESS HIERARCHY ---
     role: {
@@ -88,6 +96,7 @@ const UserSchema = new mongoose.Schema(
         "support",
       ],
       default: "user",
+      index: true,
     },
 
     // --- TOPOLOGICAL RELATIONSHIPS ---
@@ -95,23 +104,39 @@ const UserSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
+      index: true,
     },
     assignedLeader: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
+      index: true,
     },
     referralId: {
       type: String,
       unique: true,
       sparse: true, // Critical for non-null unique constraint on specific roles
+      index: true,
     },
 
     // --- GEOGRAPHIC & SYSTEM STATUS ---
-    isSuspended: { type: Boolean, default: false },
-    state: { type: String },
-    lga: { type: String },
-    address: { type: String },
+    isSuspended: { 
+      type: Boolean, 
+      default: false,
+      index: true,
+    },
+    state: { 
+      type: String,
+      trim: true,
+    },
+    lga: { 
+      type: String,
+      trim: true,
+    },
+    address: { 
+      type: String,
+      trim: true,
+    },
   },
   {
     timestamps: true,
@@ -136,7 +161,7 @@ UserSchema.pre("save", async function (next) {
 
   // 3. Transactional PIN Cryptography
   // Note: Only hashes if the PIN is modified and deviated from the default "0000"
-  if (this.isModified("pin") && this.pin !== "0000") {
+  if (this.isModified("pin") && this.pin !== "0000" && !this.pin.startsWith("$2a$")) {
     const salt = await bcrypt.genSalt(10);
     this.pin = await bcrypt.hash(this.pin, salt);
   }
@@ -153,9 +178,12 @@ UserSchema.methods.matchPassword = async function (enteredPassword) {
 
 // Validate Transactional PIN
 UserSchema.methods.matchPin = async function (enteredPin) {
-  // Direct comparison for default state; cryptographic comparison for hardened states
   if (this.pin === "0000" && enteredPin === "0000") return true;
   return await bcrypt.compare(enteredPin, this.pin);
 };
+
+// Ingantattun compound indexes don gaggauta binciken hierarchy da gudanar da rahotanni
+UserSchema.index({ role: 1, isSuspended: 1 });
+UserSchema.index({ assignedSupervisor: 1, role: 1 });
 
 module.exports = mongoose.models.User || mongoose.model("User", UserSchema);

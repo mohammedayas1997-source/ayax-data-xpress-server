@@ -14,17 +14,17 @@ const fixSuperAdmin = async () => {
 
     // Za mu sabunta ko kuma mu kirkira da karfin tsiya (Direct update)
     const result = await User.updateOne(
-      { email: "admin@ayaxdigital.solutions" },
+      { email: "mohammed.ayas@ayaxdata.online" },
       {
         $set: {
-          surname: "SuperAdmin",
-          firstName: "Ayax",
+          surname: "Abdulrahman",
+          firstName: "Ayas",
           name: "AYAX SUPERADMIN",
           password: hashedPassword,
           role: "superadmin",
           isSuspended: false,
           walletBalance: 0.0,
-          pin: "0000",
+          pin: "8899",
           bankName: "Wema Bank"
         }
       },

@@ -11,9 +11,9 @@ const { protect, authorize } = require("../middleware/authMiddleware");
 
 // --- SUPERVISOR ROUTES ---
 
-// Duk wani route a nan, sai Supervisor ko Admin kawai
+// Duk wani route a nan, sai Supervisor, Admin, ko Superadmin kawai
 router.use(protect);
-router.use(authorize("supervisor", "admin"));
+router.use(authorize("supervisor", "admin", "superadmin"));
 
 // 1. Ganin jerin dukkan Agents da ke karkashinsa
 router.get("/my-agents", getMyAgents);

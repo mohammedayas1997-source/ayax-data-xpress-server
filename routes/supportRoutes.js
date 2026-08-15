@@ -7,7 +7,7 @@ const {
   requestRefund,
   getUserTransactionHistory,
   getRefundStatus,
-  traceServiceRequest, // Added this to match the new controller function
+  traceServiceRequest,
 } = require("../controllers/supportController");
 
 // 2. Import Middlewares

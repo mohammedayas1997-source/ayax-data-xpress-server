@@ -92,7 +92,7 @@ const sendToken = (user, statusCode, res) => {
       email: user.email,
       phone: user.phone,
       role: user.role,
-      walletBalance: user.walletBalance || 0,
+      walletBalance: user.walletBalance || user.balance || 0,
       referralId: user.referralId,
       bankName: user.bankName || "Wema Bank",
       accountNumber: user.accountNumber || "Pending",
@@ -141,12 +141,13 @@ const createDedicatedAccount = async (user) => {
 
   const bankData = accountResponse.data.data;
 
+  // An gyara accountNumber nan ya zama bankData.account_number saboda kar a samu undefined
   return await User.findByIdAndUpdate(
     user._id,
     {
       paystackCustomerCode: customerCode,
       bankName: bankData.bank.name,
-      accountNumber: accountData.account_number,
+      accountNumber: bankData.account_number,
       accountName: bankData.account_name,
     },
     { new: true },
@@ -225,7 +226,7 @@ exports.register = async (req, res) => {
     console.error("Critical Registration Error:", error);
     res
       .status(500)
-      .json({ success: false, message: "Internal server processing failure." });
+      .json({ success: false, message: "Internal server processing failure.", error: error.message });
   }
 };
 
@@ -256,7 +257,7 @@ exports.login = async (req, res) => {
     console.error("Login Protocol Error:", error);
     res
       .status(500)
-      .json({ success: false, message: "Authentication server error." });
+      .json({ success: false, message: "Authentication server error.", error: error.message });
   }
 };
 
@@ -295,6 +296,7 @@ exports.paystackWebhook = async (req, res) => {
     console.log("❌ WEBHOOK ERROR:", error);
     return res.status(500).json({
       success: false,
+      error: error.message,
     });
   }
 };
@@ -334,6 +336,7 @@ exports.updatePassword = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error while updating password.",
+      error: error.message,
     });
   }
 };
@@ -360,6 +363,7 @@ exports.updatePin = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error while updating PIN.",
+      error: error.message,
     });
   }
 };

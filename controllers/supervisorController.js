@@ -1,25 +1,45 @@
 const User = require("../models/User");
 const Sale = require("../models/Sale");
+const Activity = require("../models/Activity");
 const mongoose = require("mongoose");
 
-// 1. Ganin Agents na Supervisor (getMyAgents)
+/**
+ * @desc    Get Agents assigned to the logged-in Supervisor
+ * @route   GET /api/v1/supervisor/agents
+ * @access  Private (Supervisor)
+ */
 exports.getMyAgents = async (req, res) => {
   try {
     const agents = await User.find({
       assignedSupervisor: req.user._id,
       role: "agent",
-    }).select("firstName surname phone email targets");
+    })
+      .select("surname firstName phone email targets state lga")
+      .lean();
 
-    res.status(200).json({ success: true, data: agents });
+    res.status(200).json({ 
+      success: true, 
+      count: agents.length,
+      data: agents 
+    });
   } catch (error) {
+    console.error("Get My Agents Error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// 2. Ganin yadda kowane Agent yake kokari (getAgentSalesSummary)
+/**
+ * @desc    Get Sales Summary for a specific Agent
+ * @route   GET /api/v1/supervisor/agent-sales/:agentId
+ * @access  Private (Supervisor/Admin)
+ */
 exports.getAgentSalesSummary = async (req, res) => {
   try {
     const { agentId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(agentId)) {
+      return res.status(400).json({ success: false, message: "Invalid Agent ID format" });
+    }
 
     const stats = await Sale.aggregate([
       { $match: { agentId: new mongoose.Types.ObjectId(agentId) } },
@@ -28,36 +48,51 @@ exports.getAgentSalesSummary = async (req, res) => {
           _id: null,
           totalGB: { $sum: "$dataAmountGB" },
           totalAmount: { $sum: "$amount" },
+          totalSalesCount: { $sum: 1 },
         },
       },
     ]);
 
     const performance =
-      stats.length > 0 ? stats[0] : { totalGB: 0, totalAmount: 0 };
+      stats.length > 0 ? stats[0] : { totalGB: 0, totalAmount: 0, totalSalesCount: 0 };
+
     res.status(200).json({ success: true, data: performance });
   } catch (error) {
+    console.error("Get Agent Sales Summary Error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// 3. Ba Agent Target (assignTargetToAgent)
+/**
+ * @desc    Assign Target to an Agent under Supervisor
+ * @route   PATCH /api/v1/supervisor/assign-target/:agentId
+ * @access  Private (Supervisor)
+ */
 exports.assignTargetToAgent = async (req, res) => {
   try {
     const { agentId } = req.params;
     const { dataGoal } = req.body;
 
+    if (dataGoal === undefined || dataGoal === null) {
+      return res.status(400).json({ success: false, message: "Please provide dataGoal target" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(agentId)) {
+      return res.status(400).json({ success: false, message: "Invalid Agent ID format" });
+    }
+
+    const currentMonthName = new Date().toLocaleString("default", { month: "long" });
+
     const agent = await User.findOneAndUpdate(
       { _id: agentId, role: "agent", assignedSupervisor: req.user._id },
       {
         $set: {
-          "targets.dataGoal": dataGoal,
-          "targets.currentMonth": new Date().toLocaleString("default", {
-            month: "long",
-          }),
+          "targets.dataGoal": Number(dataGoal),
+          "targets.currentMonth": currentMonthName,
         },
       },
-      { new: true },
-    );
+      { new: true, runValidators: true }
+    ).select("surname firstName email targets");
 
     if (!agent) {
       return res.status(404).json({
@@ -66,17 +101,30 @@ exports.assignTargetToAgent = async (req, res) => {
       });
     }
 
+    // Rubuta Activity Log
+    await Activity.create({
+      staffId: req.user._id,
+      action: "ASSIGN_AGENT_TARGET",
+      details: `Assigned target of ${dataGoal}GB for ${currentMonthName} to agent ${agent.surname} ${agent.firstName}`,
+      targetUser: agentId,
+    });
+
     res.status(200).json({
       success: true,
       message: "Target assigned successfully",
       targets: agent.targets,
     });
   } catch (error) {
+    console.error("Assign Target Error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// 4. Leader Dashboard (Wanda ka turo - na bar shi don kariya)
+/**
+ * @desc    Get Overall Leader / Admin Dashboard Statistics
+ * @route   GET /api/v1/admin/leader-dashboard
+ * @access  Private (Admin / Superadmin)
+ */
 exports.getLeaderDashboard = async (req, res) => {
   try {
     const supervisors = await User.find({ role: "supervisor" })
@@ -95,7 +143,7 @@ exports.getLeaderDashboard = async (req, res) => {
     ]);
 
     const salesMap = new Map(
-      allTeamSales.map((item) => [String(item._id), item.teamGB]),
+      allTeamSales.map((item) => [String(item._id), item.teamGB])
     );
 
     const supervisorDetails = await Promise.all(
@@ -112,7 +160,7 @@ exports.getLeaderDashboard = async (req, res) => {
           teamPerformance: salesMap.get(String(sup._id)) || 0,
           targetAmount: sup.targets?.dataGoal || 0,
         };
-      }),
+      })
     );
 
     res.status(200).json({
@@ -129,6 +177,7 @@ exports.getLeaderDashboard = async (req, res) => {
       supervisors: supervisorDetails,
     });
   } catch (error) {
+    console.error("Get Leader Dashboard Error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

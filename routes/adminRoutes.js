@@ -6,7 +6,7 @@ const { protect, authorize } = require("../middleware/authMiddleware");
 
 // 2. Controllers
 const adminController = require("../controllers/adminController");
-// const dataPlanController = require("../controllers/dataPlanController");
+const dataPlanController = require("../controllers/dataPlanController");
 // const notificationController = require("../controllers/notificationController");
 
 // --- ADMIN PROTECTION ---
@@ -58,7 +58,11 @@ router.get("/bvn-requests", adminController.getAllBVNRequests);
 router.patch("/bvn-processing/:id", adminController.updateBVNStatus);
 router.patch("/approve-bvn/:id", adminController.approveBVNRequest);
 
-// --- 8. DATA PLANS & NOTIFICATIONS (Optional/Disabled) ---
-//router.get("/data-plans", dataPlanController.getAllPlans);
+// --- 8. DATA PLANS & MANAGEMENT ROUTES ---
+router.get("/plans", dataPlanController.getAdminPlans);
+router.post("/set-plan", dataPlanController.setPlanPrice);
+router.post("/sync-plans", dataPlanController.syncAyaxPlans);
+router.patch("/plans/:id/toggle", dataPlanController.togglePlanStatus);
+router.delete("/plans/:id", dataPlanController.deletePlan);
 
 module.exports = router;
