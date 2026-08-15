@@ -29,8 +29,108 @@ exports.getBalance = async (req, res) => {
 };
 
 /**
+ * @desc    Generate or retrieve Paystack Dedicated Virtual Account
+ * @route   POST /api/v1/wallet/generate-virtual-account
+ * @access  Private
+ */
+exports.generateVirtualAccount = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Idan mai amfani yana da asusun banki riga, dawo da shi kai tsaye
+    if (user.virtualAccount && user.virtualAccount.accountNumber) {
+      return res.status(200).json({
+        success: true,
+        message: "Virtual account retrieved successfully",
+        virtualAccount: user.virtualAccount,
+      });
+    }
+
+    // Idan babu, sai a ƙirƙira ta hanyar Paystack Customer & Dedicated Account API
+    // Na farko: Tabbatar ko an riga an yi creating din customer a Paystack ko a ƙirƙira sabo
+    let customerCode = user.paystackCustomerCode;
+
+    if (!customerCode) {
+      try {
+        const customerRes = await axios.post(
+          "https://api.paystack.co/customer",
+          {
+            email: user.email,
+            first_name: user.firstName || user.name || "User",
+            last_name: user.lastName || "Ayax",
+            phone: user.phone || "08000000000",
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 30000,
+          }
+        );
+        customerCode = customerRes.data.data.customer_code;
+        user.paystackCustomerCode = customerCode;
+        await user.save();
+      } catch (custError) {
+        console.error("Paystack Customer Creation Error:", custError.response?.data || custError.message);
+        // Idan customer din ya riga ya wanzu, zaka iya amfani da email dinsa ko ci gaba
+      }
+    }
+
+    // Na biyu: Ƙirƙirar Dedicated Virtual Account
+    let dvaResponse;
+    try {
+      dvaResponse = await axios.post(
+        "https://api.paystack.co/dedicated_account",
+        {
+          customer: customerCode || user.email,
+          preferred_bank: "wema-bank", // Ko wani banki da Paystack ke goyon baya
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 30000,
+        }
+      );
+    } catch (dvaError) {
+      console.error("Paystack DVA Error:", dvaError.response?.data || dvaError.message);
+      return res.status(502).json({
+        success: false,
+        message: dvaError.response?.data?.message || "Failed to generate virtual account from Paystack",
+      });
+    }
+
+    const accountData = dvaResponse.data.data;
+    user.virtualAccount = {
+      bankName: accountData.bank.name,
+      accountNumber: accountData.account_number,
+      accountName: accountData.account_name,
+    };
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Virtual account generated successfully",
+      virtualAccount: user.virtualAccount,
+    });
+  } catch (error) {
+    console.error("Generate Virtual Account Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while generating virtual account",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * @desc    Initialize Paystack Payment (Card / Direct Deposit)
- * @route   POST /api/v1/wallet/initialize-payment
+ * @route   POST /api/v1/wallet/initialize
  * @access  Private
  */
 exports.initializePayment = async (req, res) => {
@@ -199,7 +299,7 @@ exports.verifyPayment = async (req, res) => {
 
 /**
  * @desc    Credit wallet manually (Testing / Admin Only)
- * @route   POST /api/v1/wallet/manual-fund
+ * @route   POST /api/v1/wallet/fund-manual
  * @access  Private/Admin
  */
 exports.fundWalletManual = async (req, res) => {
@@ -258,11 +358,11 @@ exports.fundWalletManual = async (req, res) => {
   }
 };
 
-// A karshen controllers/walletController.js, tabbatar kana da wadannan:
+// Fitar da dukkan ayyukan (exports)
 module.exports = {
   getBalance,
+  generateVirtualAccount,
   initializePayment,
   verifyPayment,
   fundWalletManual,
-  generateVirtualAccount,
 };
