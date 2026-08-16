@@ -6,11 +6,12 @@ const ninController = require("../controllers/ninController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 
 // --- USER ROUTES ---
-// Hanyar karbar sabon validation (tana bukatar mai amfani ya shiga)
+// Hanyar karbar sabon validation (Tallafawa POST da PUT)
 router.post("/validate", protect, ninController.submitValidation);
+router.put("/validate", protect, ninController.submitValidation);
 
 // --- ADMIN ROUTES ---
-// Hanyar da Admin zai gani dukkan requests (An mayar da logic din zuwa controller domin tsaftar code)
+// Hanyar da Admin zai gani dukkan requests
 router.get(
   "/admin/all-requests",
   protect,

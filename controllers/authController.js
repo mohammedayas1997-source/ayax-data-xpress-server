@@ -77,6 +77,8 @@ const sendToken = (user, statusCode, res) => {
     },
   );
 
+  const hasPinSet = !!(user.transactionPin || user.pin);
+
   return res.status(statusCode).json({
     success: true,
     token,
@@ -97,8 +99,8 @@ const sendToken = (user, statusCode, res) => {
       state: user.state,
       lga: user.lga,
       address: user.address,
-      has_transaction_pin: !!user.transactionPin,
-      hasPin: !!user.transactionPin,
+      has_transaction_pin: hasPinSet,
+      hasPin: hasPinSet,
     },
   });
 };
@@ -222,7 +224,7 @@ exports.register = async (req, res) => {
     }
   } catch (error) {
     console.error("Critical Registration Error:", error);
-    res.status(500).json({ success: false, message: "Internal server processing failure.", error: error.message });
+    return res.status(500).json({ success: false, message: "Internal server processing failure.", error: error.message });
   }
 };
 
@@ -245,10 +247,10 @@ exports.login = async (req, res) => {
       });
     }
 
-    sendToken(user, 200, res);
+    return sendToken(user, 200, res);
   } catch (error) {
     console.error("Login Protocol Error:", error);
-    res.status(500).json({ success: false, message: "Authentication server error.", error: error.message });
+    return res.status(500).json({ success: false, message: "Authentication server error.", error: error.message });
   }
 };
 
@@ -372,6 +374,7 @@ exports.paystackWebhook = async (req, res) => {
         {
           $inc: {
             walletBalance: creditValue,
+            balance: creditValue,
           },
         },
       );
@@ -429,10 +432,6 @@ exports.updatePassword = async (req, res) => {
   }
 };
 
-
-
-// @desc    Update Transaction PIN using Account Password
-// @desc    Create Transaction PIN (First time)
 // @desc    Create Transaction PIN (First time)
 exports.createPin = async (req, res) => {
   try {
@@ -445,12 +444,16 @@ exports.createPin = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user.id);
+    const userId = req.user._id || req.user.id;
+    const user = await User.findById(userId);
+    
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
+    // Ana adana PIN ta kowace hanya da database kake amfani da ita (pin ko transactionPin)
     user.pin = newPin;
+    user.transactionPin = newPin;
     await user.save();
 
     return res.status(200).json({
@@ -486,7 +489,8 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user.id).select("+password");
+    const userId = req.user._id || req.user.id;
+    const user = await User.findById(userId).select("+password");
 
     if (!user) {
       return res.status(404).json({
@@ -504,6 +508,7 @@ exports.updatePin = async (req, res) => {
     }
 
     user.pin = newPin;
+    user.transactionPin = newPin;
     await user.save();
 
     return res.status(200).json({

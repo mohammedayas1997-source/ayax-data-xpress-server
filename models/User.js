@@ -53,11 +53,24 @@ const UserSchema = new mongoose.Schema(
       min: 0,
       set: (v) => Math.round(v * 100) / 100,
     },
+    // Sanya tsohon balance don dacewa da duk wani controller da ke kiran .balance
+    balance: {
+      type: Number,
+      default: 0.0,
+      min: 0,
+      set: (v) => Math.round(v * 100) / 100,
+    },
     pin: {
       type: String,
       minlength: 4,
       maxlength: 64,
       default: "0000",
+      select: false,
+    },
+    transactionPin: {
+      type: String,
+      minlength: 4,
+      maxlength: 64,
       select: false,
     },
 
@@ -160,14 +173,29 @@ UserSchema.pre("save", async function (next) {
     this.name = `${this.firstName} ${this.surname}`.toUpperCase().trim();
   }
 
+  // Tabbatar da cewa balance da walletBalance sun kasance daidai ko da an canza daya daga ciki
+  if (this.isModified("walletBalance")) {
+    this.balance = this.walletBalance;
+  } else if (this.isModified("balance")) {
+    this.walletBalance = this.balance;
+  }
+
   if (this.isModified("password")) {
     const salt = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(this.password, salt);
   }
 
+  // Sarrafa pin da transactionPin tare
   if (this.isModified("pin") && this.pin !== "0000" && !this.pin.startsWith("$2a$")) {
     const salt = await bcrypt.genSalt(10);
     this.pin = await bcrypt.hash(this.pin, salt);
+    this.transactionPin = this.pin;
+  }
+
+  if (this.isModified("transactionPin") && this.transactionPin && !this.transactionPin.startsWith("$2a$")) {
+    const salt = await bcrypt.genSalt(10);
+    this.transactionPin = await bcrypt.hash(this.transactionPin, salt);
+    this.pin = this.transactionPin;
   }
 
   next();
@@ -180,8 +208,10 @@ UserSchema.methods.matchPassword = async function (enteredPassword) {
 };
 
 UserSchema.methods.matchPin = async function (enteredPin) {
-  if (this.pin === "0000" && enteredPin === "0000") return true;
-  return await bcrypt.compare(enteredPin, this.pin);
+  const pinHash = this.pin || this.transactionPin;
+  if ((!pinHash || pinHash === "0000") && enteredPin === "0000") return true;
+  if (!pinHash) return false;
+  return await bcrypt.compare(enteredPin, pinHash);
 };
 
 UserSchema.index({ role: 1, isSuspended: 1 });

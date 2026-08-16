@@ -52,14 +52,14 @@ exports.setPlanPrice = async (req, res) => {
       { upsert: true, new: true, runValidators: true },
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Plan updated successfully",
       plan,
     });
   } catch (error) {
     console.error("Set Plan Error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error updating plan details",
       error: error.message,
@@ -101,7 +101,6 @@ exports.syncAyaxPlans = async (req, res) => {
       const apiPrice = Number(p.price || p.amount || 0);
 
       if (netId && pCode) {
-        // Idan babu tsohon plan, za mu sa userPrice da agentPrice ta atomatik (misali ₦50 kari)
         await DataPlan.findOneAndUpdate(
           { networkId: netId, planCode: pCode },
           {
@@ -148,14 +147,14 @@ exports.getPlans = async (req, res) => {
       userPrice: 1,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: plans.length,
       data: plans,
     });
   } catch (error) {
     console.error("Get Plans Error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error fetching plans",
       error: error.message,
@@ -174,14 +173,14 @@ exports.getAdminPlans = async (req, res) => {
       userPrice: 1,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: plans.length,
       data: plans,
     });
   } catch (error) {
     console.error("Get Admin Plans Error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error fetching admin plans",
       error: error.message,
@@ -203,14 +202,14 @@ exports.togglePlanStatus = async (req, res) => {
     plan.isActive = !plan.isActive;
     await plan.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: `Plan status changed to ${plan.isActive ? "Active" : "Inactive"}`,
       data: plan,
     });
   } catch (error) {
     console.error("Toggle Plan Status Error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error toggling plan status",
       error: error.message,
@@ -229,13 +228,13 @@ exports.deletePlan = async (req, res) => {
       return res.status(404).json({ success: false, message: "Plan not found" });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Data plan deleted successfully",
     });
   } catch (error) {
     console.error("Delete Plan Error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error deleting plan",
       error: error.message,

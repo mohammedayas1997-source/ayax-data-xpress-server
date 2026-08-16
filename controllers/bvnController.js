@@ -2,6 +2,7 @@ const User = require("../models/User");
 const BVNPrice = require("../models/BVNPrice");
 const BVNRequest = require("../models/BVNRequest");
 const Activity = require("../models/Activity");
+const bcrypt = require("bcryptjs"); // Tabbatar kana da wannan ko kuma hanyar da kake amfani da ita wajen duba PIN
 
 /**
  * @desc    Get all BVN service prices
@@ -12,13 +13,13 @@ exports.getBVNPrices = async (req, res) => {
   try {
     const prices = await BVNPrice.find();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: prices.length,
       data: prices,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error fetching BVN prices: " + error.message,
     });
@@ -34,7 +35,7 @@ exports.setBVNPrice = async (req, res) => {
   try {
     const { serviceType, amount } = req.body;
 
-    if (!serviceType || !amount) {
+    if (!serviceType || amount === undefined) {
       return res.status(400).json({
         success: false,
         message: "Please provide both serviceType and amount",
@@ -47,13 +48,13 @@ exports.setBVNPrice = async (req, res) => {
       { new: true, upsert: true, runValidators: true },
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: `${serviceType.replace("_", " ").toUpperCase()} price updated successfully`,
       data: price,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to set BVN price: " + error.message,
     });
@@ -67,7 +68,7 @@ exports.setBVNPrice = async (req, res) => {
  */
 exports.verifyBVN = async (req, res) => {
   try {
-    const { bvnNumber, serviceType, ...otherDetails } = req.body;
+    const { bvnNumber, serviceType, pin, ...otherDetails } = req.body;
     const userId = req.user._id;
 
     if (!bvnNumber || !serviceType) {
@@ -77,7 +78,33 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // 1. Tabbatar da Farashin sabis (Fetch price from BVNPrice model)
+    // 1. Tabbatar da an shigar da Transaction PIN
+    if (!pin) {
+      return res.status(400).json({
+        success: false,
+        message: "Transaction PIN is required",
+      });
+    }
+
+    // 2. Nemo mai amfani tare da dauko PIN dinsa (a tabbatar ana zabo pin field daga DB)
+    const user = await User.findById(userId).select("+pin");
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // 3. Tabbatar da cewa PIN ɗin da mai amfani ya igo daidai ne (Idan ana amfani da Hashing ko Plain text)
+    // Idan kana adana pin a matsayin plain text: if (user.pin !== pin)
+    // Idan kuma kana amfani da hashing (misali bcrypt): const isPinValid = await bcrypt.compare(pin, user.pin);
+    const isPinValid = user.pin ? (user.pin === pin || (await bcrypt.compare(pin, user.pin))) : true; 
+    
+    if (!isPinValid) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid transaction PIN",
+      });
+    }
+
+    // 4. Tabbatar da Farashin sabis (Fetch price from BVNPrice model)
     const priceDoc = await BVNPrice.findOne({ serviceType });
     if (!priceDoc) {
       return res.status(400).json({
@@ -87,12 +114,7 @@ exports.verifyBVN = async (req, res) => {
     }
     const serviceFee = Number(priceDoc.amount);
 
-    // 2. Binciken kuɗin Wallet (Wallet Balance Check)
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
+    // 5. Binciken kuɗin Wallet (Wallet Balance Check)
     const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
 
     if (currentBal < serviceFee) {
@@ -102,7 +124,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // 3. Cire kuɗi daga Wallet ɗin mai amfani
+    // 6. Cire kuɗi daga Wallet ɗin mai amfani
     user.walletBalance = currentBal - serviceFee;
     if (user.balance !== undefined) user.balance = user.walletBalance;
 
@@ -117,17 +139,17 @@ exports.verifyBVN = async (req, res) => {
 
     await user.save();
 
-    // 4. Ajiye Buƙatar a cikin BVNRequest Model (Logging the request)
+    // 7. Ajiye Buƙatar a cikin BVNRequest Model (Logging the request)
     const newBVNRequest = await BVNRequest.create({
       user: userId,
       bvnNumber,
       serviceType,
       amount: serviceFee,
-      status: "pending", // Ko "processing" dangane da tsarin ka
+      status: "pending",
       ...otherDetails,
     });
 
-    // 5. Rubuta Activity Log
+    // 8. Rubuta Activity Log
     await Activity.create({
       staffId: userId,
       action: "BVN_VERIFICATION_INITIATED",
@@ -135,14 +157,14 @@ exports.verifyBVN = async (req, res) => {
       targetUser: userId,
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "BVN verification request submitted successfully",
       data: newBVNRequest,
       newBalance: user.walletBalance,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Verification failed: " + error.message,
     });

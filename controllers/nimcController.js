@@ -9,21 +9,26 @@ const AYAX_API_BASE_URL = process.env.AYAX_API_BASE_URL || "https://api.ayaxapis
 const AYAX_API_KEY = process.env.AYAX_API_KEY;
 
 // @desc    User submits a new NIMC modification or service request via Ayax APIs
-// @route   POST /api/v1/nimc/submit
+// @route   POST /api/v1/nimc/request-modification (ko /api/v1/nimc/submit)
 // @access  Private (User)
 exports.submitNIMCRequest = async (req, res) => {
   const session = await User.startSession();
   session.startTransaction();
 
   try {
-    const { type, nin, pin, details } = req.body;
+    // Mun haɗa tsoffin sunaye da sabbin sunaye domin su dace da duk wata bukata ta Frontend
+    const { type, serviceType, nin, ninNumber, pin, details, formData } = req.body;
 
-    if (!type || !nin || !pin) {
+    const finalServiceType = serviceType || type;
+    const finalNin = ninNumber || nin;
+    const finalDetails = formData || details || {};
+
+    if (!finalServiceType || !finalNin || !pin) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Please provide type, nin, and pin",
+        message: "Please provide serviceType (or type), ninNumber (or nin), and pin",
       });
     }
 
@@ -37,7 +42,7 @@ exports.submitNIMCRequest = async (req, res) => {
     }
 
     // 1. Nemo farashin da Admin ya seta a NIMCPrice Model
-    const pricing = await NIMCPrice.findOne({ serviceType: type });
+    const pricing = await NIMCPrice.findOne({ serviceType: finalServiceType });
     if (!pricing) {
       await session.abortTransaction();
       session.endSession();
@@ -52,6 +57,8 @@ exports.submitNIMCRequest = async (req, res) => {
     let isPinValid = false;
     if (user.matchPin) {
       isPinValid = await user.matchPin(pin);
+    } else if (user.pin) {
+      isPinValid = user.pin === pin;
     } else {
       isPinValid = pin === "0000";
     }
@@ -91,7 +98,7 @@ exports.submitNIMCRequest = async (req, res) => {
       oldBalance: currentBal,
       newBalance: newBal,
       type: "nimc_service",
-      details: `Payment for NIMC Service (${type})`,
+      details: `Payment for NIMC Service (${finalServiceType})`,
       status: "pending",
     });
     await transaction.save({ session });
@@ -99,9 +106,9 @@ exports.submitNIMCRequest = async (req, res) => {
     // 6. Save form data for Admin/API review
     const request = new NIMCRequest({
       user: user._id,
-      serviceType: type,
-      ninNumber: nin,
-      formData: details || {},
+      serviceType: finalServiceType,
+      ninNumber: finalNin,
+      formData: finalDetails,
       amount: amountToCharge,
       status: "pending",
       transactionId,
@@ -117,10 +124,10 @@ exports.submitNIMCRequest = async (req, res) => {
       const ayaxResponse = await axios.post(
         `${AYAX_API_BASE_URL}/nimc/process`,
         {
-          service_type: type,
-          nin,
+          service_type: finalServiceType,
+          nin: finalNin,
           ref_id: reference,
-          details: details || {},
+          details: finalDetails,
         },
         {
           headers: {
@@ -137,7 +144,7 @@ exports.submitNIMCRequest = async (req, res) => {
       if (isSuccessful) {
         await Transaction.findOneAndUpdate(
           { reference },
-          { status: "success", details: `Success: NIMC Service (${type}) processed` }
+          { status: "success", details: `Success: NIMC Service (${finalServiceType}) processed` }
         );
 
         await NIMCRequest.findOneAndUpdate(
@@ -149,7 +156,7 @@ exports.submitNIMCRequest = async (req, res) => {
         await Activity.create({
           staffId: user._id,
           action: "NIMC_REQUEST_SUBMITTED",
-          details: `Successfully processed NIMC request for ${type} (NIN: ${nin})`,
+          details: `Successfully processed NIMC request for ${finalServiceType} (NIN: ${finalNin})`,
           targetUser: user._id,
         });
 
@@ -197,7 +204,7 @@ exports.submitNIMCRequest = async (req, res) => {
     session.endSession();
 
     console.error("Submit NIMC Error:", error);
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -211,13 +218,13 @@ exports.getAllNIMCRequests = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: requests.length,
       data: requests,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -236,13 +243,13 @@ exports.updateToProcessing = async (req, res) => {
       return res.status(404).json({ success: false, message: "Request not found" });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Status updated to processing",
       data: request,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -269,13 +276,13 @@ exports.approveRequest = async (req, res) => {
 
     await request.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Request marked as completed successfully",
       data: request,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -288,13 +295,13 @@ exports.getMyNIMCRequests = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: requests.length,
       data: requests,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -349,7 +356,7 @@ exports.verifyNIMC = async (req, res) => {
 
   } catch (error) {
     console.error("NIMC Verification Error:", error.message);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Kuskure wajen tantancewa daga Ayax APIs.",
       error: error.message,

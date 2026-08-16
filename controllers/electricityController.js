@@ -2,6 +2,7 @@ const axios = require("axios");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
+const bcrypt = require("bcryptjs");
 
 const AYAX_API_BASE_URL = process.env.AYAX_API_BASE_URL || "https://api.ayaxapis.com/v1";
 const AYAX_API_KEY = process.env.AYAX_API_KEY;
@@ -98,7 +99,7 @@ exports.buyElectricity = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { electricCompany, meterNo, meterType, amount, phoneNo } = req.body;
+    const { electricCompany, meterNo, meterType, amount, phoneNo, pin } = req.body;
     const userId = req.user._id || req.user.id;
 
     if (!electricCompany || !meterNo || !meterType || !amount || !phoneNo) {
@@ -110,11 +111,32 @@ exports.buyElectricity = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).session(session);
+    // Tabbatar da an shigar da Transaction PIN
+    if (!pin) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Transaction PIN is required",
+      });
+    }
+
+    const user = await User.findById(userId).select("+pin").session(session);
     if (!user) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Tabbatar da cewa PIN ɗin da mai amfani ya tura daidai ne
+    const isPinValid = user.pin ? (user.pin === pin || (await bcrypt.compare(pin, user.pin))) : true;
+    if (!isPinValid) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Invalid transaction PIN",
+      });
     }
 
     const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);

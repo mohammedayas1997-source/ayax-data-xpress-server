@@ -43,8 +43,10 @@ exports.submitValidation = async (req, res) => {
     let isPinValid = false;
     if (user.matchPin) {
       isPinValid = await user.matchPin(pin);
+    } else if (user.pin) {
+      isPinValid = user.pin === pin;
     } else {
-      isPinValid = pin === "0000"; // Tabbataccen tsohon tsari idan babu matchPin method
+      isPinValid = pin === "0000";
     }
 
     if (!isPinValid) {
@@ -115,7 +117,7 @@ exports.submitValidation = async (req, res) => {
     let response;
     try {
       response = await axios.post(
-        `${AYAX_API_BASE_URL}/verification/process`, // Canza zuwa zahirin endpoint din Ayax APIs
+        `${AYAX_API_BASE_URL}/verification/process`,
         {
           service_type: type,
           nin,
@@ -227,18 +229,29 @@ exports.submitValidation = async (req, res) => {
       error: error.message 
     });
   }
-};// A cikin controllers/ninController.js
+};
+
+// @desc    Admin fetches all validation requests
+// @route   GET /api/v1/validation/admin/all
+// @access  Private (Admin)
 exports.getAllValidationRequests = async (req, res) => {
   try {
-    // Saka abin da kake so database ya kawo (Misali ValidationRequest ko NINRequest)
-    const requests = await ValidationRequest.find().populate("user", "name email phone");
-    res.status(200).json({
+    const requests = await ValidationRequest.find()
+      .populate("user", "surname firstName name email phone")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
       success: true,
       count: requests.length,
       data: requests,
     });
   } catch (error) {
     console.error("Get All Validation Requests Error:", error);
-    res.status(500).json({ success: false, message: "Server Error", error: error.message });
+    return res.status(500).json({ 
+      success: false, 
+      message: "Server Error", 
+      error: error.message 
+    });
   }
 };

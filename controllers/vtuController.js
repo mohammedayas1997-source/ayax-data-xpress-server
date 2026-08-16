@@ -21,7 +21,7 @@ exports.buyData = async (req, res) => {
 
   try {
     const { network, planId, phoneNumber } = req.body;
-    const userId = req.user._id;
+    const userId = req.user._id || req.user.id;
 
     if (!network || !planId || !phoneNumber) {
       await session.abortTransaction();
@@ -223,7 +223,7 @@ exports.buyAirtime = async (req, res) => {
 
   try {
     const { network, phoneNumber, amount } = req.body;
-    const userId = req.user._id;
+    const userId = req.user._id || req.user.id;
 
     if (!network || !phoneNumber || !amount) {
       await session.abortTransaction();
@@ -385,6 +385,8 @@ exports.nimcValidation = async (req, res) => {
 
   try {
     const { nin } = req.body;
+    const userId = req.user._id || req.user.id;
+
     if (!nin) {
       await session.abortTransaction();
       session.endSession();
@@ -392,7 +394,7 @@ exports.nimcValidation = async (req, res) => {
     }
 
     const cost = 1000;
-    const user = await User.findById(req.user._id).session(session);
+    const user = await User.findById(userId).session(session);
     if (!user) {
       await session.abortTransaction();
       session.endSession();
@@ -437,7 +439,7 @@ exports.nimcValidation = async (req, res) => {
     } catch (apiError) {
       console.error("Ayax NIMC API Error:", apiError.message);
       
-      const refundUser = await User.findById(req.user._id);
+      const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + cost).toFixed(2));
         if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
@@ -490,7 +492,7 @@ exports.nimcValidation = async (req, res) => {
         newBalance: user.walletBalance,
       });
     } else {
-      const refundUser = await User.findById(req.user._id);
+      const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + cost).toFixed(2));
         if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
@@ -520,7 +522,8 @@ exports.nimcValidation = async (req, res) => {
  */
 exports.getTransactionHistory = async (req, res) => {
   try {
-    const transactions = await Transaction.find({ user: req.user._id })
+    const userId = req.user._id || req.user.id;
+    const transactions = await Transaction.find({ user: userId })
       .sort({ createdAt: -1 })
       .limit(50)
       .lean();
@@ -561,14 +564,14 @@ exports.getTransactionStatus = async (req, res) => {
 
 // Utility Placeholders (Electricity & Cable TV)
 exports.verifyMeter = async (req, res) => {
-  res.status(200).json({ success: true, message: "Meter verification placeholder", customerName: "Test Customer" });
+  return res.status(200).json({ success: true, message: "Meter verification placeholder", customerName: "Test Customer" });
 };
 exports.purchaseElectricity = async (req, res) => {
-  res.status(400).json({ success: false, message: "Electricity purchase logic via Ayax APIs coming soon" });
+  return res.status(400).json({ success: false, message: "Electricity purchase logic via Ayax APIs coming soon" });
 };
 exports.verifySmartCard = async (req, res) => {
-  res.status(200).json({ success: true, message: "SmartCard verification placeholder", customerName: "Test Customer" });
+  return res.status(200).json({ success: true, message: "SmartCard verification placeholder", customerName: "Test Customer" });
 };
 exports.purchaseCable = async (req, res) => {
-  res.status(400).json({ success: false, message: "Cable purchase logic via Ayax APIs coming soon" });
+  return res.status(400).json({ success: false, message: "Cable purchase logic via Ayax APIs coming soon" });
 };
