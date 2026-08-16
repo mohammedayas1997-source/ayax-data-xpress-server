@@ -168,34 +168,37 @@ const UserSchema = new mongoose.Schema(
 
 // --- PROTOCOL MIDDLEWARES ---
 
+// --- PROTOCOL MIDDLEWARES ---
+
 UserSchema.pre("save", async function (next) {
   if (this.isModified("firstName") || this.isModified("surname")) {
     this.name = `${this.firstName} ${this.surname}`.toUpperCase().trim();
   }
 
-  // Tabbatar da cewa balance da walletBalance sun kasance daidai ko da an canza daya daga ciki
+  // Tabbatar da cewa balance da walletBalance sun kasance daidai
   if (this.isModified("walletBalance")) {
     this.balance = this.walletBalance;
   } else if (this.isModified("balance")) {
     this.walletBalance = this.balance;
   }
 
-  if (this.isModified("password")) {
+  if (this.isModified("password") && !this.password.startsWith("$2a$")) {
     const salt = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(this.password, salt);
   }
 
-  // Sarrafa pin da transactionPin tare
-  if (this.isModified("pin") && this.pin !== "0000" && !this.pin.startsWith("$2a$")) {
+  // Ingantaccen tsarin sarrafa PIN da transactionPin tare
+  const targetPin = this.pin !== "0000" ? this.pin : this.transactionPin;
+  
+  if (
+    (this.isModified("pin") || this.isModified("transactionPin")) &&
+    targetPin &&
+    !targetPin.startsWith("$2a$")
+  ) {
     const salt = await bcrypt.genSalt(10);
-    this.pin = await bcrypt.hash(this.pin, salt);
-    this.transactionPin = this.pin;
-  }
-
-  if (this.isModified("transactionPin") && this.transactionPin && !this.transactionPin.startsWith("$2a$")) {
-    const salt = await bcrypt.genSalt(10);
-    this.transactionPin = await bcrypt.hash(this.transactionPin, salt);
-    this.pin = this.transactionPin;
+    const hashedPin = await bcrypt.hash(targetPin, salt);
+    this.pin = hashedPin;
+    this.transactionPin = hashedPin;
   }
 
   next();
