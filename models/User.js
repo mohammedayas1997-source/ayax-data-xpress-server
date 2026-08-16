@@ -170,6 +170,8 @@ const UserSchema = new mongoose.Schema(
 
 // --- PROTOCOL MIDDLEWARES ---
 
+// --- PROTOCOL MIDDLEWARES ---
+
 UserSchema.pre("save", async function (next) {
   if (this.isModified("firstName") || this.isModified("surname")) {
     this.name = `${this.firstName} ${this.surname}`.toUpperCase().trim();
@@ -187,19 +189,7 @@ UserSchema.pre("save", async function (next) {
     this.password = await bcrypt.hash(this.password, salt);
   }
 
-  // Ingantaccen tsarin sarrafa PIN da transactionPin tare
-  const targetPin = this.pin !== "0000" ? this.pin : this.transactionPin;
-  
-  if (
-    (this.isModified("pin") || this.isModified("transactionPin")) &&
-    targetPin &&
-    !targetPin.startsWith("$2a$")
-  ) {
-    const salt = await bcrypt.genSalt(10);
-    const hashedPin = await bcrypt.hash(targetPin, salt);
-    this.pin = hashedPin;
-    this.transactionPin = hashedPin;
-  }
+  // Lura: Mun cire sarrafa PIN a nan saboda 'pinController' ne ke kula da shi kai tsaye don guje wa matsala.
 
   next();
 });

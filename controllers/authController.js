@@ -2,6 +2,7 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
+const bcrypt = require("bcryptjs");
 
 const generateReferralId = (firstName, surname) => {
   const firstInitial = firstName ? firstName[0] : "A";
@@ -430,6 +431,7 @@ exports.updatePassword = async (req, res) => {
 };
 
 // @desc    Create Transaction PIN (First time)
+// @desc    Create Transaction PIN (First time)
 exports.createPin = async (req, res) => {
   try {
     const pinToUse = req.body.newPin || req.body.pin;
@@ -442,16 +444,19 @@ exports.createPin = async (req, res) => {
     }
 
     const userId = req.user._id || req.user.id;
-    // KARA +pin +TRANSACTIONPIN ANAN
     const user = await User.findById(userId).select("+pin +transactionPin");
     
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    user.pin = pinToUse;
-    user.transactionPin = pinToUse;
-    await user.save();
+    // Yi hashing na PIN din da bcrypt kafin adanawa
+    const salt = await bcrypt.genSalt(10);
+    const hashedPin = await bcrypt.hash(pinToUse, salt);
+
+    user.pin = hashedPin;
+    user.transactionPin = hashedPin;
+    await user.save({ validateBeforeSave: false });
 
     return res.status(200).json({
       success: true,
@@ -488,7 +493,6 @@ exports.updatePin = async (req, res) => {
     }
 
     const userId = req.user._id || req.user.id;
-    // KARA +pin +TRANSACTIONPIN TARE DA PASSWORD ANAN
     const user = await User.findById(userId).select("+password +pin +transactionPin");
 
     if (!user) {
@@ -506,9 +510,13 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    user.pin = pinToUse;
-    user.transactionPin = pinToUse;
-    await user.save();
+    // Yi hashing na sabon PIN din da bcrypt kafin adanawa
+    const salt = await bcrypt.genSalt(10);
+    const hashedPin = await bcrypt.hash(pinToUse, salt);
+
+    user.pin = hashedPin;
+    user.transactionPin = hashedPin;
+    await user.save({ validateBeforeSave: false });
 
     return res.status(200).json({
       success: true,
