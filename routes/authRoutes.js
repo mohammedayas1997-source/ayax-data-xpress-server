@@ -2,8 +2,6 @@ const express = require("express");
 const router = express.Router();
 const authController = require("../controllers/authController");
 const { protect } = require("../middleware/authMiddleware");
-const pinController = require("../controllers/pinController");
-
 
 // --- AUTHENTICATION ROUTES ---
 router.post("/register", authController.register);
@@ -18,12 +16,12 @@ router.get("/profile", protect, (req, res) => {
 
 router.put("/update-password", protect, authController.updatePassword);
 
-// --- PIN MANAGEMENT ROUTES (POST da PUT don tallafawa ko wane request) ---
-router.post("/create-pin", protect, pinController.createPin);
-router.put("/create-pin", protect, pinController.createPin);
+// --- PIN MANAGEMENT ROUTES ---
+router.post("/create-pin", protect, authController.createPin);
+router.put("/create-pin", protect, authController.createPin);
 
-router.post("/update-pin", protect, pinController.updatePin);
-router.put("/update-pin", protect, pinController.updatePin);
+router.post("/update-pin", protect, authController.updatePin);
+router.put("/update-pin", protect, authController.updatePin);
 
 // --- PAYSTACK WEBHOOK ---
 router.post("/paystack/webhook", authController.paystackWebhook);
