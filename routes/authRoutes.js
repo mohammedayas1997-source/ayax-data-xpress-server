@@ -24,10 +24,10 @@ router.post("/paystack-webhook", paystackWebhook);
 router.put("/update-password", protect, updatePassword);
 
 // PIN Management Routes (Taimakon POST da PUT don guje wa kuskuren Frontend)
-router.post("/create-pin", protect, createPin);
-router.put("/create-pin", protect, createPin);
+router.post("/create-pin", protect, authController.createPin);
+router.put("/create-pin", protect, authController.createPin);
 
-router.post("/update-pin", protect, updatePin);
-router.put("/update-pin", protect, updatePin);
+router.post("/update-pin", protect, authController.updatePin);
+router.put("/update-pin", protect, authController.updatePin);
 
 module.exports = router;

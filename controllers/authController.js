@@ -442,7 +442,8 @@ exports.createPin = async (req, res) => {
     }
 
     const userId = req.user._id || req.user.id;
-    const user = await User.findById(userId);
+    // KARA +pin +TRANSACTIONPIN ANAN
+    const user = await User.findById(userId).select("+pin +transactionPin");
     
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
@@ -487,7 +488,8 @@ exports.updatePin = async (req, res) => {
     }
 
     const userId = req.user._id || req.user.id;
-    const user = await User.findById(userId).select("+password");
+    // KARA +pin +TRANSACTIONPIN TARE DA PASSWORD ANAN
+    const user = await User.findById(userId).select("+password +pin +transactionPin");
 
     if (!user) {
       return res.status(404).json({
