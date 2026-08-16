@@ -1,33 +1,29 @@
 const express = require("express");
 const router = express.Router();
-const {
-  register,
-  login,
-  supervisorLogin,
-  paystackWebhook,
-  updatePassword,
-  createPin,
-  updatePin
-} = require("../controllers/authController");
-
+const authController = require("../controllers/authController");
 const { protect } = require("../middleware/authMiddleware");
 
-// --- Public Routes ---
-router.post("/register", register);
-router.post("/login", login);
-router.post("/supervisor-login", supervisorLogin);
+// --- AUTHENTICATION ROUTES ---
+router.post("/register", authController.register);
+router.post("/login", authController.login);
+router.post("/forgot-password", authController.forgotPassword);
+router.post("/reset-password", authController.resetPassword);
 
-// --- Webhook Route ---
-router.post("/paystack-webhook", paystackWebhook);
+// --- PROTECTED USER PROFILE & SECURITY ROUTES ---
+router.get("/profile", protect, (req, res) => {
+  res.status(200).json({ success: true, user: req.user });
+});
 
-// --- Protected Routes ---
-router.put("/update-password", protect, updatePassword);
+router.put("/update-password", protect, authController.updatePassword);
 
-// PIN Management Routes (Taimakon POST da PUT don guje wa kuskuren Frontend)
+// --- PIN MANAGEMENT ROUTES (POST da PUT don tallafawa ko wane request) ---
 router.post("/create-pin", protect, authController.createPin);
 router.put("/create-pin", protect, authController.createPin);
 
 router.post("/update-pin", protect, authController.updatePin);
 router.put("/update-pin", protect, authController.updatePin);
+
+// --- PAYSTACK WEBHOOK ---
+router.post("/paystack/webhook", authController.paystackWebhook);
 
 module.exports = router;
