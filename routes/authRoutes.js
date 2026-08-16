@@ -20,10 +20,11 @@ router.post("/supervisor-login", supervisorLogin);
 // Webhook
 router.post("/paystack-webhook", paystackWebhook);
 
-// Protected Routes (An sanya POST da PUT duka suyi aiki don guje wa matsala)
+// Protected Routes
 router.put("/update-password", protect, updatePassword);
 router.post("/create-pin", protect, createPin);
+router.put("/create-pin", protect, createPin);
 router.post("/update-pin", protect, updatePin);
-router.put("/update-pin", protect, updatePin); // Idan wani wuri yayi amfani da PUT
+router.put("/update-pin", protect, updatePin);
 
 module.exports = router;

@@ -433,6 +433,7 @@ exports.updatePassword = async (req, res) => {
 
 // @desc    Update Transaction PIN using Account Password
 // @desc    Create Transaction PIN (First time)
+// @desc    Create Transaction PIN (First time)
 exports.createPin = async (req, res) => {
   try {
     const { newPin } = req.body;
@@ -449,7 +450,7 @@ exports.createPin = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    user.pin = newPin; // An yi amfani da .pin daidai da schema
+    user.pin = newPin;
     await user.save();
 
     return res.status(200).json({
@@ -502,7 +503,7 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    user.pin = newPin; // An yi amfani da .pin daidai da schema
+    user.pin = newPin;
     await user.save();
 
     return res.status(200).json({
