@@ -77,7 +77,7 @@ const sendToken = (user, statusCode, res) => {
     },
   );
 
-  const hasPinSet = !!(user.transactionPin || user.pin);
+  const hasPinSet = !!((user.transactionPin && user.transactionPin !== "0000") || (user.pin && user.pin !== "0000"));
 
   return res.status(statusCode).json({
     success: true,
@@ -92,6 +92,7 @@ const sendToken = (user, statusCode, res) => {
       phone: user.phone,
       role: user.role,
       walletBalance: user.walletBalance || user.balance || 0,
+      balance: user.balance || user.walletBalance || 0,
       referralId: user.referralId,
       bankName: user.bankName || "Wema Bank",
       accountNumber: user.accountNumber || "Pending",
@@ -238,7 +239,7 @@ exports.login = async (req, res) => {
 
     const user = await User.findOne({
       email: email.toLowerCase().trim(),
-    }).select("+password");
+    }).select("+password +pin +transactionPin");
 
     if (!user || !(await user.matchPassword(password))) {
       return res.status(401).json({
@@ -260,7 +261,6 @@ exports.supervisorLogin = exports.login;
 // FORGOT PASSWORD & OTP SYSTEM
 // =======================================
 
-// @desc    Send OTP to user's registered email and phone for password reset
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -311,11 +311,9 @@ exports.forgotPassword = async (req, res) => {
       console.error("OTP Email Dispatch Error:", mailErr.message);
     }
 
-    console.log(`[OTP Generated for ${user.phone} / ${user.email}]: ${otp}`);
-
     return res.status(200).json({
       success: true,
-      message: "Verification OTP has been sent to your registered email and phone number.",
+      message: "Verification OTP has been sent to your registered email.",
     });
   } catch (error) {
     console.error("Forgot Password Error:", error);
@@ -323,7 +321,6 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
-// @desc    Verify OTP and update user password
 exports.resetPassword = async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
@@ -435,9 +432,9 @@ exports.updatePassword = async (req, res) => {
 // @desc    Create Transaction PIN (First time)
 exports.createPin = async (req, res) => {
   try {
-    const { newPin } = req.body;
+    const pinToUse = req.body.newPin || req.body.pin;
 
-    if (!newPin || newPin.length !== 4) {
+    if (!pinToUse || pinToUse.length !== 4) {
       return res.status(400).json({
         success: false,
         message: "Valid 4-digit PIN required.",
@@ -451,9 +448,8 @@ exports.createPin = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // Ana adana PIN ta kowace hanya da database kake amfani da ita (pin ko transactionPin)
-    user.pin = newPin;
-    user.transactionPin = newPin;
+    user.pin = pinToUse;
+    user.transactionPin = pinToUse;
     await user.save();
 
     return res.status(200).json({
@@ -473,16 +469,17 @@ exports.createPin = async (req, res) => {
 // @desc    Update Transaction PIN using Account Password
 exports.updatePin = async (req, res) => {
   try {
-    const { password, newPin } = req.body;
+    const { password } = req.body;
+    const pinToUse = req.body.newPin || req.body.pin;
 
-    if (!password || !newPin) {
+    if (!password || !pinToUse) {
       return res.status(400).json({
         success: false,
         message: "Please provide your account password and the new PIN.",
       });
     }
 
-    if (newPin.length !== 4) {
+    if (pinToUse.length !== 4) {
       return res.status(400).json({
         success: false,
         message: "Transaction PIN must be exactly 4 digits.",
@@ -507,8 +504,8 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    user.pin = newPin;
-    user.transactionPin = newPin;
+    user.pin = pinToUse;
+    user.transactionPin = pinToUse;
     await user.save();
 
     return res.status(200).json({
