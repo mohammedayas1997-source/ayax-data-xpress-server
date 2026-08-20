@@ -103,6 +103,7 @@ app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/nimc", nimcRoutes);
 app.use("/api/v1/bvn", bvnRoutes);
 app.use("/api/v1/webhooks", webhookRoutes);
+app.use("/api/v1/payment", paymentRoutes);
 app.use("/api/v1/wallet", walletRoutes);
 
 // VTU & Purchase Route Aliases (Don rigakafin "API Route not found" a kowane frontend)
