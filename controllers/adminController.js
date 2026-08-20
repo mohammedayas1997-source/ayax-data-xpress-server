@@ -26,8 +26,57 @@ const sendNotification = async (userId, title, message) => {
   }
 };
 
-// --- FUNCTIONS ---
+// --- 1. DASHBOARD & STATS ---
+const getDashboardStats = async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalTransactions = await Transaction.countDocuments();
+    const pendingRefunds = await Transaction.countDocuments({
+      status: "pending-refund",
+    });
 
+    const successfulTransactions = await Transaction.find({
+      status: "success",
+    });
+    const totalRevenue = successfulTransactions.reduce(
+      (sum, tx) => sum + (Number(tx.amount) || 0),
+      0
+    );
+
+    res.status(200).json({
+      success: true,
+      stats: {
+        totalUsers,
+        totalTransactions,
+        pendingRefunds,
+        totalRevenue,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// --- 2. TRANSACTIONS ---
+const getAllTransactions = async (req, res) => {
+  try {
+    const transactions = await Transaction.find()
+      .populate("user", "surname firstName phone email")
+      .sort({ createdAt: -1 })
+      .limit(500);
+
+    res.status(200).json({
+      success: true,
+      count: transactions.length,
+      data: transactions,
+      transactions,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// --- 3. TARGETS & USERS ---
 const assignTarget = async (req, res) => {
   try {
     const { supervisorId, agentGoal, dataGoal, month } = req.body;
@@ -85,7 +134,7 @@ const updateToProcessing = async (req, res) => {
     const request = await NIMCRequest.findByIdAndUpdate(
       req.params.id,
       { status: "processing" },
-      { new: true },
+      { new: true }
     );
     if (!request)
       return res
@@ -110,8 +159,7 @@ const approveRequest = async (req, res) => {
         .json({ success: false, message: "Request not found" });
     request.status = "completed";
     await request.save();
-    
-    // Tura sanarwa ga mai amfani
+
     await sendNotification(
       request.user,
       "NIMC Request Completed",
@@ -142,7 +190,7 @@ const updateBVNStatus = async (req, res) => {
     const request = await BVNRequest.findByIdAndUpdate(
       req.params.id,
       { status: "processing" },
-      { new: true },
+      { new: true }
     );
     if (!request)
       return res
@@ -211,20 +259,23 @@ const approveRefund = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "User not found" });
-    
-    user.walletBalance = (user.walletBalance || user.balance || 0) + Number(transaction.amount);
+
+    user.walletBalance =
+      (user.walletBalance || user.balance || 0) + Number(transaction.amount);
     transaction.status = "refunded";
     transaction.approvedBy = req.user._id;
     transaction.resolvedAt = Date.now();
     await Promise.all([user.save(), transaction.save()]);
-    
+
     await Activity.create({
       staffId: req.user._id,
       action: "REFUND_APPROVED",
       details: `Refunded ₦${transaction.amount}`,
       targetUser: user._id,
     });
-    res.status(200).json({ success: true, message: "Refund processed successfully" });
+    res
+      .status(200)
+      .json({ success: true, message: "Refund processed successfully" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -233,7 +284,7 @@ const approveRefund = async (req, res) => {
 const getAllUsers = async (req, res) => {
   try {
     const users = await User.find().select("-password").sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: users });
+    res.status(200).json({ success: true, data: users, users });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -245,13 +296,17 @@ const updateUserRole = async (req, res) => {
     const user = await User.findByIdAndUpdate(
       userId,
       { role },
-      { new: true, runValidators: true },
+      { new: true, runValidators: true }
     ).select("-password");
     if (!user)
       return res
         .status(404)
         .json({ success: false, message: "User not found" });
-    res.status(200).json({ success: true, message: "Role updated successfully", data: user });
+    res.status(200).json({
+      success: true,
+      message: "Role updated successfully",
+      data: user,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -266,7 +321,11 @@ const suspendUser = async (req, res) => {
         .json({ success: false, message: "User not found" });
     user.status = user.status === "suspended" ? "active" : "suspended";
     await user.save();
-    res.status(200).json({ success: true, message: `User status changed to: ${user.status}`, status: user.status });
+    res.status(200).json({
+      success: true,
+      message: `User status changed to: ${user.status}`,
+      status: user.status,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -302,26 +361,34 @@ const toggleWalletStatus = async (req, res) => {
     const user = await User.findByIdAndUpdate(
       userId,
       { walletStatus: status },
-      { new: true },
+      { new: true }
     ).select("-password");
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
     res
       .status(200)
       .json({ success: true, message: `Wallet ${status} successfully`, user });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+    res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
   }
 };
 
-// Ƙara Aikin Credit User (Saka Kuɗi a Wallet din mai amfani)
 const creditUser = async (req, res) => {
   const { userId, amount, reason } = req.body;
   try {
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+
     const numericAmount = Number(amount);
-    user.walletBalance = (user.walletBalance || user.balance || 0) + numericAmount;
+    user.walletBalance =
+      (user.walletBalance || user.balance || 0) + numericAmount;
     if (user.balance !== undefined) user.balance = user.walletBalance;
 
     if (!user.transactions) user.transactions = [];
@@ -345,7 +412,9 @@ const creditUser = async (req, res) => {
     await sendNotification(
       user._id,
       "Wallet Credited",
-      `Your account has been credited with ₦${numericAmount}. Reason: ${reason || "Admin funding"}`
+      `Your account has been credited with ₦${numericAmount}. Reason: ${
+        reason || "Admin funding"
+      }`
     );
 
     res.status(200).json({
@@ -354,7 +423,9 @@ const creditUser = async (req, res) => {
       newBalance: user.walletBalance,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+    res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
   }
 };
 
@@ -362,14 +433,22 @@ const debitUser = async (req, res) => {
   const { userId, amount, reason } = req.body;
   try {
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    
-    const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+
+    const currentBal =
+      user.walletBalance !== undefined
+        ? user.walletBalance
+        : user.balance || 0;
     const numericAmount = Number(amount);
 
     if (currentBal < numericAmount)
-      return res.status(400).json({ success: false, message: "Insufficient balance" });
-    
+      return res
+        .status(400)
+        .json({ success: false, message: "Insufficient balance" });
+
     user.walletBalance = currentBal - numericAmount;
     if (user.balance !== undefined) user.balance = user.walletBalance;
 
@@ -394,7 +473,9 @@ const debitUser = async (req, res) => {
     await sendNotification(
       user._id,
       "Wallet Debited",
-      `Your account has been debited by ₦${numericAmount}. Reason: ${reason || "Admin charge"}`
+      `Your account has been debited by ₦${numericAmount}. Reason: ${
+        reason || "Admin charge"
+      }`
     );
 
     res.status(200).json({
@@ -403,7 +484,9 @@ const debitUser = async (req, res) => {
       newBalance: user.walletBalance,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+    res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
   }
 };
 
@@ -414,24 +497,41 @@ const trackTransaction = async (req, res) => {
       "transactions.transactionId": transactionId,
     });
     if (!user) {
-      // Duba kuma a Transaction Model idan ba a cikin User array bane
-      const globalTx = await Transaction.findOne({ transactionId }).populate("user", "surname firstName phone email");
+      const globalTx = await Transaction.findOne({ transactionId }).populate(
+        "user",
+        "surname firstName phone email"
+      );
       if (!globalTx) {
-        return res.status(404).json({ success: false, message: "Transaction ID not found" });
+        return res
+          .status(404)
+          .json({ success: false, message: "Transaction ID not found" });
       }
       return res.status(200).json({
         success: true,
-        userData: globalTx.user ? { id: globalTx.user._id, name: `${globalTx.user.surname || ''} ${globalTx.user.firstName || ''}`.trim(), phone: globalTx.user.phone } : null,
+        userData: globalTx.user
+          ? {
+              id: globalTx.user._id,
+              name: `${globalTx.user.surname || ""} ${
+                globalTx.user.firstName || ""
+              }`.trim(),
+              phone: globalTx.user.phone,
+            }
+          : null,
         transaction: globalTx,
       });
     }
 
     const transaction = user.transactions.find(
-      (t) => t.transactionId === transactionId,
+      (t) => t.transactionId === transactionId
     );
     res.status(200).json({
       success: true,
-      userData: { id: user._id, name: `${user.surname || ''} ${user.firstName || ''}`.trim() || user.name, phone: user.phone },
+      userData: {
+        id: user._id,
+        name:
+          `${user.surname || ""} ${user.firstName || ""}`.trim() || user.name,
+        phone: user.phone,
+      },
       transaction,
     });
   } catch (error) {
@@ -473,9 +573,11 @@ const getSupportRequests = async (req, res) => {
       .sort("-createdAt");
     res.status(200).json({ success: true, requests });
   } catch (error) {
-    res
-      .status(500)
-      .json({ success: false, message: "Error fetching requests", error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Error fetching requests",
+      error: error.message,
+    });
   }
 };
 
@@ -483,16 +585,20 @@ const handleSupportRequest = async (req, res) => {
   try {
     const { requestId, action, adminNote } = req.body;
     const request = await SupportRequest.findById(requestId).populate("userId");
-    if (!request) return res.status(404).json({ success: false, message: "Request not found" });
-    
+    if (!request)
+      return res
+        .status(404)
+        .json({ success: false, message: "Request not found" });
+
     if (action === "resolve") {
       const user = request.userId;
       if (user && user.transactions) {
         const transaction = user.transactions.find(
-          (t) => t.transactionId === request.transactionId,
+          (t) => t.transactionId === request.transactionId
         );
         if (transaction && transaction.status !== "refunded") {
-          user.walletBalance = (user.walletBalance || user.balance || 0) + transaction.amount;
+          user.walletBalance =
+            (user.walletBalance || user.balance || 0) + transaction.amount;
           if (user.balance !== undefined) user.balance = user.walletBalance;
           transaction.status = "refunded";
           await user.save();
@@ -514,20 +620,24 @@ const handleSupportRequest = async (req, res) => {
         await sendNotification(
           request.userId._id,
           "Support Request Update",
-          `Your support request was declined. Note: ${adminNote || "No reason provided"}`
+          `Your support request was declined. Note: ${
+            adminNote || "No reason provided"
+          }`
         );
       }
     }
     await request.save();
-    res
-      .status(200)
-      .json({ success: true, message: `Action '${action}' completed successfully.` });
+    res.status(200).json({
+      success: true,
+      message: `Action '${action}' completed successfully.`,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Process failed", error: error.message });
+    res
+      .status(500)
+      .json({ success: false, message: "Process failed", error: error.message });
   }
 };
 
-// --- PRICING MANAGEMENT FUNCTIONS (Optional extra support) ---
 const getNIMCPrice = async (req, res) => {
   try {
     const price = await NIMCPrice.findOne().sort({ updatedAt: -1 });
@@ -547,7 +657,9 @@ const updateNIMCPrice = async (req, res) => {
       priceDoc.price = price;
       await priceDoc.save();
     }
-    res.status(200).json({ success: true, message: "NIMC price updated", data: priceDoc });
+    res
+      .status(200)
+      .json({ success: true, message: "NIMC price updated", data: priceDoc });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -572,14 +684,21 @@ const updateBVNPrice = async (req, res) => {
       priceDoc.price = price;
       await priceDoc.save();
     }
-    res.status(200).json({ success: true, message: "BVN price updated", data: priceDoc });
+    res
+      .status(200)
+      .json({ success: true, message: "BVN price updated", data: priceDoc });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// --- FINAL EXPORT ---
+// --- FINAL EXPORTS (Aliases included) ---
 module.exports = {
+  getDashboardStats,
+  getStats: getDashboardStats,
+  getAdminDashboard: getDashboardStats,
+  getAllTransactions,
+  getTransactions: getAllTransactions,
   assignTarget,
   getAllNIMCRequests,
   updateToProcessing,
@@ -591,6 +710,7 @@ module.exports = {
   getAgents,
   approveRefund,
   getAllUsers,
+  getUsers: getAllUsers,
   updateUserRole,
   suspendUser,
   getSupportActivities,
