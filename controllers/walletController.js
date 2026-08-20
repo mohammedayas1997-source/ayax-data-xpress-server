@@ -50,14 +50,15 @@ exports.generateVirtualAccount = async (req, res) => {
 
     let customerCode = user.paystackCustomerCode;
 
+    // 1. Idan babu customer code, kirkiri customer ko nemo tsoho a Paystack
     if (!customerCode) {
       try {
         const customerRes = await axios.post(
           "https://api.paystack.co/customer",
           {
-            email: user.email,
-            first_name: user.firstName || user.name || "User",
-            last_name: user.lastName || "Ayax",
+            email: user.email.toLowerCase().trim(),
+            first_name: user.firstName || user.name || "Ayax",
+            last_name: user.lastName || "User",
             phone: user.phone || "08000000000",
           },
           {
@@ -68,20 +69,37 @@ exports.generateVirtualAccount = async (req, res) => {
             timeout: 30000,
           }
         );
-        customerCode = customerRes.data.data.customer_code;
+        customerCode = customerRes.data?.data?.customer_code;
+      } catch (custError) {
+        // Idan customer ya riga ya wanzu a Paystack, nemo bayanan sa
+        try {
+          const fetchCust = await axios.get(
+            `https://api.paystack.co/customer/${encodeURIComponent(user.email.toLowerCase().trim())}`,
+            {
+              headers: {
+                Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+              },
+            }
+          );
+          customerCode = fetchCust.data?.data?.customer_code;
+        } catch (fetchErr) {
+          console.error("Paystack Customer Fetch/Create Failed:", fetchErr.response?.data || fetchErr.message);
+        }
+      }
+
+      if (customerCode) {
         user.paystackCustomerCode = customerCode;
         await user.save();
-      } catch (custError) {
-        console.error("Paystack Customer Creation Error:", custError.response?.data || custError.message);
       }
     }
 
+    // 2. Samar da Dedicated Account (Wema Bank ko Titan Trust)
     let dvaResponse;
     try {
       dvaResponse = await axios.post(
         "https://api.paystack.co/dedicated_account",
         {
-          customer: customerCode || user.email,
+          customer: customerCode || user.email.toLowerCase().trim(),
           preferred_bank: "wema-bank",
         },
         {
@@ -100,12 +118,19 @@ exports.generateVirtualAccount = async (req, res) => {
       });
     }
 
-    const accountData = dvaResponse.data.data;
+    const accountData = dvaResponse.data?.data;
+    if (!accountData) {
+      return res.status(502).json({ success: false, message: "Invalid response from Paystack DVA" });
+    }
+
+    // 3. Ajiye dukkan bayanai don Webhook ya gane shi cikin sauki
     user.virtualAccount = {
-      bankName: accountData.bank.name,
+      bankName: accountData.bank ? accountData.bank.name : "Wema Bank",
       accountNumber: accountData.account_number,
       accountName: accountData.account_name,
+      customerCode: customerCode,
     };
+    user.virtualAccountNumber = accountData.account_number; // Secondary index
     await user.save();
 
     res.status(200).json({

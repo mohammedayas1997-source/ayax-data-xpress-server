@@ -125,6 +125,15 @@ app.use("/api/v1/superadmin", superAdminRoutes);
 app.use("/api/v1/virtual-account", virtualAccountRoutes);
 
 
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
+
+
 // --- Nemo wannan bangaren a server.js ka sauya shi zuwa haka ---
 app.get("/api/v1/user/profile", async (req, res) => {
   try {
