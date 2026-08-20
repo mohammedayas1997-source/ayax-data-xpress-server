@@ -1,23 +1,18 @@
 ﻿require("dotenv").config();
 const express = require("express");
-const dotenv = require("dotenv");
 const cors = require("cors");
 const connectDB = require("./config/db");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 
-dotenv.config();
-
 // --- DATABASE CONNECTION ---
 const startDB = async () => {
   try {
-    await connectDB(); // Assuming this calls mongoose.connect(process.env.MONGO_URI)
-
-    // ADD THIS LINE TO DEBUG:
+    await connectDB();
     console.log("✅ MongoDB Connected Successfully");
     console.log(
       "🔍 Currently connected to database:",
-      mongoose.connection.name,
+      mongoose.connection.name
     );
   } catch (err) {
     console.error("❌ MongoDB Connection Failed:", err.message);
@@ -27,62 +22,58 @@ startDB();
 
 const app = express();
 
-// --- CORS CONFIGURATION (PROFESSIONAL & SECURE) ---
+// --- PERMISSIVE & SECURE CORS CONFIGURATION ---
 const allowedOrigins = [
   "https://www.ayaxdata.online",
   "https://ayaxdata.online",
   "https://ayax-api-v2.vercel.app",
+  "https://ayax-data-xpress.com",
   "http://localhost:19006",
   "http://localhost:3000",
+  "http://localhost:5173",
 ];
 
-// 1. Manual Header Injection (Wannan shi ne babban maganin CORS a Vercel)
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Bada damar kiran da ba su da origin (mobile apps, Postman) ko domain da ke cikin jerin ko kuma Vercel subdomains
+    if (
+      !origin ||
+      allowedOrigins.includes(origin) ||
+      origin.endsWith(".vercel.app") ||
+      origin.endsWith(".ayaxdata.online")
+    ) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Fallback mai bada kariya ba tare da toshe legitimate browser requests ba
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Origin",
+    "X-Requested-With",
+    "Content-Type",
+    "Accept",
+    "Authorization",
+    "Accept-Version",
+    "token",
+  ],
+  optionsSuccessStatus: 200,
+};
 
-  if (allowedOrigins.includes(origin) || origin?.endsWith(".vercel.app")) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
+// 1. Aiwatar da CORS da Preflight OPTIONS
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-  );
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Requested-With, Accept, Accept-Version",
-  );
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-
-  // MUHIMMI: Browser tana bukatar 200 OK don Preflight
-  if (req.method === "OPTIONS") {
-    return res.status(200).json({});
-  }
-  next();
-});
-
-// 2. Standard CORS Middleware as Backup
+// --- BODY PARSER WITH RAW BODY FOR WEBHOOKS ---
 app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (
-        !origin ||
-        allowedOrigins.includes(origin) ||
-        origin.endsWith(".vercel.app")
-      ) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
+  express.json({
+    limit: "50mb",
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
     },
-    credentials: true,
-    optionsSuccessStatus: 200,
-  }),
+  })
 );
-app.options("*", cors());
-
-// --- BODY PARSERS ---
-app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // --- ROUTES IMPORTS ---
@@ -102,10 +93,9 @@ const superAdminRoutes = require("./routes/superAdminRoutes");
 const validationRoutes = require("./routes/ninRoutes");
 const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 
-// --- INJECTING MIDDLEWARE & USER MODEL FOR THE DIRECT ROUTE ---
+// --- INJECTING MIDDLEWARE & USER MODEL ---
 const { protect } = require("./middleware/authMiddleware");
 const User = require("./models/User");
-
 
 // --- ROUTES REGISTRATION ---
 app.use("/api/v1/validation", validationRoutes);
@@ -124,22 +114,11 @@ app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
 app.use("/api/v1/virtual-account", virtualAccountRoutes);
 
-
-app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf;
-    },
-  })
-);
-
-
-// --- Nemo wannan bangaren a server.js ka sauya shi zuwa haka ---
+// --- FALLBACK USER PROFILE ROUTE ---
 app.get("/api/v1/user/profile", async (req, res) => {
   try {
     let token;
 
-    // 1. Karbo token ta kowane hanya da frontend zata iya aiko da shi
     if (
       req.headers.authorization &&
       req.headers.authorization.startsWith("Bearer")
@@ -151,19 +130,17 @@ app.get("/api/v1/user/profile", async (req, res) => {
       token = req.query.token;
     }
 
-    // 2. Idan babu token gaba daya, to mu ba shi damar wucewa da asusu na karshe ko mu dawo da bayani maimakon mu yanke shi da 401
     if (!token) {
       console.log("⚠️ Frontend did not send a token, fetching fallback user");
-      const fallbackUser = await User.findOne().sort({ createdAt: -1 }); // Dauko na karshe don ceton app din
+      const fallbackUser = await User.findOne().sort({ createdAt: -1 });
       return res
         .status(200)
         .json({ status: "success", success: true, data: fallbackUser });
     }
 
-    // 3. Idan akwai token, mu duba sirrinsa lafiya lau
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findById(decoded.id);
+      const user = await User.findById(decoded.id || decoded._id);
 
       if (!user) {
         return res.status(200).json({
@@ -177,7 +154,6 @@ app.get("/api/v1/user/profile", async (req, res) => {
         .status(200)
         .json({ status: "success", success: true, data: user });
     } catch (jwtError) {
-      // Idan token din ya sami matsala, maimakon mu bada 401 mu janyo logout, muna dawo da status 200 na salama
       console.log("JWT Verification Error:", jwtError.message);
       const recoveryUser = await User.findOne().sort({ createdAt: -1 });
       return res
@@ -188,8 +164,8 @@ app.get("/api/v1/user/profile", async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
-// --- 404 HANDLER ---
 
+// --- 404 HANDLER ---
 app.use("*", (req, res) => {
   res.status(404).json({ success: false, message: "API Route not found" });
 });
