@@ -138,12 +138,15 @@ exports.buyAirtime = async (req, res) => {
     session.endSession();
 
     // 6. Kiran Sabon Ayax API Marketplace (/airtime/buy)
+    // 6. Kiran Sabon Ayax API Marketplace (/airtime/buy)
     let response;
     try {
+      console.log("Sending to Marketplace with Key:", AYAX_API_KEY ? "Key exists" : "KEY IS MISSING!");
+      
       response = await axios.post(
         `${AYAX_API_BASE_URL}/airtime/buy`,
         {
-          network: finalNetwork, // mtn, airtel, glo, 9mobile
+          network: finalNetwork,
           phone: targetPhone,
           amount: amountNum,
           reference: reference,
@@ -151,14 +154,15 @@ exports.buyAirtime = async (req, res) => {
         {
           headers: {
             "x-api-key": AYAX_API_KEY,
-            Authorization: `Bearer ${AYAX_API_KEY}`,
+            "Authorization": `Bearer ${AYAX_API_KEY}`,
             "Content-Type": "application/json",
           },
           timeout: 40000,
         }
       );
     } catch (apiError) {
-      console.error("Ayax Airtime API Error:", apiError.response?.data || apiError.message);
+      console.error("Ayax Airtime API Full Error:", apiError.response?.data || apiError.message);
+      // ...
 
       // AUTO-REFUND LOGIC: Mayar da kudin mai amfani idan kiran gateway ya fadi
       const refundUser = await User.findById(userId);
