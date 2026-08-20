@@ -7,12 +7,18 @@ const Sale = require("../models/Sale");
 const NIMCRequest = require("../models/NIMCRequest");
 const axios = require("axios");
 
-const AYAX_API_BASE_URL = process.env.AYAX_API_BASE_URL || "https://api.ayaxapis.com/v1";
-const AYAX_API_KEY = process.env.AYAX_API_KEY;
+// 1. Saitin Babban URL na API Marketplace
+const MARKETPLACE_RAW_URL =
+  process.env.MARKETPLACE_API_URL ||
+  process.env.AYAX_API_BASE_URL ||
+  "https://ayax-api-marketplace.onrender.com";
+
+const AYAX_API_BASE_URL = MARKETPLACE_RAW_URL.replace(/\/+$/, "");
+const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
 
 /**
- * @desc    Purchase Mobile Data with Ayax APIs & Agent Target Tracking
- * @route   POST /api/v1/vtu/buy-data
+ * @desc    Purchase Mobile Data with Ayax APIs & Target Tracking
+ * @route   POST /api/v1/vtu/buy-data, POST /api/v1/data
  * @access  Private
  */
 exports.buyData = async (req, res) => {
@@ -20,10 +26,12 @@ exports.buyData = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { network, planId, phoneNumber } = req.body;
+    const { network, planId, plan, phoneNumber, phone } = req.body;
+    const targetPhone = phoneNumber || phone;
+    const targetPlan = planId || plan;
     const userId = req.user._id || req.user.id;
 
-    if (!network || !planId || !phoneNumber) {
+    if (!network || !targetPlan || !targetPhone) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -32,11 +40,14 @@ exports.buyData = async (req, res) => {
       });
     }
 
-    const [user, plan] = await Promise.all([
+    const [user, dataPlanDoc] = await Promise.all([
       User.findById(userId).session(session),
       DataPlan.findOne({
-        networkId: String(network),
-        planCode: String(planId),
+        $or: [
+          { planCode: String(targetPlan) },
+          { planId: String(targetPlan) },
+          { _id: targetPlan },
+        ],
       }),
     ]);
 
@@ -46,35 +57,41 @@ exports.buyData = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    if (!plan) {
+    // Idan ba a samu plan a DB ba, amfani da fallback price
+    const finalPrice = dataPlanDoc
+      ? user.role === "agent"
+        ? dataPlanDoc.agentPrice
+        : dataPlanDoc.userPrice
+      : Number(req.body.amount || 0);
+
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
+
+    if (finalPrice <= 0) {
       await session.abortTransaction();
       session.endSession();
-      return res
-        .status(404)
-        .json({ success: false, message: "Invalid data plan selected" });
+      return res.status(400).json({ success: false, message: "Invalid plan pricing" });
     }
-
-    const finalPrice = user.role === "agent" ? plan.agentPrice : plan.userPrice;
-    const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
 
     if (currentBal < finalPrice) {
       await session.abortTransaction();
       session.endSession();
-      return res
-        .status(400)
-        .json({ success: false, message: `Insufficient wallet balance. Required: ₦${finalPrice}, Available: ₦${currentBal}` });
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient wallet balance. Required: ₦${finalPrice}, Available: ₦${currentBal}`,
+      });
     }
 
     const transactionId = `DATA${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const reference = `AYAX-DATA-${Date.now()}`;
 
-    // 1. Cire kudi kai tsaye daga wallet (Atomic Update)
+    // 1. Cire kudi (Atomic Deduction)
     const newBal = Number((currentBal - finalPrice).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
     await user.save({ session });
 
-    // 2. Ajiye transaction a matsayin "pending"
+    // 2. Ajiye Transaction a matsayin "pending"
+    const planLabel = dataPlanDoc?.planLabel || `${network} Data Plan`;
     const transaction = new Transaction({
       user: user._id,
       transactionId,
@@ -84,38 +101,57 @@ exports.buyData = async (req, res) => {
       amount: finalPrice,
       oldBalance: currentBal,
       newBalance: newBal,
-      phoneNumber,
+      phoneNumber: targetPhone,
       status: "pending",
-      details: `Ayax Data Purchase: ${plan.planLabel} for ${phoneNumber}`,
+      details: `Ayax Data Purchase: ${planLabel} for ${targetPhone}`,
     });
     await transaction.save({ session });
 
     await session.commitTransaction();
     session.endSession();
 
-    // 3. Kira Ayax APIs
+    // 3. Kira API Gateway tare da Dynamic Route Fallbacks
     let response;
+    const requestPayload = {
+      network: String(network).toLowerCase(),
+      plan: targetPlan,
+      planId: targetPlan,
+      phone: targetPhone,
+      phoneNumber: targetPhone,
+      amount: finalPrice,
+      ref_id: reference,
+      reference: reference,
+    };
+
+    const requestHeaders = {
+      Authorization: `Bearer ${AYAX_API_KEY || req.headers.authorization?.split(" ")[1]}`,
+      "Content-Type": "application/json",
+    };
+
     try {
-      response = await axios.post(
-        `${AYAX_API_BASE_URL}/vtu/data`,
-        {
-          network,
-          plan: planId,
-          phone: phoneNumber,
-          ref_id: reference,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${AYAX_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 30000,
-        },
-      );
+      try {
+        // Gwaji 1: Direct Marketplace VTU Route
+        response = await axios.post(
+          `${AYAX_API_BASE_URL}/api/v1/vtu/data`,
+          requestPayload,
+          { headers: requestHeaders, timeout: 35000 }
+        );
+      } catch (err1) {
+        if (err1.response?.status === 404) {
+          // Gwaji 2: Fallback Route
+          response = await axios.post(
+            `${AYAX_API_BASE_URL}/api/v1/data/buy`,
+            requestPayload,
+            { headers: requestHeaders, timeout: 35000 }
+          );
+        } else {
+          throw err1;
+        }
+      }
     } catch (apiError) {
-      console.error("Ayax Data API Network Error:", apiError.message);
-      
-      // REFUND LOGIC: Idan waje ya fadi, a mayar wa da user kudin sa
+      console.error("Ayax Data API Error:", apiError.response?.status, apiError.response?.data || apiError.message);
+
+      // REFUND LOGIC: Mayar da kudi
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + finalPrice).toFixed(2));
@@ -125,61 +161,66 @@ exports.buyData = async (req, res) => {
 
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: "Gateway connection error", details: "Failed & Refunded due to network error" }
+        { status: "failed", refundReason: "Gateway connection error", details: "Failed & Refunded due to gateway error" }
       );
 
       return res.status(502).json({
         success: false,
-        message: "Failed to connect to Ayax data provider network. Your money has been refunded.",
+        message: "Failed to connect to Ayax data provider. Money refunded.",
+        error: apiError.response?.data?.message || apiError.message,
       });
     }
 
     const resData = response.data;
-    const isSuccessful = resData && (resData.status === true || resData.status === "success" || resData.code === "200");
+    const isSuccessful =
+      resData &&
+      (resData.status === true ||
+        resData.status === "success" ||
+        resData.code === 200 ||
+        resData.code === "200" ||
+        resData.success === true);
 
     if (isSuccessful) {
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "success", details: `Success: ${resData.message || plan.planLabel}` }
+        { status: "success", details: `Success: ${resData.message || planLabel}` }
       );
 
-      // 4. Idan Agent ne, a rubuta Sale domin Target Tracking
       if (user.role === "agent" && user.assignedSupervisor) {
         await Sale.create({
           agentId: user._id,
           supervisorId: user.assignedSupervisor,
-          dataAmountGB: Number(plan.sizeGB) || 0,
-          planName: plan.planLabel,
+          dataAmountGB: Number(dataPlanDoc?.sizeGB) || 0,
+          planName: planLabel,
           amount: finalPrice,
           transactionRef: transaction._id,
         });
       }
 
-      // 5. Rubuta Activity & Notification
       await Activity.create({
         staffId: user._id,
         action: "BUY_DATA",
-        details: `Purchased ${plan.planLabel} data for ${phoneNumber} at ₦${finalPrice}`,
+        details: `Purchased ${planLabel} for ${targetPhone} at ₦${finalPrice}`,
         targetUser: user._id,
       });
 
       await Notification.create({
         recipient: user._id,
         title: "Data Purchase Successful",
-        message: `You have successfully sent ${plan.planLabel} to ${phoneNumber}. Amount: ₦${finalPrice}`,
+        message: `Successfully sent ${planLabel} to ${targetPhone}. Amount: ₦${finalPrice}`,
         type: "vtu",
       });
 
       return res.status(200).json({
         success: true,
-        message: `Successfully sent ${plan.planLabel} to ${phoneNumber}`,
+        message: `Successfully sent ${planLabel} to ${targetPhone}`,
         data: {
           transactionId: transaction.transactionId,
           newBalance: user.walletBalance,
         },
       });
     } else {
-      // REFUND LOGIC: Idan Ayax ta ki amincewa da request din
+      // REFUND LOGIC
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + finalPrice).toFixed(2));
@@ -189,12 +230,12 @@ exports.buyData = async (req, res) => {
 
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: resData.message || "Provider declined", details: "Failed & Refunded" }
+        { status: "failed", refundReason: resData?.message || "Provider declined", details: "Declined & Refunded" }
       );
 
       return res.status(400).json({
         success: false,
-        message: resData.message || "Ayax data provider declined the transaction. Money refunded.",
+        message: resData?.message || "Ayax data provider declined the transaction. Money refunded.",
       });
     }
   } catch (error) {
@@ -203,7 +244,7 @@ exports.buyData = async (req, res) => {
     }
     session.endSession();
 
-    console.error("Buy Data Error:", error);
+    console.error("Buy Data Internal Error:", error);
     return res.status(500).json({
       success: false,
       message: "Internal transaction error",
@@ -214,7 +255,7 @@ exports.buyData = async (req, res) => {
 
 /**
  * @desc    Purchase Mobile Airtime via Ayax APIs
- * @route   POST /api/v1/vtu/buy-airtime
+ * @route   POST /api/v1/vtu/buy-airtime, POST /api/v1/airtime
  * @access  Private
  */
 exports.buyAirtime = async (req, res) => {
@@ -222,19 +263,20 @@ exports.buyAirtime = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { network, phoneNumber, amount } = req.body;
+    const { network, phoneNumber, phone, amount } = req.body;
+    const targetPhone = phoneNumber || phone;
     const userId = req.user._id || req.user.id;
+    const amountNum = Number(amount);
 
-    if (!network || !phoneNumber || !amount) {
+    if (!network || !targetPhone || !amountNum || amountNum <= 0) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Please provide network, phoneNumber, and amount",
+        message: "Please provide valid network, phoneNumber, and amount",
       });
     }
 
-    const amountNum = Number(amount);
     const user = await User.findById(userId).session(session);
     if (!user) {
       await session.abortTransaction();
@@ -242,19 +284,21 @@ exports.buyAirtime = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
 
     if (currentBal < amountNum) {
       await session.abortTransaction();
       session.endSession();
-      return res
-        .status(400)
-        .json({ success: false, message: `Insufficient wallet balance. Required: ₦${amountNum}, Available: ₦${currentBal}` });
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient wallet balance. Required: ₦${amountNum}, Available: ₦${currentBal}`,
+      });
     }
 
     const transactionId = `AIR${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const reference = `AYAX-AIR-${Date.now()}`;
 
+    // 1. Cire kudi a wallet
     const newBal = Number((currentBal - amountNum).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
@@ -269,36 +313,55 @@ exports.buyAirtime = async (req, res) => {
       amount: amountNum,
       oldBalance: currentBal,
       newBalance: newBal,
-      phoneNumber,
+      phoneNumber: targetPhone,
       status: "pending",
-      details: `Ayax Airtime: ₦${amountNum} for ${phoneNumber}`,
+      details: `Ayax Airtime: ₦${amountNum} for ${targetPhone}`,
     });
     await transaction.save({ session });
 
     await session.commitTransaction();
     session.endSession();
 
+    // 2. Kira API Gateway tare da Dynamic Route Fallbacks
     let response;
+    const airtimePayload = {
+      network: String(network).toLowerCase(),
+      amount: amountNum,
+      phone: targetPhone,
+      phoneNumber: targetPhone,
+      ref_id: reference,
+      reference: reference,
+    };
+
+    const airtimeHeaders = {
+      Authorization: `Bearer ${AYAX_API_KEY || req.headers.authorization?.split(" ")[1]}`,
+      "Content-Type": "application/json",
+    };
+
     try {
-      response = await axios.post(
-        `${AYAX_API_BASE_URL}/vtu/airtime`,
-        {
-          network,
-          amount: amountNum,
-          phone: phoneNumber,
-          ref_id: reference,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${AYAX_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 30000,
-        },
-      );
+      try {
+        // Gwaji 1: Direct Marketplace Route
+        response = await axios.post(
+          `${AYAX_API_BASE_URL}/api/v1/vtu/airtime`,
+          airtimePayload,
+          { headers: airtimeHeaders, timeout: 35000 }
+        );
+      } catch (err1) {
+        if (err1.response?.status === 404) {
+          // Gwaji 2: Fallback Route
+          response = await axios.post(
+            `${AYAX_API_BASE_URL}/api/v1/airtime/buy`,
+            airtimePayload,
+            { headers: airtimeHeaders, timeout: 35000 }
+          );
+        } else {
+          throw err1;
+        }
+      }
     } catch (apiError) {
-      console.error("Ayax Airtime API Network Error:", apiError.message);
-      
+      console.error("Ayax Airtime API Error:", apiError.response?.status, apiError.response?.data || apiError.message);
+
+      // REFUND LOGIC: Mayar da kudi
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
@@ -308,42 +371,49 @@ exports.buyAirtime = async (req, res) => {
 
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: "Gateway connection error" }
+        { status: "failed", refundReason: "Gateway connection error", details: "Failed & Refunded" }
       );
 
       return res.status(502).json({
         success: false,
         message: "Failed to connect to Ayax airtime provider. Money refunded.",
+        error: apiError.response?.data?.message || apiError.message,
       });
     }
 
     const resData = response.data;
-    const isSuccessful = resData && (resData.status === true || resData.status === "success" || resData.code === "200");
+    const isSuccessful =
+      resData &&
+      (resData.status === true ||
+        resData.status === "success" ||
+        resData.code === 200 ||
+        resData.code === "200" ||
+        resData.success === true);
 
     if (isSuccessful) {
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "success", details: `Success: ₦${amountNum} airtime sent to ${phoneNumber}` }
+        { status: "success", details: `Success: ₦${amountNum} airtime sent to ${targetPhone}` }
       );
 
       await Activity.create({
         staffId: user._id,
         action: "BUY_AIRTIME",
-        details: `Purchased ₦${amountNum} airtime for ${phoneNumber}`,
+        details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
         targetUser: user._id,
       });
 
       await Notification.create({
         recipient: user._id,
         title: "Airtime Purchase Successful",
-        message: `Successfully purchased ₦${amountNum} airtime for ${phoneNumber}`,
+        message: `Successfully purchased ₦${amountNum} airtime for ${targetPhone}`,
         type: "vtu",
       });
 
-      return res.status(200).json({ 
-        success: true, 
+      return res.status(200).json({
+        success: true,
         message: "Airtime purchase successful",
-        data: { transactionId: transaction.transactionId, newBalance: user.walletBalance }
+        data: { transactionId: transaction.transactionId, newBalance: user.walletBalance },
       });
     } else {
       const refundUser = await User.findById(userId);
@@ -355,12 +425,12 @@ exports.buyAirtime = async (req, res) => {
 
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: resData.message || "Provider declined" }
+        { status: "failed", refundReason: resData?.message || "Provider declined" }
       );
 
       return res.status(400).json({
         success: false,
-        message: resData.message || "Ayax airtime provider error. Money refunded.",
+        message: resData?.message || "Ayax airtime provider error. Money refunded.",
       });
     }
   } catch (error) {
@@ -369,7 +439,7 @@ exports.buyAirtime = async (req, res) => {
     }
     session.endSession();
 
-    console.error("Buy Airtime Error:", error);
+    console.error("Buy Airtime Internal Error:", error);
     return res.status(500).json({ success: false, message: "Airtime processing error", error: error.message });
   }
 };
@@ -401,7 +471,7 @@ exports.nimcValidation = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
 
     if (currentBal < cost) {
       await session.abortTransaction();
@@ -426,7 +496,7 @@ exports.nimcValidation = async (req, res) => {
     let response;
     try {
       response = await axios.post(
-        `${AYAX_API_BASE_URL}/verification/nimc`,
+        `${AYAX_API_BASE_URL}/api/v1/verification/nimc`,
         { nin, ref_id: reference },
         {
           headers: {
@@ -434,11 +504,11 @@ exports.nimcValidation = async (req, res) => {
             "Content-Type": "application/json",
           },
           timeout: 40000,
-        },
+        }
       );
     } catch (apiError) {
       console.error("Ayax NIMC API Error:", apiError.message);
-      
+
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + cost).toFixed(2));
@@ -453,7 +523,7 @@ exports.nimcValidation = async (req, res) => {
     }
 
     const resData = response.data;
-    if (resData && (resData.status === true || resData.status === "success" || resData.code === "200")) {
+    if (resData && (resData.status === true || resData.status === "success" || resData.code === 200 || resData.code === "200")) {
       const slipDetails = resData.data || resData.slip_details;
 
       await NIMCRequest.create({
@@ -501,7 +571,7 @@ exports.nimcValidation = async (req, res) => {
 
       return res.status(400).json({
         success: false,
-        message: resData.message || "Ayax NIMC Verification Failed. Money refunded.",
+        message: resData?.message || "Ayax NIMC Verification Failed. Money refunded.",
       });
     }
   } catch (error) {
@@ -537,7 +607,7 @@ exports.getTransactionHistory = async (req, res) => {
 
 /**
  * @desc    Get Transaction Status by Reference
- * @route   GET /api/v1/vtu/transaction-status/:reference
+ * @route   GET /api/v1/vtu/transaction-status/:reference, GET /api/v1/vtu/status/:reference
  * @access  Private
  */
 exports.getTransactionStatus = async (req, res) => {
@@ -567,11 +637,11 @@ exports.verifyMeter = async (req, res) => {
   return res.status(200).json({ success: true, message: "Meter verification placeholder", customerName: "Test Customer" });
 };
 exports.purchaseElectricity = async (req, res) => {
-  return res.status(400).json({ success: false, message: "Electricity purchase logic via Ayax APIs coming soon" });
+  return res.status(400).json({ success: false, message: "Electricity purchase logic coming soon" });
 };
 exports.verifySmartCard = async (req, res) => {
   return res.status(200).json({ success: true, message: "SmartCard verification placeholder", customerName: "Test Customer" });
 };
 exports.purchaseCable = async (req, res) => {
-  return res.status(400).json({ success: false, message: "Cable purchase logic via Ayax APIs coming soon" });
+  return res.status(400).json({ success: false, message: "Cable purchase logic coming soon" });
 };
