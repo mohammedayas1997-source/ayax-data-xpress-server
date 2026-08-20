@@ -4,18 +4,9 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const bcrypt = require("bcryptjs");
 
-// Tabbatar da cewa Base URL ba zai taba ninka /api/v1 ba
-const rawBaseUrl =
-  process.env.AYAX_API_BASE_URL ||
-  "https://ayax-api-marketplace.onrender.com";
-
-// Wannan yana cire /api/v1 idan har akwai shi a jikin .env don kada ya ninka
-const cleanBaseUrl = rawBaseUrl
-  .replace(/\/+$/, "")
-  .replace(/\/api\/v1\/?$/, "");
-
-const AYAX_API_BASE_URL = `${cleanBaseUrl}/api/v1`;
-const AYAX_API_KEY = process.env.AYAX_API_KEY;
+// Live API Key Backup (idan process.env.AYAX_API_KEY bai loda ba)
+const FALLBACK_API_KEY =
+  "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
 
 // Helper don tura sanarwa (Notification)
 const sendNotification = async (userId, title, message) => {
@@ -84,6 +75,7 @@ exports.buyAirtime = async (req, res) => {
     const user = await User.findById(userId)
       .select("+pin +transactionPin +walletBalance balance")
       .session(session);
+
     if (!user) {
       await session.abortTransaction();
       session.endSession();
@@ -112,6 +104,7 @@ exports.buyAirtime = async (req, res) => {
     // 3. Duba Wallet Balance
     const currentBal =
       user.walletBalance !== undefined ? user.walletBalance : user.balance || 0;
+
     if (currentBal < amountNum) {
       await session.abortTransaction();
       session.endSession();
@@ -148,13 +141,25 @@ exports.buyAirtime = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 6. Kiran Sabon Ayax API Marketplace (/airtime/buy)
-    let response;
-    const targetUrl = `${AYAX_API_BASE_URL}/airtime/buy`;
+    // 6. Saita URL da API Key a Runtime
+    const activeApiKey = (
+      process.env.AYAX_API_KEY || FALLBACK_API_KEY
+    ).trim();
 
+    const rawBaseUrl =
+      process.env.AYAX_API_BASE_URL ||
+      "https://ayax-api-marketplace.onrender.com";
+
+    const cleanBaseUrl = rawBaseUrl
+      .replace(/\/+$/, "")
+      .replace(/\/api\/v1\/?$/, "");
+
+    const targetUrl = `${cleanBaseUrl}/api/v1/airtime/buy`;
+
+    let response;
     try {
-      console.log(`[API CALL]: Posting to ${targetUrl}`);
-      console.log("[API AUTH]: Key status:", AYAX_API_KEY ? "Present" : "MISSING!");
+      console.log(`[VTU AIRTIME] Calling Marketplace: ${targetUrl}`);
+      console.log(`[VTU AIRTIME] Using Key Prefix: ${activeApiKey.substring(0, 14)}...`);
 
       response = await axios.post(
         targetUrl,
@@ -166,11 +171,11 @@ exports.buyAirtime = async (req, res) => {
         },
         {
           headers: {
-            "x-api-key": AYAX_API_KEY,
-            Authorization: `Bearer ${AYAX_API_KEY}`,
+            "x-api-key": activeApiKey,
+            Authorization: `Bearer ${activeApiKey}`,
             "Content-Type": "application/json",
           },
-          timeout: 40000,
+          timeout: 45000,
         }
       );
     } catch (apiError) {
@@ -179,11 +184,11 @@ exports.buyAirtime = async (req, res) => {
         apiError.response?.data || apiError.message
       );
 
-      // AUTO-REFUND LOGIC: Mayar da kudin mai amfani idan kiran gateway ya fadi
+      // AUTO-REFUND: Mayar da kudi idan kiran gateway ya fadi
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number(
-          (refundUser.walletBalance + amountNum).toFixed(2)
+          ((refundUser.walletBalance || 0) + amountNum).toFixed(2)
         );
         if (refundUser.balance !== undefined)
           refundUser.balance = refundUser.walletBalance;
@@ -193,6 +198,7 @@ exports.buyAirtime = async (req, res) => {
       const errMsg =
         apiError.response?.data?.message ||
         apiError.response?.data?.error ||
+        apiError.message ||
         "Gateway connection error";
 
       await Transaction.findOneAndUpdate(
@@ -253,30 +259,32 @@ exports.buyAirtime = async (req, res) => {
         newBalance: user.walletBalance,
       });
     } else {
+      // Auto Refund idan provider ya ki amincewa da siyan
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number(
-          (refundUser.walletBalance + amountNum).toFixed(2)
+          ((refundUser.walletBalance || 0) + amountNum).toFixed(2)
         );
         if (refundUser.balance !== undefined)
           refundUser.balance = refundUser.walletBalance;
         await refundUser.save();
       }
 
+      const failReason =
+        resData.message || "Provider declined transaction";
+
       await Transaction.findOneAndUpdate(
         { reference },
         {
           status: "failed",
-          refundReason: resData.message || "Provider declined",
-          details: "Failed & Refunded",
+          refundReason: failReason,
+          details: `Failed & Refunded: ${failReason}`,
         }
       );
 
       return res.status(400).json({
         success: false,
-        message:
-          resData.message ||
-          "Ayax airtime provider declined transaction. Money refunded.",
+        message: `${failReason}. Money refunded.`,
       });
     }
   } catch (error) {
@@ -285,7 +293,7 @@ exports.buyAirtime = async (req, res) => {
     }
     session.endSession();
 
-    console.error("Buy Airtime Error:", error);
+    console.error("Buy Airtime System Error:", error);
     return res.status(500).json({
       success: false,
       message: "Airtime processing error",
