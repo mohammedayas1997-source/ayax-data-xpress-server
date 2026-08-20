@@ -1,31 +1,59 @@
 const express = require("express");
 const router = express.Router();
-const {
-  getBVNPrices,
-  setBVNPrice,
-  verifyBVN,
-} = require("../controllers/bvnController");
 
-// Middleware for authentication and authorization
 const { protect, authorize } = require("../middleware/authMiddleware");
+const bvnController = require("../controllers/bvnController") || {};
 
-/**
- * Protected Routes for BVN
- */
+// Safe Handler Helper
+const safe = (fn, name) => {
+  if (typeof fn === "function") return fn;
+  return (req, res) => {
+    res.status(501).json({
+      success: false,
+      message: `BVN Controller '${name}' is not implemented yet.`,
+    });
+  };
+};
 
-// Route to get all BVN prices
-router.get("/prices", protect, getBVNPrices);
+// --- USER ROUTES ---
+router.post(
+  "/submit",
+  protect,
+  safe(bvnController.submitBVNRequest || bvnController.requestBVNModification, "submitBVNRequest")
+);
 
-// Route to initiate BVN verification via Ayax APIs (Tallafawa POST da PUT idan aka buƙata)
-router.post("/verify", protect, verifyBVN);
-router.put("/verify", protect, verifyBVN);
+router.post(
+  "/verify",
+  protect,
+  safe(bvnController.verifyBVN, "verifyBVN")
+);
 
-/**
- * Admin Only Routes
- */
+router.get(
+  "/my-requests",
+  protect,
+  safe(bvnController.getMyBVNRequests || bvnController.getUserRequests, "getMyBVNRequests")
+);
 
-// Route to set or update BVN service prices (Tallafawa POST da PUT don guje wa kuskuren Frontend)
-router.post("/admin/set-price", protect, authorize("admin", "superadmin"), setBVNPrice);
-router.put("/admin/set-price", protect, authorize("admin", "superadmin"), setBVNPrice);
+// --- ADMIN ROUTES ---
+router.get(
+  "/admin/all",
+  protect,
+  authorize("admin", "superadmin"),
+  safe(bvnController.getAllBVNRequests || bvnController.getAdminRequests, "getAllBVNRequests")
+);
+
+router.patch(
+  "/admin/processing/:id",
+  protect,
+  authorize("admin", "superadmin"),
+  safe(bvnController.updateBVNStatus || bvnController.updateToProcessing, "updateBVNStatus")
+);
+
+router.patch(
+  "/admin/approve/:id",
+  protect,
+  authorize("admin", "superadmin"),
+  safe(bvnController.approveBVNRequest || bvnController.approveRequest, "approveBVNRequest")
+);
 
 module.exports = router;
