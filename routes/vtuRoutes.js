@@ -18,20 +18,29 @@ const { protect } = require("../middleware/authMiddleware");
 // Duk wadannan routes din sai wanda ya yi login (protect) zai iya amfani da su
 router.use(protect);
 
-// 1. Data & Airtime Services
+// 1. Data Services (Dukkan hanyoyin da frontend ke iya kira)
 router.post("/buy-data", buyData);
+router.post("/data", buyData);
+router.post("/data/buy", buyData);
+router.post("/buy", buyData);
+
+// 2. Airtime Services
 router.post("/buy-airtime", buyAirtime);
+router.post("/airtime", buyAirtime);
+router.post("/airtime/buy", buyAirtime);
 
-// 2. Utility Bills (Electricity & Cable TV)
+// 3. Utility Bills (Electricity & Cable TV)
 router.post("/electricity", purchaseElectricity);
+router.post("/buy-electricity", purchaseElectricity);
 router.post("/cable", purchaseCable);
+router.post("/buy-cable", purchaseCable);
 
-// 3. Verification & Validation Services (Meter, SmartCard, NIMC)
+// 4. Verification & Validation Services (Meter, SmartCard, NIMC)
 router.post("/verify-meter", verifyMeter);
 router.post("/verify-smartcard", verifySmartCard);
 router.post("/nimc-validate", nimcValidation);
 
-// 4. Status Tracking & Transaction Verification
+// 5. Status Tracking & Transaction Verification
 router.get("/status/:reference", getTransactionStatus);
 
 module.exports = router;

@@ -35,7 +35,6 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Bada damar kiran da ba su da origin (mobile apps, Postman) ko domain da ke cikin jerin ko kuma Vercel subdomains
     if (
       !origin ||
       allowedOrigins.includes(origin) ||
@@ -97,7 +96,7 @@ const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 const { protect } = require("./middleware/authMiddleware");
 const User = require("./models/User");
 
-// --- ROUTES REGISTRATION ---
+// --- ROUTES REGISTRATION WITH FULL DATA/VTU ALIASES ---
 app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/support", supportRoutes);
@@ -105,7 +104,14 @@ app.use("/api/v1/nimc", nimcRoutes);
 app.use("/api/v1/bvn", bvnRoutes);
 app.use("/api/v1/webhooks", webhookRoutes);
 app.use("/api/v1/wallet", walletRoutes);
+
+// VTU & Purchase Route Aliases (Don rigakafin "API Route not found" a kowane frontend)
 app.use("/api/v1/vtu", vtuRoutes);
+app.use("/api/v1/data", vtuRoutes);
+app.use("/api/v1/airtime", vtuRoutes);
+app.use("/api/v1/bills", vtuRoutes);
+app.use("/api/v1/user", vtuRoutes);
+
 app.use("/api/v1/payments", paymentRoutes);
 app.use("/api/v1/agent", agentRoutes);
 app.use("/api/v1/leader", leaderRoutes);
@@ -152,13 +158,13 @@ app.get("/api/v1/user/profile", async (req, res) => {
 
       return res
         .status(200)
-        .json({ status: "success", success: true, data: user });
+        .json({ status: "success", success: true, data: user, user });
     } catch (jwtError) {
       console.log("JWT Verification Error:", jwtError.message);
       const recoveryUser = await User.findOne().sort({ createdAt: -1 });
       return res
         .status(200)
-        .json({ status: "success", success: true, data: recoveryUser });
+        .json({ status: "success", success: true, data: recoveryUser, user: recoveryUser });
     }
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -167,7 +173,10 @@ app.get("/api/v1/user/profile", async (req, res) => {
 
 // --- 404 HANDLER ---
 app.use("*", (req, res) => {
-  res.status(404).json({ success: false, message: "API Route not found" });
+  res.status(404).json({
+    success: false,
+    message: `API Route not found: ${req.method} ${req.originalUrl}`,
+  });
 });
 
 // --- GLOBAL ERROR HANDLER ---
