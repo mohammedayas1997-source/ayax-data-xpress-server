@@ -5,7 +5,9 @@ const NIMCRequest = require("../models/NIMCRequest");
 const NIMCPrice = require("../models/NIMCPrice");
 const Activity = require("../models/Activity");
 
-const AYAX_API_BASE_URL = process.env.AYAX_API_BASE_URL || "https://api.ayaxapis.com/v1";
+const AYAX_API_BASE_URL =
+  process.env.AYAX_API_BASE_URL ||
+  "https://ayax-api-marketplace.onrender.com/api/v1";
 const AYAX_API_KEY = process.env.AYAX_API_KEY;
 
 // @desc    User submits a new NIMC modification or service request via Ayax APIs
@@ -16,7 +18,6 @@ exports.submitNIMCRequest = async (req, res) => {
   session.startTransaction();
 
   try {
-    // Mun haɗa tsoffin sunaye da sabbin sunaye domin su dace da duk wata bukata ta Frontend
     const { type, serviceType, nin, ninNumber, pin, details, formData } = req.body;
 
     const finalServiceType = serviceType || type;
@@ -33,8 +34,10 @@ exports.submitNIMCRequest = async (req, res) => {
     }
 
     const userId = req.user._id || req.user.id;
-    const user = await User.findById(userId).select("+transactionPin +pin +walletBalance balance").session(session);
-    
+    const user = await User.findById(userId)
+      .select("+transactionPin +pin +walletBalance balance")
+      .session(session);
+
     if (!user) {
       await session.abortTransaction();
       session.endSession();
@@ -70,7 +73,8 @@ exports.submitNIMCRequest = async (req, res) => {
     }
 
     // 3. Check for sufficient wallet balance
-    const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
+    const currentBal =
+      user.walletBalance !== undefined ? user.walletBalance : user.balance || 0;
     if (currentBal < amountToCharge) {
       await session.abortTransaction();
       session.endSession();
@@ -119,27 +123,30 @@ exports.submitNIMCRequest = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 7. Tura buƙata zuwa Ayax APIs NIMC Gateway (Idan akwai ta atomatik)
+    // 7. Tura buƙata zuwa Ayax APIs NIMC Gateway tare da x-api-key
     try {
       const ayaxResponse = await axios.post(
-        `${AYAX_API_BASE_URL}/nimc/process`,
+        `${AYAX_API_BASE_URL}/identity/nimc/process`,
         {
-          service_type: finalServiceType,
-          nin: finalNin,
-          ref_id: reference,
+          serviceType: finalServiceType,
+          nin: String(finalNin).trim(),
+          reference,
           details: finalDetails,
+          amount: amountToCharge,
         },
         {
           headers: {
+            "x-api-key": AYAX_API_KEY,
             Authorization: `Bearer ${AYAX_API_KEY}`,
             "Content-Type": "application/json",
           },
           timeout: 40000,
-        },
+        }
       );
 
       const resData = ayaxResponse.data;
-      const isSuccessful = resData && (resData.status === true || resData.status === "success" || resData.code === "200");
+      const isSuccessful =
+        resData && (resData.success === true || resData.status === "success" || resData.code === "200");
 
       if (isSuccessful) {
         await Transaction.findOneAndUpdate(
@@ -149,7 +156,11 @@ exports.submitNIMCRequest = async (req, res) => {
 
         await NIMCRequest.findOneAndUpdate(
           { reference },
-          { status: "completed", resolvedAt: new Date(), slipUrl: resData.slip_url || resData.url || null }
+          {
+            status: "completed",
+            resolvedAt: new Date(),
+            slipUrl: resData.data?.slipUrl || resData.slip_url || resData.url || null,
+          }
         );
 
         // 8. Rubuta Activity Log
@@ -169,10 +180,9 @@ exports.submitNIMCRequest = async (req, res) => {
       } else {
         throw new Error(resData.message || "Ayax NIMC service declined the request.");
       }
-
     } catch (apiError) {
       // REFUND LOGIC: Idan waje ya fadi ko API ta ki amincewa, a mayar wa da user kudin sa
-      console.error("Ayax NIMC API Error:", apiError.message);
+      console.error("Ayax NIMC API Error:", apiError.response?.data || apiError.message);
 
       const refundUser = await User.findById(user._id);
       if (refundUser) {
@@ -181,22 +191,21 @@ exports.submitNIMCRequest = async (req, res) => {
         await refundUser.save();
       }
 
+      const reason =
+        apiError.response?.data?.message || apiError.message || "Provider declined";
+
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: apiError.response?.data?.message || apiError.message || "Provider declined" }
+        { status: "failed", refundReason: reason, details: `Failed & Refunded: ${reason}` }
       );
 
-      await NIMCRequest.findOneAndUpdate(
-        { reference },
-        { status: "rejected" }
-      );
+      await NIMCRequest.findOneAndUpdate({ reference }, { status: "rejected" });
 
       return res.status(400).json({
         success: false,
-        message: `NIMC processing failed: ${apiError.response?.data?.message || apiError.message}. Your money has been refunded.`,
+        message: `NIMC processing failed: ${reason}. Your money has been refunded.`,
       });
     }
-
   } catch (error) {
     if (session.inTransaction()) {
       await session.abortTransaction();
@@ -236,7 +245,7 @@ exports.updateToProcessing = async (req, res) => {
     const request = await NIMCRequest.findByIdAndUpdate(
       req.params.id,
       { status: "processing" },
-      { new: true },
+      { new: true }
     );
 
     if (!request) {
@@ -316,49 +325,52 @@ exports.verifyNIMC = async (req, res) => {
       return res.status(400).json({ success: false, message: "Please provide searchValue" });
     }
 
-    let endpoint = `${AYAX_API_BASE_URL}/verification/nimc`;
-    let payload = { searchValue, searchType: searchType || "nin" };
+    const payload = {
+      searchValue: String(searchValue).trim(),
+      searchType: searchType || "nin",
+    };
 
-    switch (searchType) {
-      case "phone":
-        payload = { phone: searchValue };
-        break;
-      case "trackingId":
-        payload = { trackingId: searchValue };
-        break;
-      case "face":
-        payload = { image: searchValue };
-        break;
-      default:
-        payload = { nin: searchValue };
+    if (searchType === "phone") {
+      payload.phone = searchValue;
+    } else if (searchType === "trackingId") {
+      payload.trackingId = searchValue;
+    } else if (searchType === "face") {
+      payload.image = searchValue;
+    } else {
+      payload.nin = searchValue;
     }
 
-    const response = await axios.post(endpoint, payload, {
-      headers: {
-        Authorization: `Bearer ${AYAX_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      timeout: 30000,
-    });
+    const response = await axios.post(
+      `${AYAX_API_BASE_URL}/identity/nin/verify`,
+      payload,
+      {
+        headers: {
+          "x-api-key": AYAX_API_KEY,
+          Authorization: `Bearer ${AYAX_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 30000,
+      }
+    );
 
-    if (response.data && (response.data.status === true || response.data.status === "success" || response.data.code === "200")) {
+    const resData = response.data;
+    if (resData && (resData.success === true || resData.status === "success" || resData.code === "200")) {
       return res.status(200).json({
         success: true,
         message: "NIMC verification successful via Ayax APIs",
-        data: response.data.data || response.data,
+        data: resData.data || resData,
       });
     }
 
     return res.status(400).json({
       success: false,
-      message: response.data.message || "NIMC Verification Failed",
+      message: resData.message || "NIMC Verification Failed",
     });
-
   } catch (error) {
-    console.error("NIMC Verification Error:", error.message);
-    return res.status(500).json({
+    console.error("NIMC Verification Error:", error.response?.data || error.message);
+    return res.status(error.response?.status || 500).json({
       success: false,
-      message: "Kuskure wajen tantancewa daga Ayax APIs.",
+      message: error.response?.data?.message || "Kuskure wajen tantancewa daga Ayax APIs.",
       error: error.message,
     });
   }

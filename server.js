@@ -5,21 +5,6 @@ const connectDB = require("./config/db");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 
-// --- DATABASE CONNECTION ---
-const startDB = async () => {
-  try {
-    await connectDB();
-    console.log("✅ MongoDB Connected Successfully");
-    console.log(
-      "🔍 Currently connected to database:",
-      mongoose.connection.name
-    );
-  } catch (err) {
-    console.error("❌ MongoDB Connection Failed:", err.message);
-  }
-};
-startDB();
-
 const app = express();
 
 // --- PERMISSIVE & SECURE CORS CONFIGURATION ---
@@ -43,7 +28,7 @@ const corsOptions = {
     ) {
       callback(null, true);
     } else {
-      callback(null, true); // Fallback mai bada kariya ba tare da toshe legitimate browser requests ba
+      callback(null, true); // Fallback
     }
   },
   credentials: true,
@@ -56,6 +41,7 @@ const corsOptions = {
     "Authorization",
     "Accept-Version",
     "token",
+    "x-api-key", // An kara don Marketplace & External API headers
   ],
   optionsSuccessStatus: 200,
 };
@@ -93,10 +79,9 @@ const validationRoutes = require("./routes/ninRoutes");
 const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 
 // --- INJECTING MIDDLEWARE & USER MODEL ---
-const { protect } = require("./middleware/authMiddleware");
 const User = require("./models/User");
 
-// --- ROUTES REGISTRATION WITH FULL DATA/VTU ALIASES ---
+// --- ROUTES REGISTRATION ---
 app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/support", supportRoutes);
@@ -104,16 +89,15 @@ app.use("/api/v1/nimc", nimcRoutes);
 app.use("/api/v1/bvn", bvnRoutes);
 app.use("/api/v1/webhooks", webhookRoutes);
 app.use("/api/v1/payment", paymentRoutes);
+app.use("/api/v1/payments", paymentRoutes);
 app.use("/api/v1/wallet", walletRoutes);
 
-// VTU & Purchase Route Aliases (Don rigakafin "API Route not found" a kowane frontend)
+// VTU & Purchase Route Aliases
 app.use("/api/v1/vtu", vtuRoutes);
 app.use("/api/v1/data", vtuRoutes);
 app.use("/api/v1/airtime", vtuRoutes);
 app.use("/api/v1/bills", vtuRoutes);
-app.use("/api/v1/user", vtuRoutes);
 
-app.use("/api/v1/payments", paymentRoutes);
 app.use("/api/v1/agent", agentRoutes);
 app.use("/api/v1/leader", leaderRoutes);
 app.use("/api/v1/supervisors", supervisorRoutes);
@@ -121,7 +105,7 @@ app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
 app.use("/api/v1/virtual-account", virtualAccountRoutes);
 
-// --- FALLBACK USER PROFILE ROUTE ---
+// --- SECURE USER PROFILE ROUTE ---
 app.get("/api/v1/user/profile", async (req, res) => {
   try {
     let token;
@@ -138,34 +122,34 @@ app.get("/api/v1/user/profile", async (req, res) => {
     }
 
     if (!token) {
-      console.log("⚠️ Frontend did not send a token, fetching fallback user");
-      const fallbackUser = await User.findOne().sort({ createdAt: -1 });
-      return res
-        .status(200)
-        .json({ status: "success", success: true, data: fallbackUser });
+      return res.status(401).json({
+        success: false,
+        message: "Authentication token is required",
+      });
     }
 
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findById(decoded.id || decoded._id);
+      const user = await User.findById(decoded.id || decoded._id).select("-password -pin");
 
       if (!user) {
-        return res.status(200).json({
-          status: "success",
-          success: true,
-          message: "User session expired but kept alive",
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
         });
       }
 
-      return res
-        .status(200)
-        .json({ status: "success", success: true, data: user, user });
+      return res.status(200).json({
+        status: "success",
+        success: true,
+        data: user,
+        user,
+      });
     } catch (jwtError) {
-      console.log("JWT Verification Error:", jwtError.message);
-      const recoveryUser = await User.findOne().sort({ createdAt: -1 });
-      return res
-        .status(200)
-        .json({ status: "success", success: true, data: recoveryUser, user: recoveryUser });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired session token",
+      });
     }
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -189,9 +173,24 @@ app.use((err, req, res, next) => {
   });
 });
 
+// --- DATABASE CONNECTION & SERVER STARTUP ---
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server fully optimized and running on port ${PORT}`);
-});
+
+const startServer = async () => {
+  try {
+    await connectDB();
+    console.log("✅ MongoDB Connected Successfully");
+    console.log("🔍 Connected to database:", mongoose.connection.name);
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 Server fully optimized and running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error("❌ MongoDB Connection Failed:", err.message);
+    process.exit(1);
+  }
+};
+
+startServer();
 
 module.exports = app;

@@ -4,7 +4,9 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const axios = require("axios");
 
-const AYAX_API_BASE_URL = process.env.AYAX_API_BASE_URL || "https://api.ayaxapis.com/v1";
+const AYAX_API_BASE_URL =
+  process.env.AYAX_API_BASE_URL ||
+  "https://ayax-api-marketplace.onrender.com/api/v1";
 const AYAX_API_KEY = process.env.AYAX_API_KEY;
 
 // @desc    User submits a new Validation request via Ayax APIs
@@ -16,9 +18,8 @@ exports.submitValidation = async (req, res) => {
 
   try {
     const { type, nin, pin, amount, formData } = req.body;
-    
-    // Amfani da req.user._id daga auth middleware domin tsaro
-    const userId = req.user ? (req.user._id || req.user.id) : req.body.userId;
+
+    const userId = req.user ? req.user._id || req.user.id : req.body.userId;
 
     if (!type || !nin || !pin || amount === undefined || !userId) {
       await session.abortTransaction();
@@ -29,7 +30,9 @@ exports.submitValidation = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).select("+pin +walletBalance balance").session(session);
+    const user = await User.findById(userId)
+      .select("+pin +walletBalance balance")
+      .session(session);
     if (!user) {
       await session.abortTransaction();
       session.endSession();
@@ -39,7 +42,7 @@ exports.submitValidation = async (req, res) => {
       });
     }
 
-    // 1. Tabbatar da PIN din mai amfani (Transaction PIN Verification)
+    // 1. Transaction PIN Verification
     let isPinValid = false;
     if (user.matchPin) {
       isPinValid = await user.matchPin(pin);
@@ -58,8 +61,9 @@ exports.submitValidation = async (req, res) => {
       });
     }
 
-    // 2. Duba balance na user
-    const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
+    // 2. Duba Balance
+    const currentBal =
+      user.walletBalance !== undefined ? user.walletBalance : user.balance || 0;
     const amountNum = Number(amount);
 
     if (currentBal < amountNum) {
@@ -74,7 +78,7 @@ exports.submitValidation = async (req, res) => {
     const transactionId = `VAL${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const reference = `AYAX-VAL-${Date.now()}`;
 
-    // 3. Cire kudi daga wallet nan take (Atomic Update)
+    // 3. Cire kudi (Atomic Update)
     const newBal = Number((currentBal - amountNum).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) {
@@ -82,7 +86,7 @@ exports.submitValidation = async (req, res) => {
     }
     await user.save({ session });
 
-    // 4. Ajiye bayanan transaction a Transaction Model a matsayin 'pending'
+    // 4. Ajiye Transaction
     const transaction = new Transaction({
       user: userId,
       transactionId,
@@ -96,7 +100,7 @@ exports.submitValidation = async (req, res) => {
     });
     await transaction.save({ session });
 
-    // 5. Ajiye bayanan validation din a cikin ValidationRequest Model
+    // 5. Ajiye Validation Request
     const newRequest = new ValidationRequest({
       user: userId,
       userId,
@@ -113,39 +117,50 @@ exports.submitValidation = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 6. Tura buƙata zuwa Ayax APIs Verification Gateway
+    // 6. Kira Ayax APIs Verification Gateway tare da x-api-key
     let response;
     try {
       response = await axios.post(
-        `${AYAX_API_BASE_URL}/verification/process`,
+        `${AYAX_API_BASE_URL}/identity/validation/process`,
         {
-          service_type: type,
-          nin,
-          ref_id: reference,
-          ...formData,
+          type,
+          nin: String(nin).trim(),
+          reference,
+          amount: amountNum,
+          formData: formData || {},
         },
         {
           headers: {
+            "x-api-key": AYAX_API_KEY,
             Authorization: `Bearer ${AYAX_API_KEY}`,
             "Content-Type": "application/json",
           },
           timeout: 40000,
-        },
+        }
       );
     } catch (apiError) {
-      console.error("Ayax Validation API Network Error:", apiError.message);
+      console.error(
+        "Ayax Validation API Error:",
+        apiError.response?.data || apiError.message
+      );
 
-      // REFUND LOGIC: Idan waje ya fadi, a mayar wa da user kudin sa
+      // Auto Refund
       const refundUser = await User.findById(userId);
       if (refundUser) {
-        refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
-        if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
+        refundUser.walletBalance = Number(
+          (refundUser.walletBalance + amountNum).toFixed(2)
+        );
+        if (refundUser.balance !== undefined)
+          refundUser.balance = refundUser.walletBalance;
         await refundUser.save();
       }
 
+      const errMsg =
+        apiError.response?.data?.message || "Gateway connection error";
+
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: "Gateway connection error" }
+        { status: "failed", refundReason: errMsg, details: `Failed & Refunded: ${errMsg}` }
       );
 
       await ValidationRequest.findOneAndUpdate(
@@ -155,18 +170,24 @@ exports.submitValidation = async (req, res) => {
 
       return res.status(502).json({
         success: false,
-        message: "Failed to connect to Ayax verification gateway. Your money has been refunded.",
+        message: `Failed to connect to Ayax verification gateway (${errMsg}). Your money has been refunded.`,
       });
     }
 
     const resData = response.data;
-    const isSuccessful = resData && (resData.status === true || resData.status === "success" || resData.code === "200");
+    const isSuccessful =
+      resData &&
+      (resData.success === true ||
+        resData.status === "success" ||
+        resData.code === "200");
 
     if (isSuccessful) {
-      // Sabunta status ya zama success ko completed
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "success", details: `Success: Validation completed for ${type}` }
+        {
+          status: "success",
+          details: `Success: Validation completed for ${type}`,
+        }
       );
 
       await ValidationRequest.findOneAndUpdate(
@@ -174,7 +195,6 @@ exports.submitValidation = async (req, res) => {
         { status: "completed", responseDetails: resData.data || resData }
       );
 
-      // Rubuta Activity Log
       await Activity.create({
         staffId: userId,
         action: "VALIDATION_REQUEST_COMPLETED",
@@ -192,17 +212,22 @@ exports.submitValidation = async (req, res) => {
         newBalance: user.walletBalance,
       });
     } else {
-      // REFUND LOGIC: Idan Ayax API ta ki amincewa da request din
       const refundUser = await User.findById(userId);
       if (refundUser) {
-        refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
-        if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
+        refundUser.walletBalance = Number(
+          (refundUser.walletBalance + amountNum).toFixed(2)
+        );
+        if (refundUser.balance !== undefined)
+          refundUser.balance = refundUser.walletBalance;
         await refundUser.save();
       }
 
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: resData.message || "Provider declined" }
+        {
+          status: "failed",
+          refundReason: resData.message || "Provider declined",
+        }
       );
 
       await ValidationRequest.findOneAndUpdate(
@@ -212,10 +237,11 @@ exports.submitValidation = async (req, res) => {
 
       return res.status(400).json({
         success: false,
-        message: resData.message || "Ayax validation service declined the request. Money refunded.",
+        message:
+          resData.message ||
+          "Ayax validation service declined the request. Money refunded.",
       });
     }
-
   } catch (error) {
     if (session.inTransaction()) {
       await session.abortTransaction();
@@ -223,10 +249,10 @@ exports.submitValidation = async (req, res) => {
     session.endSession();
 
     console.error("Submit Validation Error:", error);
-    return res.status(500).json({ 
-      success: false, 
-      message: "Server error while processing validation request", 
-      error: error.message 
+    return res.status(500).json({
+      success: false,
+      message: "Server error while processing validation request",
+      error: error.message,
     });
   }
 };
@@ -248,10 +274,10 @@ exports.getAllValidationRequests = async (req, res) => {
     });
   } catch (error) {
     console.error("Get All Validation Requests Error:", error);
-    return res.status(500).json({ 
-      success: false, 
-      message: "Server Error", 
-      error: error.message 
+    return res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error: error.message,
     });
   }
 };
