@@ -6,28 +6,43 @@ const {
   verifyPayment,
   fundWalletManual,
   generateVirtualAccount,
+  paystackWebhook, // Tabbatar akwai wannan a walletController
 } = require("../controllers/walletController");
 
 const { protect, authorize } = require("../middleware/authMiddleware");
 
-// --- WALLET & PAYMENT ROUTES ---
+// =========================================================================
+// 1. PUBLIC ROUTES (BABU BUKATAR LOGIN TOKEN)
+// =========================================================================
 
-// Duk waɗannan routes ɗin suna buƙatar mai amfani ya yi login (Authenticated)
+// Paystack Webhook: Wannan yana karbar sanarwar kudi kai tsaye daga Paystack Server
+if (typeof paystackWebhook === "function") {
+  router.post("/paystack/webhook", paystackWebhook);
+  router.post("/webhook", paystackWebhook);
+}
+
+// =========================================================================
+// 2. PROTECTED ROUTES (DOLE SAI MAI AMFANI YA YI LOGIN)
+// =========================================================================
 router.use(protect);
 
-// 1. Ƙirƙira ko sabunta Paystack Virtual Account (Asusun banki na musamman na mai amfani)
+// Ƙirƙira ko sabunta Paystack Virtual Account
 router.post("/generate-virtual-account", generateVirtualAccount);
 
-// 2. Duba kuɗin da ke cikin wallet (Balance)
+// Duba kuɗin da ke cikin wallet (Balance)
 router.get("/balance", getBalance);
 
-// 3. Fara biyan kuɗi ko saka kudi ta Paystack (Zai dawo da authorization_url)
+// Fara biyan kuɗi ko saka kudi ta Paystack
 router.post("/initialize", initializePayment);
 
-// 4. Tabbatar da biyan kuɗin Paystack (Verification ta hanyar reference)
+// Tabbatar da biyan kuɗin Paystack ta Reference
 router.get("/verify/:reference", verifyPayment);
 
-// 5. Saka kuɗi da hannu ko Manual Funding (ADMIN / SUPERADMIN KAWAI)
-router.post("/fund-manual", authorize("admin", "superadmin"), fundWalletManual);
+// Saka kuɗi da hannu (ADMIN / SUPERADMIN KAWAI)
+router.post(
+  "/fund-manual",
+  authorize("admin", "superadmin"),
+  fundWalletManual
+);
 
 module.exports = router;

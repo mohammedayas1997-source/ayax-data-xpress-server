@@ -3,6 +3,7 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const Notification = require("../models/Notification");
 const axios = require("axios");
+const crypto = require("crypto");
 
 /**
  * @desc    Get current user's wallet balance
@@ -50,7 +51,7 @@ exports.generateVirtualAccount = async (req, res) => {
 
     let customerCode = user.paystackCustomerCode;
 
-    // 1. Idan babu customer code, kirkiri customer ko nemo tsoho a Paystack
+    // 1. Kirkiri ko nemo customer a Paystack
     if (!customerCode) {
       try {
         const customerRes = await axios.post(
@@ -71,7 +72,6 @@ exports.generateVirtualAccount = async (req, res) => {
         );
         customerCode = customerRes.data?.data?.customer_code;
       } catch (custError) {
-        // Idan customer ya riga ya wanzu a Paystack, nemo bayanan sa
         try {
           const fetchCust = await axios.get(
             `https://api.paystack.co/customer/${encodeURIComponent(user.email.toLowerCase().trim())}`,
@@ -93,7 +93,7 @@ exports.generateVirtualAccount = async (req, res) => {
       }
     }
 
-    // 2. Samar da Dedicated Account (Wema Bank ko Titan Trust)
+    // 2. Samar da Dedicated Virtual Account (Wema Bank)
     let dvaResponse;
     try {
       dvaResponse = await axios.post(
@@ -123,14 +123,14 @@ exports.generateVirtualAccount = async (req, res) => {
       return res.status(502).json({ success: false, message: "Invalid response from Paystack DVA" });
     }
 
-    // 3. Ajiye dukkan bayanai don Webhook ya gane shi cikin sauki
+    // 3. Ajiye bayanan asusun
     user.virtualAccount = {
       bankName: accountData.bank ? accountData.bank.name : "Wema Bank",
       accountNumber: accountData.account_number,
       accountName: accountData.account_name,
       customerCode: customerCode,
     };
-    user.virtualAccountNumber = accountData.account_number; // Secondary index
+    user.virtualAccountNumber = accountData.account_number;
     await user.save();
 
     res.status(200).json({
@@ -178,7 +178,7 @@ exports.initializePayment = async (req, res) => {
           email: user.email,
           amount: amountInKobo,
           metadata: { userId: user._id.toString() },
-          callback_url: `${process.env.FRONTEND_URL}/wallet/verify`,
+          callback_url: `${process.env.FRONTEND_URL || "https://ayaxdata.online"}/wallet/verify`,
         },
         {
           headers: {
@@ -223,11 +223,11 @@ exports.verifyPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "Transaction reference is required" });
     }
 
-    const alreadyProcessed = await Transaction.findOne({ reference });
+    const alreadyProcessed = await Transaction.findOne({ reference, status: "success" });
     if (alreadyProcessed) {
       return res
-        .status(400)
-        .json({ success: false, message: "Transaction already processed" });
+        .status(200)
+        .json({ success: true, message: "Transaction already processed", alreadyProcessed: true });
     }
 
     let response;
@@ -260,7 +260,7 @@ exports.verifyPayment = async (req, res) => {
       }
 
       const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
-      const newBalance = currentBal + amountInNaira;
+      const newBalance = Number((currentBal + amountInNaira).toFixed(2));
 
       user.walletBalance = newBalance;
       if (user.balance !== undefined) {
@@ -269,29 +269,26 @@ exports.verifyPayment = async (req, res) => {
       await user.save();
 
       const transactionId = `DEP${Date.now()}${Math.floor(Math.random() * 1000)}`;
-      await Transaction.create({
-        user: user._id,
-        transactionId,
-        type: "wallet_funding",
-        category: "wallet",
-        amount: amountInNaira,
-        status: "success",
-        reference: reference,
-        details: `Wallet funding via Paystack App (Ref: ${reference})`,
-      });
+      await Transaction.findOneAndUpdate(
+        { reference },
+        {
+          user: user._id,
+          transactionId,
+          type: "wallet_funding",
+          category: "wallet",
+          amount: amountInNaira,
+          status: "success",
+          reference: reference,
+          details: `Wallet funding via Paystack App (Ref: ${reference})`,
+        },
+        { upsert: true, new: true }
+      );
 
       await Activity.create({
         staffId: user._id,
         action: "VERIFY_PAYMENT_FUND",
         details: `Funded wallet with ₦${amountInNaira} via Paystack. Ref: ${reference}`,
         targetUser: user._id,
-      });
-
-      await Notification.create({
-        recipient: user._id,
-        title: "Wallet Funded Successfully",
-        message: `Your wallet has been credited with ₦${amountInNaira} via Paystack.`,
-        type: "wallet",
       });
 
       return res.status(200).json({
@@ -311,6 +308,112 @@ exports.verifyPayment = async (req, res) => {
       message: "Verification error",
       error: error.message,
     });
+  }
+};
+
+/**
+ * @desc    PAYSTACK LIVE WEBHOOK (Processes Bank Transfer & Card Payments automatically)
+ * @route   POST /api/v1/wallet/paystack/webhook
+ * @access  Public (Secured with Paystack HMAC SHA512 Signature)
+ */
+exports.paystackWebhook = async (req, res) => {
+  try {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
+    if (!secret) {
+      console.error("[WEBHOOK ERROR]: PAYSTACK_SECRET_KEY is missing in environment variables!");
+      return res.sendStatus(500);
+    }
+
+    // 1. Tabbatar da Signature daga Paystack
+    const signature = req.headers["x-paystack-signature"];
+    const hash = crypto
+      .createHmac("sha512", secret)
+      .update(JSON.stringify(req.body))
+      .digest("hex");
+
+    if (hash !== signature) {
+      console.warn("[WEBHOOK WARNING]: Invalid Paystack Signature received.");
+      return res.status(400).send("Invalid signature");
+    }
+
+    const event = req.body;
+    console.log(`[PAYSTACK WEBHOOK EVENT]: ${event.event}`);
+
+    // 2. Duba idan biyan kudi ne ya yi nasara (charge.success ko dedicated_account.assign)
+    if (event.event === "charge.success") {
+      const data = event.data;
+      const reference = data.reference;
+      const amountInNaira = Number(data.amount) / 100;
+      const customerEmail = data.customer?.email?.toLowerCase().trim();
+      const customerCode = data.customer?.customer_code;
+      const metaUserId = data.metadata?.userId;
+
+      // Duba ko an riga an saka wannan kudin don gudun ninka balance (Idempotency)
+      const existingTx = await Transaction.findOne({ reference, status: "success" });
+      if (existingTx) {
+        console.log(`[WEBHOOK]: Reference ${reference} already processed.`);
+        return res.sendStatus(200);
+      }
+
+      // Nemo user ta metadata id, customer code, ko email
+      let user = null;
+      if (metaUserId) {
+        user = await User.findById(metaUserId);
+      }
+      if (!user && customerCode) {
+        user = await User.findOne({ paystackCustomerCode: customerCode });
+      }
+      if (!user && customerEmail) {
+        user = await User.findOne({ email: customerEmail });
+      }
+
+      if (user) {
+        const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
+        const newBalance = Number((currentBal + amountInNaira).toFixed(2));
+
+        user.walletBalance = newBalance;
+        if (user.balance !== undefined) {
+          user.balance = newBalance;
+        }
+        await user.save();
+
+        const transactionId = `DEP${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+        await Transaction.findOneAndUpdate(
+          { reference },
+          {
+            user: user._id,
+            transactionId,
+            type: "wallet_funding",
+            category: "wallet",
+            amount: amountInNaira,
+            oldBalance: currentBal,
+            newBalance: newBalance,
+            status: "success",
+            reference: reference,
+            details: `Paystack Automated Deposit (₦${amountInNaira}) via ${data.channel || "Transfer/Card"}`,
+          },
+          { upsert: true, new: true }
+        );
+
+        await Activity.create({
+          staffId: user._id,
+          action: "PAYSTACK_WEBHOOK_CREDIT",
+          details: `Credited ₦${amountInNaira} via Paystack Webhook. Ref: ${reference}`,
+          targetUser: user._id,
+        });
+
+        console.log(`[WEBHOOK SUCCESS]: Credited ₦${amountInNaira} to user ${user.email}`);
+      } else {
+        console.error(`[WEBHOOK ERROR]: User not found for email: ${customerEmail}`);
+      }
+    }
+
+    // Amsa wa Paystack nan take da 200 OK
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error("Paystack Webhook Handler Error:", error);
+    return res.sendStatus(500);
   }
 };
 
@@ -337,7 +440,7 @@ exports.fundWalletManual = async (req, res) => {
     }
 
     const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
-    const newBalance = currentBal + amountNum;
+    const newBalance = Number((currentBal + amountNum).toFixed(2));
 
     user.walletBalance = newBalance;
     if (user.balance !== undefined) {
