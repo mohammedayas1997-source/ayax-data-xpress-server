@@ -4,9 +4,17 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const bcrypt = require("bcryptjs");
 
-const AYAX_API_BASE_URL =
+// Tabbatar da cewa Base URL ba zai taba ninka /api/v1 ba
+const rawBaseUrl =
   process.env.AYAX_API_BASE_URL ||
-  "https://ayax-api-marketplace.onrender.com/api/v1";
+  "https://ayax-api-marketplace.onrender.com";
+
+// Wannan yana cire /api/v1 idan har akwai shi a jikin .env don kada ya ninka
+const cleanBaseUrl = rawBaseUrl
+  .replace(/\/+$/, "")
+  .replace(/\/api\/v1\/?$/, "");
+
+const AYAX_API_BASE_URL = `${cleanBaseUrl}/api/v1`;
 const AYAX_API_KEY = process.env.AYAX_API_KEY;
 
 // Helper don tura sanarwa (Notification)
@@ -73,7 +81,9 @@ exports.buyAirtime = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).select("+pin +transactionPin +walletBalance balance").session(session);
+    const user = await User.findById(userId)
+      .select("+pin +transactionPin +walletBalance balance")
+      .session(session);
     if (!user) {
       await session.abortTransaction();
       session.endSession();
@@ -100,7 +110,8 @@ exports.buyAirtime = async (req, res) => {
     }
 
     // 3. Duba Wallet Balance
-    const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
+    const currentBal =
+      user.walletBalance !== undefined ? user.walletBalance : user.balance || 0;
     if (currentBal < amountNum) {
       await session.abortTransaction();
       session.endSession();
@@ -138,13 +149,15 @@ exports.buyAirtime = async (req, res) => {
     session.endSession();
 
     // 6. Kiran Sabon Ayax API Marketplace (/airtime/buy)
-    // 6. Kiran Sabon Ayax API Marketplace (/airtime/buy)
     let response;
+    const targetUrl = `${AYAX_API_BASE_URL}/airtime/buy`;
+
     try {
-      console.log("Sending to Marketplace with Key:", AYAX_API_KEY ? "Key exists" : "KEY IS MISSING!");
-      
+      console.log(`[API CALL]: Posting to ${targetUrl}`);
+      console.log("[API AUTH]: Key status:", AYAX_API_KEY ? "Present" : "MISSING!");
+
       response = await axios.post(
-        `${AYAX_API_BASE_URL}/airtime/buy`,
+        targetUrl,
         {
           network: finalNetwork,
           phone: targetPhone,
@@ -154,21 +167,26 @@ exports.buyAirtime = async (req, res) => {
         {
           headers: {
             "x-api-key": AYAX_API_KEY,
-            "Authorization": `Bearer ${AYAX_API_KEY}`,
+            Authorization: `Bearer ${AYAX_API_KEY}`,
             "Content-Type": "application/json",
           },
           timeout: 40000,
         }
       );
     } catch (apiError) {
-      console.error("Ayax Airtime API Full Error:", apiError.response?.data || apiError.message);
-      // ...
+      console.error(
+        "Ayax Airtime API Full Error:",
+        apiError.response?.data || apiError.message
+      );
 
       // AUTO-REFUND LOGIC: Mayar da kudin mai amfani idan kiran gateway ya fadi
       const refundUser = await User.findById(userId);
       if (refundUser) {
-        refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
-        if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
+        refundUser.walletBalance = Number(
+          (refundUser.walletBalance + amountNum).toFixed(2)
+        );
+        if (refundUser.balance !== undefined)
+          refundUser.balance = refundUser.walletBalance;
         await refundUser.save();
       }
 
@@ -179,7 +197,11 @@ exports.buyAirtime = async (req, res) => {
 
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: errMsg, details: `Failed & Refunded: ${errMsg}` }
+        {
+          status: "failed",
+          refundReason: errMsg,
+          details: `Failed & Refunded: ${errMsg}`,
+        }
       );
 
       return res.status(502).json({
@@ -190,7 +212,10 @@ exports.buyAirtime = async (req, res) => {
 
     const resData = response.data;
     const isSuccessful =
-      resData && (resData.success === true || resData.status === "success" || resData.status === "SUCCESSFUL");
+      resData &&
+      (resData.success === true ||
+        resData.status === "success" ||
+        resData.status === "SUCCESSFUL");
 
     if (isSuccessful) {
       const providerData = resData.data || resData;
@@ -199,12 +224,12 @@ exports.buyAirtime = async (req, res) => {
         { reference },
         {
           status: "success",
-          reference: providerData.reference || providerData.orderId || reference,
+          reference:
+            providerData.reference || providerData.orderId || reference,
           details: `Success: ${finalNetwork.toUpperCase()} ₦${amountNum} Airtime to ${targetPhone}`,
         }
       );
 
-      // Rubuta Activity Log
       await Activity.create({
         staffId: userId,
         action: "AIRTIME_PURCHASED",
@@ -212,7 +237,6 @@ exports.buyAirtime = async (req, res) => {
         targetUser: userId,
       });
 
-      // Tura Sanarwa
       await sendNotification(
         userId,
         "Airtime Recharge Successful",
@@ -229,22 +253,30 @@ exports.buyAirtime = async (req, res) => {
         newBalance: user.walletBalance,
       });
     } else {
-      // Auto Refund idan provider ya ki karba
       const refundUser = await User.findById(userId);
       if (refundUser) {
-        refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
-        if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
+        refundUser.walletBalance = Number(
+          (refundUser.walletBalance + amountNum).toFixed(2)
+        );
+        if (refundUser.balance !== undefined)
+          refundUser.balance = refundUser.walletBalance;
         await refundUser.save();
       }
 
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: resData.message || "Provider declined", details: "Failed & Refunded" }
+        {
+          status: "failed",
+          refundReason: resData.message || "Provider declined",
+          details: "Failed & Refunded",
+        }
       );
 
       return res.status(400).json({
         success: false,
-        message: resData.message || "Ayax airtime provider declined transaction. Money refunded.",
+        message:
+          resData.message ||
+          "Ayax airtime provider declined transaction. Money refunded.",
       });
     }
   } catch (error) {
