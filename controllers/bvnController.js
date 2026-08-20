@@ -1,172 +1,241 @@
-const User = require("../models/User");
-const BVNPrice = require("../models/BVNPrice");
-const BVNRequest = require("../models/BVNRequest");
-const Activity = require("../models/Activity");
-const bcrypt = require("bcryptjs"); // Tabbatar kana da wannan ko kuma hanyar da kake amfani da ita wajen duba PIN
+const DataPlan = require("../models/DataPlan");
+const axios = require("axios");
 
-/**
- * @desc    Get all BVN service prices
- * @route   GET /api/v1/bvn/prices
- * @access  Private
- */
-exports.getBVNPrices = async (req, res) => {
+const AYAX_API_BASE_URL =
+  process.env.AYAX_API_BASE_URL ||
+  "https://ayax-api-marketplace.onrender.com/api/v1";
+const AYAX_API_KEY = process.env.AYAX_API_KEY;
+
+// 1. Get all plans for admin dashboard
+const getAdminPlans = async (req, res) => {
   try {
-    const prices = await BVNPrice.find();
+    const plans = await DataPlan.find().sort({
+      networkName: 1,
+      userPrice: 1,
+    });
 
     return res.status(200).json({
       success: true,
-      count: prices.length,
-      data: prices,
+      count: plans.length,
+      data: plans,
+      plans,
     });
   } catch (error) {
+    console.error("Get Admin Plans Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Error fetching BVN prices: " + error.message,
+      message: "Error fetching admin plans",
+      error: error.message,
     });
   }
 };
 
-/**
- * @desc    Set or Update BVN price (Admin Only)
- * @route   POST /api/v1/bvn/admin/set-price
- * @access  Private/Admin
- */
-exports.setBVNPrice = async (req, res) => {
+// 2. Set or Update Plan Price
+const setPlanPrice = async (req, res) => {
+  const {
+    networkId,
+    planCode,
+    userPrice,
+    agentPrice,
+    planLabel,
+    networkName,
+    sizeGB,
+    planType,
+    validity,
+  } = req.body;
+
+  if (
+    !networkId ||
+    !planCode ||
+    userPrice === undefined ||
+    agentPrice === undefined
+  ) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Please provide all required fields (networkId, planCode, userPrice, agentPrice)",
+    });
+  }
+
   try {
-    const { serviceType, amount } = req.body;
-
-    if (!serviceType || amount === undefined) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide both serviceType and amount",
-      });
-    }
-
-    const price = await BVNPrice.findOneAndUpdate(
-      { serviceType },
-      { amount: Number(amount) },
-      { new: true, upsert: true, runValidators: true },
+    const plan = await DataPlan.findOneAndUpdate(
+      { networkId: String(networkId), planCode: String(planCode) },
+      {
+        userPrice: Number(userPrice),
+        agentPrice: Number(agentPrice),
+        planLabel,
+        networkName,
+        sizeGB: sizeGB ? Number(sizeGB) : 0,
+        planType,
+        validity,
+        isActive: true,
+      },
+      { upsert: true, new: true, runValidators: true }
     );
 
     return res.status(200).json({
       success: true,
-      message: `${serviceType.replace("_", " ").toUpperCase()} price updated successfully`,
-      data: price,
+      message: "Plan updated successfully",
+      plan,
     });
   } catch (error) {
+    console.error("Set Plan Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to set BVN price: " + error.message,
+      message: "Error updating plan details",
+      error: error.message,
     });
   }
 };
 
-/**
- * @desc    Verify BVN (Main Logic)
- * @route   POST /api/v1/bvn/verify
- * @access  Private
- */
-exports.verifyBVN = async (req, res) => {
+// 3. Sync Plans from Ayax API Marketplace
+const syncAyaxPlans = async (req, res) => {
   try {
-    const { bvnNumber, serviceType, pin, ...otherDetails } = req.body;
-    const userId = req.user._id;
-
-    if (!bvnNumber || !serviceType) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide bvnNumber and serviceType",
-      });
-    }
-
-    // 1. Tabbatar da an shigar da Transaction PIN
-    if (!pin) {
-      return res.status(400).json({
-        success: false,
-        message: "Transaction PIN is required",
-      });
-    }
-
-    // 2. Nemo mai amfani tare da dauko PIN dinsa (a tabbatar ana zabo pin field daga DB)
-    const user = await User.findById(userId).select("+pin");
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // 3. Tabbatar da cewa PIN ɗin da mai amfani ya igo daidai ne (Idan ana amfani da Hashing ko Plain text)
-    // Idan kana adana pin a matsayin plain text: if (user.pin !== pin)
-    // Idan kuma kana amfani da hashing (misali bcrypt): const isPinValid = await bcrypt.compare(pin, user.pin);
-    const isPinValid = user.pin ? (user.pin === pin || (await bcrypt.compare(pin, user.pin))) : true; 
-    
-    if (!isPinValid) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid transaction PIN",
-      });
-    }
-
-    // 4. Tabbatar da Farashin sabis (Fetch price from BVNPrice model)
-    const priceDoc = await BVNPrice.findOne({ serviceType });
-    if (!priceDoc) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid service type or price not configured",
-      });
-    }
-    const serviceFee = Number(priceDoc.amount);
-
-    // 5. Binciken kuɗin Wallet (Wallet Balance Check)
-    const currentBal = user.walletBalance !== undefined ? user.walletBalance : (user.balance || 0);
-
-    if (currentBal < serviceFee) {
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient balance. Required: ₦${serviceFee}, Available: ₦${currentBal}`,
-      });
-    }
-
-    // 6. Cire kuɗi daga Wallet ɗin mai amfani
-    user.walletBalance = currentBal - serviceFee;
-    if (user.balance !== undefined) user.balance = user.walletBalance;
-
-    if (!user.transactions) user.transactions = [];
-    user.transactions.push({
-      type: "debit",
-      amount: serviceFee,
-      status: "success",
-      description: `BVN Verification charge for ${serviceType}`,
-      date: new Date(),
+    const response = await axios.get(`${AYAX_API_BASE_URL}/data/plans`, {
+      headers: {
+        "x-api-key": AYAX_API_KEY,
+        Authorization: `Bearer ${AYAX_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 30000,
     });
 
-    await user.save();
+    const resData = response.data;
+    const plansList = resData.data || resData.plans || resData;
 
-    // 7. Ajiye Buƙatar a cikin BVNRequest Model (Logging the request)
-    const newBVNRequest = await BVNRequest.create({
-      user: userId,
-      bvnNumber,
-      serviceType,
-      amount: serviceFee,
-      status: "pending",
-      ...otherDetails,
+    if (!Array.isArray(plansList) || plansList.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No plans returned from Ayax API provider",
+      });
+    }
+
+    let syncedCount = 0;
+
+    for (const p of plansList) {
+      const netId = String(
+        p.networkId || p.network || p.network_id || p.serviceCode || ""
+      );
+      const pCode = String(p.planCode || p.plan_code || p.id || p.code || "");
+      const pLabel = p.planLabel || p.name || p.title || p.description;
+      const netName = p.networkName || p.network_name || p.network;
+      const apiPrice = Number(p.price || p.amount || p.apiPrice || 0);
+
+      if (netId && pCode) {
+        await DataPlan.findOneAndUpdate(
+          { networkId: netId, planCode: pCode },
+          {
+            $setOnInsert: {
+              userPrice: apiPrice + 50,
+              agentPrice: apiPrice + 20,
+              isActive: true,
+            },
+            planLabel: pLabel,
+            networkName: netName,
+            sizeGB: Number(p.sizeGB || p.size || 0),
+            planType: p.planType || p.type || "SME",
+            validity: p.validity || "30 Days",
+          },
+          { upsert: true, new: true }
+        );
+        syncedCount++;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully synchronized ${syncedCount} plans from Ayax APIs`,
     });
+  } catch (error) {
+    console.error("Sync Plans Error:", error.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to sync plans from Ayax APIs",
+      error: error.response?.data?.message || error.message,
+    });
+  }
+};
 
-    // 8. Rubuta Activity Log
-    await Activity.create({
-      staffId: userId,
-      action: "BVN_VERIFICATION_INITIATED",
-      details: `Initiated BVN verification (${serviceType}) for ₦${serviceFee}`,
-      targetUser: userId,
+// 4. Toggle Plan Status
+const togglePlanStatus = async (req, res) => {
+  try {
+    const plan = await DataPlan.findById(req.params.id);
+    if (!plan) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Plan not found" });
+    }
+
+    plan.isActive = !plan.isActive;
+    await plan.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Plan status changed to ${plan.isActive ? "Active" : "Inactive"}`,
+      data: plan,
+    });
+  } catch (error) {
+    console.error("Toggle Plan Status Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error toggling plan status",
+      error: error.message,
+    });
+  }
+};
+
+// 5. Delete Plan
+const deletePlan = async (req, res) => {
+  try {
+    const plan = await DataPlan.findByIdAndDelete(req.params.id);
+    if (!plan) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Plan not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Data plan deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete Plan Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error deleting plan",
+      error: error.message,
+    });
+  }
+};
+
+// 6. Get Active Plans for Users
+const getPlans = async (req, res) => {
+  try {
+    const plans = await DataPlan.find({ isActive: true }).sort({
+      networkName: 1,
+      userPrice: 1,
     });
 
     return res.status(200).json({
       success: true,
-      message: "BVN verification request submitted successfully",
-      data: newBVNRequest,
-      newBalance: user.walletBalance,
+      count: plans.length,
+      data: plans,
     });
   } catch (error) {
+    console.error("Get Plans Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Verification failed: " + error.message,
+      message: "Error fetching plans",
+      error: error.message,
     });
   }
+};
+
+module.exports = {
+  getAdminPlans,
+  getPlans,
+  setPlanPrice,
+  syncAyaxPlans,
+  togglePlanStatus,
+  deletePlan,
 };
