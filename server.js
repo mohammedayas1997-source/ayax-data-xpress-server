@@ -78,7 +78,6 @@ const superAdminRoutes = require("./routes/superAdminRoutes");
 const validationRoutes = require("./routes/ninRoutes");
 const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 const dataRoutes = require("./routes/data.routes");
-const vtuRoutes = require("./routes/vtu.routes");
 
 // --- INJECTING MIDDLEWARE & USER MODEL ---
 const User = require("./models/User");
