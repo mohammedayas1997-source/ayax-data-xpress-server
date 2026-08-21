@@ -157,7 +157,7 @@ exports.buyAirtime = async (req, res) => {
         });
       }
 
-// Ajiye Activity Log cikin aminci (ba zai taba jefa error ba)
+/*// Ajiye Activity Log cikin aminci (ba zai taba jefa error ba)
       try {
         const activeUserId =
           req.user?._id ||
@@ -177,7 +177,7 @@ exports.buyAirtime = async (req, res) => {
         }
       } catch (err) {
         // Bar shi babu komai - kada a saka console.warn ko jefa error
-      }
+      }*/
       return res.status(200).json({
         success: true,
         message: "Airtime purchase successful",
