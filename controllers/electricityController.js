@@ -296,11 +296,12 @@ exports.buyElectricity = async (req, res) => {
       );
 
       await Activity.create({
+        user: user._id,
         staffId: userId,
         action: "ELECTRICITY_PURCHASED",
         details: `Purchased electricity worth ₦${amountNum} for meter ${finalMeterNo}`,
         targetUser: userId,
-      });
+      }).catch((err) => console.warn("Activity log error:", err.message));
 
       const tokenValue =
         providerData.token ||

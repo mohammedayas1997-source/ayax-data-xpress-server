@@ -217,11 +217,12 @@ exports.submitValidation = async (req, res) => {
       );
 
       await Activity.create({
+        user: userId,
         staffId: userId,
         action: "VALIDATION_REQUEST_COMPLETED",
         details: `Successfully processed validation for ${type} (NIN: ${nin}) worth ₦${amountNum}`,
         targetUser: userId,
-      });
+      }).catch((err) => console.warn("Activity log error:", err.message));
 
       return res.status(200).json({
         success: true,

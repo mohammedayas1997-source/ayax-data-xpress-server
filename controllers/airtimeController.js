@@ -236,12 +236,13 @@ exports.buyAirtime = async (req, res) => {
         }
       );
 
-      await Activity.create({
-        staffId: userId,
-        action: "AIRTIME_PURCHASED",
-        details: `Purchased ${finalNetwork.toUpperCase()} ₦${amountNum} airtime for ${targetPhone}`,
-        targetUser: userId,
-      });
+     await Activity.create({
+  user: user._id, // <-- WANNAN SHINE FILIN DA AKE BUKATA!
+  staffId: user._id,
+  action: "BUY_AIRTIME",
+  details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
+  targetUser: user._id,
+}).catch((err) => console.warn("Activity log error:", err.message));
 
       await sendNotification(
         userId,

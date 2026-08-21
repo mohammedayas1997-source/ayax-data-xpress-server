@@ -185,11 +185,12 @@ exports.submitNIMCRequest = async (req, res) => {
 
         // 8. Rubuta Activity Log
         await Activity.create({
+          user: user._id,
           staffId: user._id,
           action: "NIMC_REQUEST_SUBMITTED",
           details: `Successfully processed NIMC request for ${finalServiceType} (NIN: ${finalNin})`,
           targetUser: user._id,
-        });
+        }).catch((err) => console.warn("Activity log error:", err.message));
 
         return res.status(201).json({
           success: true,
