@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+
 const {
   buyData,
   buyAirtime,
@@ -9,50 +10,54 @@ const {
   verifyMeter,
   verifySmartCard,
   getTransactionStatus,
+  getTransactionHistory,
 } = require("../controllers/vtuController");
 
 const { protect } = require("../middleware/authMiddleware");
 
-// --- VTU SERVICES ROUTES ---
-
-// Duk wadannan routes din sai wanda ya yi login (protect) zai iya amfani da su
+// Duk waɗannan routes ɗin suna buƙatar login
 router.use(protect);
-/* ======================================================
-   AUTHENTICATED VTU ROUTES
-====================================================== */
-router.use(auth);
 
-// 1. Data Services (Dukkan hanyoyin da frontend ke iya kira)
+/* ======================================================
+   1. DATA SERVICES
+====================================================== */
 router.post("/buy-data", buyData);
 router.post("/data", buyData);
 router.post("/data/buy", buyData);
 router.post("/buy", buyData);
 
-// 2. Airtime Services
+/* ======================================================
+   2. AIRTIME SERVICES
+====================================================== */
 router.post("/buy-airtime", buyAirtime);
 router.post("/airtime", buyAirtime);
 router.post("/airtime/buy", buyAirtime);
 
-// 3. Utility Bills (Electricity & Cable TV)
+/* ======================================================
+   3. UTILITY BILLS (ELECTRICITY & CABLE)
+====================================================== */
 router.post("/electricity", purchaseElectricity);
 router.post("/buy-electricity", purchaseElectricity);
 router.post("/cable", purchaseCable);
 router.post("/buy-cable", purchaseCable);
 
-// 4. Verification & Validation Services (Meter, SmartCard, NIMC)
+/* ======================================================
+   4. VERIFICATION & VALIDATION
+====================================================== */
 router.post("/verify-meter", verifyMeter);
 router.post("/verify-smartcard", verifySmartCard);
 router.post("/nimc-validate", nimcValidation);
 
-// 5. Status Tracking & Transaction Verification
-if (typeof vtuController.getTransactionHistory === "function") {
-  router.get("/transactions", vtuController.getTransactionHistory);
+/* ======================================================
+   5. TRANSACTION STATUS & HISTORY
+====================================================== */
+if (typeof getTransactionHistory === "function") {
+  router.get("/transactions", getTransactionHistory);
 }
 
-// Transaction Status
-if (typeof vtuController.getTransactionStatus === "function") {
-  router.get("/status/:reference", vtuController.getTransactionStatus);
-  router.get("/transaction-status/:reference", vtuController.getTransactionStatus);
+if (typeof getTransactionStatus === "function") {
+  router.get("/status/:reference", getTransactionStatus);
+  router.get("/transaction-status/:reference", getTransactionStatus);
 }
 
 module.exports = router;
