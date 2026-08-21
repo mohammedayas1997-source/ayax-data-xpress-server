@@ -157,24 +157,24 @@ exports.buyAirtime = async (req, res) => {
         });
       }
 
-      // A cikin buyAirtime:
+    // Ajiye Activity Log ba tare da ya dakatar da sayen katin ba
 try {
-  if (typeof Activity !== "undefined") {
-    const actUserId = user?._id || user?.id || req.user?._id || req.user?.id;
-    
-    if (actUserId) {
-      await Activity.create({
-        user: actUserId,
-        staffId: actUserId,
-        action: "BUY_AIRTIME",
-        details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
-        targetUser: actUserId,
-      });
-    }
+  const activeUserId =
+    (user && (user._id || user.id)) ||
+    (req.user && (req.user._id || req.user.id)) ||
+    userId;
+
+  if (typeof Activity !== "undefined" && activeUserId) {
+    await Activity.create({
+      user: activeUserId,
+      staffId: activeUserId,
+      action: "BUY_AIRTIME",
+      details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
+      targetUser: activeUserId,
+    });
   }
 } catch (actErr) {
-  // Wannan zai hana Activity error ya dakatar da sayen katin
-  console.warn("Activity logging skipped:", actErr.message);
+  console.warn("Activity validation/save ignored:", actErr.message);
 }
 
       return res.status(200).json({
