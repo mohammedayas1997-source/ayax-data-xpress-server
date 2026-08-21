@@ -157,25 +157,21 @@ exports.buyAirtime = async (req, res) => {
         });
       }
 
-    // Ajiye Activity Log ba tare da ya dakatar da sayen katin ba
-try {
-  const activeUserId =
-    (user && (user._id || user.id)) ||
-    (req.user && (req.user._id || req.user.id)) ||
-    userId;
-
-  if (typeof Activity !== "undefined" && activeUserId) {
-    await Activity.create({
-      user: activeUserId,
-      staffId: activeUserId,
-      action: "BUY_AIRTIME",
-      details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
-      targetUser: activeUserId,
-    });
-  }
-} catch (actErr) {
-  console.warn("Activity validation/save ignored:", actErr.message);
-}
+    // Ajiye Activity Log cikin kebentaccen try/catch
+      try {
+        const activeUserId = user?._id || user?.id || req.user?._id || req.user?.id;
+        if (typeof Activity !== "undefined" && activeUserId) {
+          await Activity.create({
+            user: activeUserId,
+            staffId: activeUserId,
+            action: "BUY_AIRTIME",
+            details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
+            targetUser: activeUserId,
+          });
+        }
+      } catch (actErr) {
+        console.warn("Activity logging ignored:", actErr.message);
+      }
 
       return res.status(200).json({
         success: true,
