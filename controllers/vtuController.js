@@ -7,19 +7,21 @@ const Sale = require("../models/Sale");
 const NIMCRequest = require("../models/NIMCRequest");
 const axios = require("axios");
 
-// 1. Saitin Babban URL na API Marketplace
-const MARKETPLACE_RAW_URL =
+// 1. API Base URL Normalization
+const RAW_URL =
   process.env.MARKETPLACE_API_URL ||
   process.env.AYAX_API_BASE_URL ||
   "https://ayax-api-marketplace.onrender.com";
 
-const AYAX_API_BASE_URL = MARKETPLACE_RAW_URL.replace(/\/+$/, "");
+const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
+
 const AYAX_API_KEY =
   process.env.AYAX_API_KEY ||
   process.env.MARKETPLACE_API_KEY ||
   "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
 
-// Helper don hada ingantattun headers
+// Helper function to build headers
 const getMarketplaceHeaders = (userAuthHeader) => {
   const headers = {
     "Content-Type": "application/json",
@@ -45,24 +47,24 @@ exports.buyAirtime = async (req, res) => {
   const amountNum = Number(amount);
 
   let isDeducted = false;
-  let reference = `AYAX-AIR-${Date.now()}`;
+  let reference = `AIR-${Date.now()}`;
   let transactionDoc = null;
 
   try {
     if (!network || !targetPhone || !amountNum || amountNum <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Please provide valid network, phoneNumber, and amount",
+        message: "Please provide valid network, phone number, and amount.",
       });
     }
 
-    // 1. Nemo User
+    // 1. Verify User
     const user = await User.findById(userId).select("+transactionPin +pin +walletBalance balance");
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // 2. Tantance PIN
+    // 2. Validate PIN
     if (pin) {
       let isPinValid = false;
       if (user.matchPin) {
@@ -78,28 +80,28 @@ exports.buyAirtime = async (req, res) => {
       if (!isPinValid) {
         return res.status(400).json({
           success: false,
-          message: "Security Error: Invalid Transaction PIN",
+          message: "Security Error: Invalid Transaction PIN.",
         });
       }
     }
 
-    // 3. Tantance Balance
+    // 3. Check Wallet Balance
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     if (currentBal < amountNum) {
       return res.status(400).json({
         success: false,
-        message: `Kudinka bai isa ba. Ana buƙatar: ₦${amountNum}, kana da: ₦${currentBal}`,
+        message: `Insufficient balance. Required: ₦${amountNum}, Available: ₦${currentBal}`,
       });
     }
 
-    // 4. Cire Kudi a Wallet
+    // 4. Deduct Balance (Atomic step)
     const newBal = Number((currentBal - amountNum).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
     await user.save();
-    isDeducted = true; // Mun tabbatar an cire kudi
+    isDeducted = true;
 
-    // 5. Ajiye Transaction History (Pending)
+    // 5. Create Pending Transaction Record
     const transactionId = `AIR${Date.now()}${Math.floor(Math.random() * 1000)}`;
     transactionDoc = await Transaction.create({
       user: userId,
@@ -115,195 +117,7 @@ exports.buyAirtime = async (req, res) => {
       details: `Ayax Airtime: ₦${amountNum} for ${targetPhone}`,
     });
 
-    // 6. Kira Ayax API Marketplace
-    const airtimePayload = {
-      network: String(network).toUpperCase(),
-      amount: amountNum,
-      phone: targetPhone,
-      phoneNumber: targetPhone,
-      ref_id: reference,
-      reference: reference,
-    };
-
-    const airtimeHeaders = getMarketplaceHeaders(req.headers.authorization);
-
-    let response;
-    try {
-      response = await axios.post(
-        `${AYAX_API_BASE_URL}/api/v1/airtime/buy`,
-        airtimePayload,
-        { headers: airtimeHeaders, timeout: 40000 }
-      );
-    } catch (apiErr) {
-      console.error("Marketplace Call Failed:", apiErr.response?.data || apiErr.message);
-      throw new Error(apiErr.response?.data?.message || "Kuskure wajen hadawa da uwar garke (Marketplace Gateway)");
-    }
-
-    const resData = response?.data;
-    const isSuccessful =
-      resData &&
-      (resData.success === true ||
-        resData.status === true ||
-        resData.status === "success" ||
-        resData.code === 200 ||
-        resData.code === "200");
-
-    if (isSuccessful) {
-      // An yi nasara
-      if (transactionDoc) {
-        await Transaction.findByIdAndUpdate(transactionDoc._id, {
-          status: "success",
-          details: `Success: ₦${amountNum} airtime sent to ${targetPhone}`,
-        });
-      }
-
-// Ajiye Activity Log cikin aminci (ba zai taba jefa error ba)
-      try {
-        const activeUserId =
-          req.user?._id ||
-          req.user?.id ||
-          user?._id ||
-          user?.id ||
-          userId;
-
-        if (typeof Activity !== "undefined" && activeUserId) {
-          await Activity.create({
-            user: activeUserId,
-            staffId: activeUserId,
-            action: "BUY_AIRTIME",
-            details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
-            targetUser: activeUserId,
-          });
-        }
-      } catch (err) {
-        // Bar shi babu komai - kada a saka console.warn ko jefa error
-      }
-      return res.status(200).json({
-        success: true,
-        message: "Airtime purchase successful",
-        data: {
-          transactionId: transactionDoc ? transactionDoc.transactionId : transactionId,
-          newBalance: user.walletBalance,
-        },
-      });
-    } else {
-      throw new Error(resData?.message || "Marketplace declined transaction.");
-    }
-  } catch (error) {
-    console.error("Buy Airtime Internal Error:", error);
-
-    // AUTO-REFUND: Idan an riga an cire kudi kuma aka samu wani error, a mayar da su nan take!
-    if (isDeducted && userId) {
-      try {
-        const refundUser = await User.findById(userId);
-        if (refundUser) {
-          refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
-          if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
-          await refundUser.save();
-          console.log(`✓ Auto-Refunded: ₦${amountNum} to user ${userId}`);
-        }
-
-        if (transactionDoc) {
-          await Transaction.findByIdAndUpdate(transactionDoc._id, {
-            status: "failed",
-            refundReason: error.message,
-            details: `Failed & Refunded: ${error.message}`,
-          });
-        }
-      } catch (refundErr) {
-        console.error("Critical: Failed to auto-refund:", refundErr.message);
-      }
-    }
-
-    return res.status(400).json({
-      success: false,
-      message: error.message || "Airtime processing error",
-    });
-  }
-};
-
-/**
- * @desc    Purchase Mobile Airtime via Ayax APIs (Mafi Sauki & Inganci)
- * @route   POST /api/v1/vtu/buy-airtime, POST /api/v1/airtime
- */
-exports.buyAirtime = async (req, res) => {
-  const userId = req.user?._id || req.user?.id;
-  const { network, phoneNumber, phone, amount, pin } = req.body;
-  const targetPhone = phoneNumber || phone;
-  const amountNum = Number(amount);
-
-  let isDeducted = false;
-  let reference = `AIR-${Date.now()}`;
-  let transactionDoc = null;
-
-  try {
-    if (!network || !targetPhone || !amountNum || amountNum <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Network, phone number, da amount ana bukatarsu.",
-      });
-    }
-
-    // 1. Nemo User
-    const user = await User.findById(userId).select("+transactionPin +pin +walletBalance balance");
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // 2. Tantance PIN
-    if (pin) {
-      let isPinValid = false;
-      if (user.matchPin) {
-        isPinValid = await user.matchPin(pin);
-      } else if (user.transactionPin) {
-        isPinValid = String(user.transactionPin) === String(pin);
-      } else if (user.pin) {
-        isPinValid = String(user.pin) === String(pin);
-      } else {
-        isPinValid = pin === "0000";
-      }
-
-      if (!isPinValid) {
-        return res.status(400).json({
-          success: false,
-          message: "Kuskure: PIN ba daidai ba ne.",
-        });
-      }
-    }
-
-    // 3. Tantance Balance
-    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
-    if (currentBal < amountNum) {
-      return res.status(400).json({
-        success: false,
-        message: `Kudinka bai isa ba. Ana bukata: ₦${amountNum}, kana da: ₦${currentBal}`,
-      });
-    }
-
-    // 4. Cire Kudi
-    const newBal = Number((currentBal - amountNum).toFixed(2));
-    user.walletBalance = newBal;
-    if (user.balance !== undefined) user.balance = newBal;
-    await user.save();
-    isDeducted = true;
-
-    // 5. Ajiye Transaction History
-    const transactionId = `AIR${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    transactionDoc = await Transaction.create({
-      user: userId,
-      transactionId,
-      reference,
-      type: "airtime",
-      category: "airtime",
-      amount: amountNum,
-      oldBalance: currentBal,
-      newBalance: newBal,
-      phoneNumber: targetPhone,
-      status: "pending",
-      details: `₦${amountNum} Airtime to ${targetPhone}`,
-    });
-
-    // 6. Kira Ayax Marketplace API
+    // 6. Call Ayax API Marketplace Gateway
     const airtimePayload = {
       network: String(network).toUpperCase(),
       amount: amountNum,
@@ -340,19 +154,19 @@ exports.buyAirtime = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: "Airtime purchase successful",
+        message: "Airtime purchase successful.",
         data: {
           transactionId: transactionDoc ? transactionDoc.transactionId : transactionId,
           newBalance: user.walletBalance,
         },
       });
     } else {
-      throw new Error(resData?.message || "Marketplace declined transaction.");
+      throw new Error(resData?.message || "Marketplace gateway declined the transaction.");
     }
   } catch (error) {
-    console.error("Airtime Error:", error.response?.data || error.message);
+    console.error("Airtime Purchase Error:", error.response?.data || error.message);
 
-    // AUTO-REFUND NAN TAKE
+    // AUTO-REFUND ON FAILURE
     if (isDeducted && userId) {
       try {
         const refundUser = await User.findById(userId);
@@ -370,13 +184,13 @@ exports.buyAirtime = async (req, res) => {
           });
         }
       } catch (refundErr) {
-        console.error("Refund failed:", refundErr.message);
+        console.error("Refund processing failed:", refundErr.message);
       }
     }
 
     return res.status(400).json({
       success: false,
-      message: error.response?.data?.message || error.message || "Airtime processing failed",
+      message: error.response?.data?.message || error.message || "Airtime processing failed.",
     });
   }
 };
@@ -392,12 +206,12 @@ exports.nimcValidation = async (req, res) => {
 
   try {
     const { nin } = req.body;
-    const userId = req.user._id || req.user.id;
+    const userId = req.user?._id || req.user?.id;
 
     if (!nin) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({ success: false, message: "Please provide NIN" });
+      return res.status(400).json({ success: false, message: "Please provide NIN." });
     }
 
     const cost = 1000;
@@ -405,7 +219,7 @@ exports.nimcValidation = async (req, res) => {
     if (!user) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({ success: false, message: "User not found." });
     }
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
@@ -415,7 +229,7 @@ exports.nimcValidation = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: `Insufficient balance (₦1,000 required, Available: ₦${currentBal})`,
+        message: `Insufficient balance (₦1,000 required, Available: ₦${currentBal}).`,
       });
     }
 
@@ -433,7 +247,7 @@ exports.nimcValidation = async (req, res) => {
     let response;
     try {
       response = await axios.post(
-        `${AYAX_API_BASE_URL}/api/v1/verification/nimc`,
+        `${AYAX_API_BASE_URL}/verification/nimc`,
         { nin, ref_id: reference },
         {
           headers: getMarketplaceHeaders(req.headers.authorization),
@@ -441,7 +255,7 @@ exports.nimcValidation = async (req, res) => {
         }
       );
     } catch (apiError) {
-      console.error("Ayax NIMC API Error:", apiError.message);
+      console.error("NIMC API Error:", apiError.response?.data || apiError.message);
 
       const refundUser = await User.findById(userId);
       if (refundUser) {
@@ -452,12 +266,18 @@ exports.nimcValidation = async (req, res) => {
 
       return res.status(502).json({
         success: false,
-        message: "Failed to connect to Ayax NIMC verification gateway. Money refunded.",
+        message: "Failed to connect to NIMC verification gateway. Money refunded.",
       });
     }
 
     const resData = response.data;
-    if (resData && (resData.status === true || resData.status === "success" || resData.code === 200 || resData.code === "200")) {
+    if (
+      resData &&
+      (resData.status === true ||
+        resData.status === "success" ||
+        resData.code === 200 ||
+        resData.code === "200")
+    ) {
       const slipDetails = resData.data || resData.slip_details;
 
       await NIMCRequest.create({
@@ -483,13 +303,6 @@ exports.nimcValidation = async (req, res) => {
         details: { nin, service: "Ayax NIMC Verification" },
       });
 
-      await Activity.create({
-        staffId: user._id,
-        action: "NIMC_VALIDATION",
-        details: `Successfully verified NIN: ${nin}`,
-        targetUser: user._id,
-      });
-
       return res.status(200).json({
         success: true,
         data: slipDetails,
@@ -505,7 +318,7 @@ exports.nimcValidation = async (req, res) => {
 
       return res.status(400).json({
         success: false,
-        message: resData?.message || "Ayax NIMC Verification Failed. Money refunded.",
+        message: resData?.message || "NIMC Verification Failed. Money refunded.",
       });
     }
   } catch (error) {
@@ -515,7 +328,11 @@ exports.nimcValidation = async (req, res) => {
     session.endSession();
 
     console.error("NIMC Validation Error:", error);
-    return res.status(500).json({ success: false, message: "NIMC service error", error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "NIMC service error",
+      error: error.message,
+    });
   }
 };
 
@@ -526,16 +343,24 @@ exports.nimcValidation = async (req, res) => {
  */
 exports.getTransactionHistory = async (req, res) => {
   try {
-    const userId = req.user._id || req.user.id;
+    const userId = req.user?._id || req.user?.id;
     const transactions = await Transaction.find({ user: userId })
       .sort({ createdAt: -1 })
       .limit(50)
       .lean();
 
-    return res.status(200).json({ success: true, count: transactions.length, data: transactions });
+    return res.status(200).json({
+      success: true,
+      count: transactions.length,
+      data: transactions,
+    });
   } catch (error) {
     console.error("Get Transaction History Error:", error);
-    return res.status(500).json({ success: false, message: "Could not fetch history", error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Could not fetch history.",
+      error: error.message,
+    });
   }
 };
 
@@ -552,7 +377,7 @@ exports.getTransactionStatus = async (req, res) => {
     }).lean();
 
     if (!transaction) {
-      return res.status(404).json({ success: false, message: "Transaction not found" });
+      return res.status(404).json({ success: false, message: "Transaction not found." });
     }
 
     return res.status(200).json({
@@ -568,14 +393,31 @@ exports.getTransactionStatus = async (req, res) => {
 
 // Utility Placeholders (Electricity & Cable TV)
 exports.verifyMeter = async (req, res) => {
-  return res.status(200).json({ success: true, message: "Meter verification placeholder", customerName: "Test Customer" });
+  return res.status(200).json({
+    success: true,
+    message: "Meter verification placeholder",
+    customerName: "Test Customer",
+  });
 };
+
 exports.purchaseElectricity = async (req, res) => {
-  return res.status(400).json({ success: false, message: "Electricity purchase logic coming soon" });
+  return res.status(400).json({
+    success: false,
+    message: "Electricity purchase service is temporarily unavailable.",
+  });
 };
+
 exports.verifySmartCard = async (req, res) => {
-  return res.status(200).json({ success: true, message: "SmartCard verification placeholder", customerName: "Test Customer" });
+  return res.status(200).json({
+    success: true,
+    message: "SmartCard verification placeholder",
+    customerName: "Test Customer",
+  });
 };
+
 exports.purchaseCable = async (req, res) => {
-  return res.status(400).json({ success: false, message: "Cable purchase logic coming soon" });
+  return res.status(400).json({
+    success: false,
+    message: "Cable TV purchase service is temporarily unavailable.",
+  });
 };
