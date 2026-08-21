@@ -1,28 +1,40 @@
 const express = require("express");
 const router = express.Router();
-const auth = require("../middlewares/auth.middleware"); // ko kuma inda auth middleware yake
-const dataController = require("../controllers/vtuController"); // ko "../controllers/dataController"
+
+// Shigo da ingantaccen middleware da controller
+const { protect } = require("../middleware/authMiddleware");
+const vtuController = require("../controllers/vtuController");
 const dataPlanController = require("../controllers/dataPlanController");
 
-/* ======================================================
-   PUBLIC / USER DATA ROUTES
-====================================================== */
+// Helper don kiyaye undefined errors
+const safeData = (handlerName) => {
+  return (req, res, next) => {
+    if (typeof vtuController[handlerName] === "function") {
+      return vtuController[handlerName](req, res, next);
+    }
+    return res.status(501).json({
+      success: false,
+      message: `Data handler '${handlerName}' not implemented in vtuController`,
+    });
+  };
+};
 
-// Dauko plans masu aiki (Active Plans)
+/* ======================================================
+   PUBLIC / USER DATA PLANS
+====================================================== */
 router.get("/plans", (req, res, next) => {
-  if (typeof dataPlanController.getPlans === "function") {
+  if (typeof dataPlanController?.getPlans === "function") {
     return dataPlanController.getPlans(req, res, next);
   }
   return res.status(404).json({ success: false, message: "Plans handler not found" });
 });
 
 /* ======================================================
-   AUTHENTICATED ROUTES (Bayan Login)
+   AUTHENTICATED DATA PURCHASE
 ====================================================== */
-router.use(auth);
+router.use(protect);
 
-// Siyan Data (yana karbar /buy ko kai tsaye a root POST /)
-router.post("/buy", dataController.buyData);
-router.post("/", dataController.buyData);
+router.post("/buy", safeData("buyData"));
+router.post("/", safeData("buyData"));
 
 module.exports = router;
