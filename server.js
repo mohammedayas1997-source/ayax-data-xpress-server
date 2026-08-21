@@ -77,6 +77,8 @@ const bvnRoutes = require("./routes/bvnRoutes");
 const superAdminRoutes = require("./routes/superAdminRoutes");
 const validationRoutes = require("./routes/ninRoutes");
 const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
+const dataRoutes = require("./routes/data.routes");
+const vtuRoutes = require("./routes/vtu.routes");
 
 // --- INJECTING MIDDLEWARE & USER MODEL ---
 const User = require("./models/User");
@@ -94,7 +96,7 @@ app.use("/api/v1/wallet", walletRoutes);
 
 // VTU & Purchase Route Aliases
 app.use("/api/v1/vtu", vtuRoutes);
-app.use("/api/v1/data", vtuRoutes);
+app.use("/api/v1/data", dataRoutes);
 app.use("/api/v1/airtime", vtuRoutes);
 app.use("/api/v1/bills", vtuRoutes);
 

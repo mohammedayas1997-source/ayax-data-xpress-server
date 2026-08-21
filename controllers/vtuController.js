@@ -34,232 +34,186 @@ const getMarketplaceHeaders = (userAuthHeader) => {
 };
 
 /**
- * @desc    Purchase Mobile Data with Ayax APIs & Target Tracking
- * @route   POST /api/v1/vtu/buy-data, POST /api/v1/data
+ * @desc    Purchase Mobile Airtime via Ayax APIs (With Safe Balance & Auto-Refund)
+ * @route   POST /api/v1/vtu/buy-airtime, POST /api/v1/airtime
  * @access  Private
  */
-exports.buyData = async (req, res) => {
-  const session = await User.startSession();
-  session.startTransaction();
+exports.buyAirtime = async (req, res) => {
+  const userId = req.user?._id || req.user?.id;
+  const { network, phoneNumber, phone, amount, pin } = req.body;
+  const targetPhone = phoneNumber || phone;
+  const amountNum = Number(amount);
+
+  let isDeducted = false;
+  let reference = `AYAX-AIR-${Date.now()}`;
+  let transactionDoc = null;
 
   try {
-    const { network, planId, plan, phoneNumber, phone } = req.body;
-    const targetPhone = phoneNumber || phone;
-    const targetPlan = planId || plan;
-    const userId = req.user._id || req.user.id;
-
-    if (!network || !targetPlan || !targetPhone) {
-      await session.abortTransaction();
-      session.endSession();
+    if (!network || !targetPhone || !amountNum || amountNum <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Please provide network, planId, and phoneNumber",
+        message: "Please provide valid network, phoneNumber, and amount",
       });
     }
 
-    const [user, dataPlanDoc] = await Promise.all([
-      User.findById(userId).session(session),
-      DataPlan.findOne({
-        $or: [
-          { planCode: String(targetPlan) },
-          { planId: String(targetPlan) },
-          { _id: targetPlan },
-        ],
-      }),
-    ]);
-
+    // 1. Nemo User
+    const user = await User.findById(userId).select("+transactionPin +pin +walletBalance balance");
     if (!user) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    const finalPrice = dataPlanDoc
-      ? user.role === "agent"
-        ? dataPlanDoc.agentPrice
-        : dataPlanDoc.userPrice
-      : Number(req.body.amount || 0);
+    // 2. Tantance PIN
+    if (pin) {
+      let isPinValid = false;
+      if (user.matchPin) {
+        isPinValid = await user.matchPin(pin);
+      } else if (user.transactionPin) {
+        isPinValid = String(user.transactionPin) === String(pin);
+      } else if (user.pin) {
+        isPinValid = String(user.pin) === String(pin);
+      } else {
+        isPinValid = pin === "0000";
+      }
 
-    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
-
-    if (finalPrice <= 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ success: false, message: "Invalid plan pricing" });
+      if (!isPinValid) {
+        return res.status(400).json({
+          success: false,
+          message: "Security Error: Invalid Transaction PIN",
+        });
+      }
     }
 
-    if (currentBal < finalPrice) {
-      await session.abortTransaction();
-      session.endSession();
+    // 3. Tantance Balance
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
+    if (currentBal < amountNum) {
       return res.status(400).json({
         success: false,
-        message: `Insufficient wallet balance. Required: ₦${finalPrice}, Available: ₦${currentBal}`,
+        message: `Kudinka bai isa ba. Ana buƙatar: ₦${amountNum}, kana da: ₦${currentBal}`,
       });
     }
 
-    const transactionId = `DATA${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    const reference = `AYAX-DATA-${Date.now()}`;
-
-    // 1. Cire kudi
-    const newBal = Number((currentBal - finalPrice).toFixed(2));
+    // 4. Cire Kudi a Wallet
+    const newBal = Number((currentBal - amountNum).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
-    await user.save({ session });
+    await user.save();
+    isDeducted = true; // Mun tabbatar an cire kudi
 
-    // 2. Ajiye Transaction
-    const planLabel = dataPlanDoc?.planLabel || `${network} Data Plan`;
-    const transaction = new Transaction({
-      user: user._id,
+    // 5. Ajiye Transaction History (Pending)
+    const transactionId = `AIR${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    transactionDoc = await Transaction.create({
+      user: userId,
       transactionId,
       reference,
-      type: "data",
-      category: "data",
-      amount: finalPrice,
+      type: "airtime",
+      category: "airtime",
+      amount: amountNum,
       oldBalance: currentBal,
       newBalance: newBal,
       phoneNumber: targetPhone,
       status: "pending",
-      details: `Ayax Data Purchase: ${planLabel} for ${targetPhone}`,
+      details: `Ayax Airtime: ₦${amountNum} for ${targetPhone}`,
     });
-    await transaction.save({ session });
 
-    await session.commitTransaction();
-    session.endSession();
-
-    // 3. Kira API Gateway
-    let response;
-    const requestPayload = {
+    // 6. Kira Ayax API Marketplace
+    const airtimePayload = {
       network: String(network).toUpperCase(),
-      plan: targetPlan,
-      planId: targetPlan,
+      amount: amountNum,
       phone: targetPhone,
       phoneNumber: targetPhone,
-      amount: finalPrice,
       ref_id: reference,
       reference: reference,
     };
 
-    const requestHeaders = getMarketplaceHeaders(req.headers.authorization);
+    const airtimeHeaders = getMarketplaceHeaders(req.headers.authorization);
 
+    let response;
     try {
-      try {
-        response = await axios.post(
-          `${AYAX_API_BASE_URL}/api/v1/data/buy`,
-          requestPayload,
-          { headers: requestHeaders, timeout: 35000 }
-        );
-      } catch (err1) {
-        if (err1.response?.status === 404) {
-          response = await axios.post(
-            `${AYAX_API_BASE_URL}/api/v1/vtu/data`,
-            requestPayload,
-            { headers: requestHeaders, timeout: 35000 }
-          );
-        } else {
-          throw err1;
-        }
-      }
-    } catch (apiError) {
-      console.error("Ayax Data API Error:", apiError.response?.status, apiError.response?.data || apiError.message);
-
-      // Refund
-      const refundUser = await User.findById(userId);
-      if (refundUser) {
-        refundUser.walletBalance = Number((refundUser.walletBalance + finalPrice).toFixed(2));
-        if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
-        await refundUser.save();
-      }
-
-      await Transaction.findOneAndUpdate(
-        { reference },
-        { status: "failed", refundReason: "Gateway connection error", details: "Failed & Refunded due to gateway error" }
+      response = await axios.post(
+        `${AYAX_API_BASE_URL}/api/v1/airtime/buy`,
+        airtimePayload,
+        { headers: airtimeHeaders, timeout: 40000 }
       );
-
-      return res.status(502).json({
-        success: false,
-        message: "Failed to connect to Ayax data provider. Money refunded.",
-        error: apiError.response?.data?.message || apiError.message,
-      });
+    } catch (apiErr) {
+      console.error("Marketplace Call Failed:", apiErr.response?.data || apiErr.message);
+      throw new Error(apiErr.response?.data?.message || "Kuskure wajen hadawa da uwar garke (Marketplace Gateway)");
     }
 
-    const resData = response.data;
+    const resData = response?.data;
     const isSuccessful =
       resData &&
-      (resData.status === true ||
+      (resData.success === true ||
+        resData.status === true ||
         resData.status === "success" ||
         resData.code === 200 ||
-        resData.code === "200" ||
-        resData.success === true);
+        resData.code === "200");
 
     if (isSuccessful) {
-      await Transaction.findOneAndUpdate(
-        { reference },
-        { status: "success", details: `Success: ${resData.message || planLabel}` }
-      );
-
-      if (user.role === "agent" && user.assignedSupervisor) {
-        await Sale.create({
-          agentId: user._id,
-          supervisorId: user.assignedSupervisor,
-          dataAmountGB: Number(dataPlanDoc?.sizeGB) || 0,
-          planName: planLabel,
-          amount: finalPrice,
-          transactionRef: transaction._id,
+      // An yi nasara
+      if (transactionDoc) {
+        await Transaction.findByIdAndUpdate(transactionDoc._id, {
+          status: "success",
+          details: `Success: ₦${amountNum} airtime sent to ${targetPhone}`,
         });
       }
 
-      await Activity.create({
-  user: user._id, // <-- WANNAN SHINE FILIN DA AKE BUKATA!
-  staffId: user._id,
-  action: "BUY_AIRTIME",
-  details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
-  targetUser: user._id,
-}).catch((err) => console.warn("Activity log error:", err.message));
-
-      await Notification.create({
-        recipient: user._id,
-        title: "Data Purchase Successful",
-        message: `Successfully sent ${planLabel} to ${targetPhone}. Amount: ₦${finalPrice}`,
-        type: "vtu",
-      });
+      // Ajiye Activity tare da 'user' field
+      // A cikin buyAirtime:
+try {
+  if (typeof Activity !== "undefined") {
+    await Activity.create({
+      user: userId || user._id,       // <-- WANNAN LAYIN SHI NE MAFITA
+      staffId: userId || user._id,
+      action: "BUY_AIRTIME",
+      details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
+      targetUser: userId || user._id,
+    });
+  }
+} catch (actErr) {
+  // Ko da Activity ya gaza, kada ya hana transaction wucewa
+  console.warn("Activity log skipped:", actErr.message);
+}
 
       return res.status(200).json({
         success: true,
-        message: `Successfully sent ${planLabel} to ${targetPhone}`,
+        message: "Airtime purchase successful",
         data: {
-          transactionId: transaction.transactionId,
+          transactionId: transactionDoc ? transactionDoc.transactionId : transactionId,
           newBalance: user.walletBalance,
         },
       });
     } else {
-      const refundUser = await User.findById(userId);
-      if (refundUser) {
-        refundUser.walletBalance = Number((refundUser.walletBalance + finalPrice).toFixed(2));
-        if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
-        await refundUser.save();
-      }
-
-      await Transaction.findOneAndUpdate(
-        { reference },
-        { status: "failed", refundReason: resData?.message || "Provider declined", details: "Declined & Refunded" }
-      );
-
-      return res.status(400).json({
-        success: false,
-        message: resData?.message || "Ayax data provider declined the transaction. Money refunded.",
-      });
+      throw new Error(resData?.message || "Marketplace declined transaction.");
     }
   } catch (error) {
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
-    session.endSession();
+    console.error("Buy Airtime Internal Error:", error);
 
-    console.error("Buy Data Internal Error:", error);
-    return res.status(500).json({
+    // AUTO-REFUND: Idan an riga an cire kudi kuma aka samu wani error, a mayar da su nan take!
+    if (isDeducted && userId) {
+      try {
+        const refundUser = await User.findById(userId);
+        if (refundUser) {
+          refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
+          if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
+          await refundUser.save();
+          console.log(`✓ Auto-Refunded: ₦${amountNum} to user ${userId}`);
+        }
+
+        if (transactionDoc) {
+          await Transaction.findByIdAndUpdate(transactionDoc._id, {
+            status: "failed",
+            refundReason: error.message,
+            details: `Failed & Refunded: ${error.message}`,
+          });
+        }
+      } catch (refundErr) {
+        console.error("Critical: Failed to auto-refund:", refundErr.message);
+      }
+    }
+
+    return res.status(400).json({
       success: false,
-      message: "Internal transaction error",
-      error: error.message,
+      message: error.message || "Airtime processing error",
     });
   }
 };

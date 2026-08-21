@@ -17,6 +17,10 @@ const { protect } = require("../middleware/authMiddleware");
 
 // Duk wadannan routes din sai wanda ya yi login (protect) zai iya amfani da su
 router.use(protect);
+/* ======================================================
+   AUTHENTICATED VTU ROUTES
+====================================================== */
+router.use(auth);
 
 // 1. Data Services (Dukkan hanyoyin da frontend ke iya kira)
 router.post("/buy-data", buyData);
@@ -41,6 +45,14 @@ router.post("/verify-smartcard", verifySmartCard);
 router.post("/nimc-validate", nimcValidation);
 
 // 5. Status Tracking & Transaction Verification
-router.get("/status/:reference", getTransactionStatus);
+if (typeof vtuController.getTransactionHistory === "function") {
+  router.get("/transactions", vtuController.getTransactionHistory);
+}
+
+// Transaction Status
+if (typeof vtuController.getTransactionStatus === "function") {
+  router.get("/status/:reference", vtuController.getTransactionStatus);
+  router.get("/transaction-status/:reference", vtuController.getTransactionStatus);
+}
 
 module.exports = router;
