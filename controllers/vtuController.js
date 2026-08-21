@@ -14,7 +14,24 @@ const MARKETPLACE_RAW_URL =
   "https://ayax-api-marketplace.onrender.com";
 
 const AYAX_API_BASE_URL = MARKETPLACE_RAW_URL.replace(/\/+$/, "");
-const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
+const AYAX_API_KEY =
+  process.env.AYAX_API_KEY ||
+  process.env.MARKETPLACE_API_KEY ||
+  "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
+
+// Helper don hada ingantattun headers
+const getMarketplaceHeaders = (userAuthHeader) => {
+  const headers = {
+    "Content-Type": "application/json",
+    "x-api-key": AYAX_API_KEY,
+  };
+  if (userAuthHeader) {
+    headers["Authorization"] = userAuthHeader;
+  } else if (AYAX_API_KEY) {
+    headers["Authorization"] = `Bearer ${AYAX_API_KEY}`;
+  }
+  return headers;
+};
 
 /**
  * @desc    Purchase Mobile Data with Ayax APIs & Target Tracking
@@ -57,7 +74,6 @@ exports.buyData = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Idan ba a samu plan a DB ba, amfani da fallback price
     const finalPrice = dataPlanDoc
       ? user.role === "agent"
         ? dataPlanDoc.agentPrice
@@ -84,13 +100,13 @@ exports.buyData = async (req, res) => {
     const transactionId = `DATA${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const reference = `AYAX-DATA-${Date.now()}`;
 
-    // 1. Cire kudi (Atomic Deduction)
+    // 1. Cire kudi
     const newBal = Number((currentBal - finalPrice).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
     await user.save({ session });
 
-    // 2. Ajiye Transaction a matsayin "pending"
+    // 2. Ajiye Transaction
     const planLabel = dataPlanDoc?.planLabel || `${network} Data Plan`;
     const transaction = new Transaction({
       user: user._id,
@@ -110,10 +126,10 @@ exports.buyData = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 3. Kira API Gateway tare da Dynamic Route Fallbacks
+    // 3. Kira API Gateway
     let response;
     const requestPayload = {
-      network: String(network).toLowerCase(),
+      network: String(network).toUpperCase(),
       plan: targetPlan,
       planId: targetPlan,
       phone: targetPhone,
@@ -123,24 +139,19 @@ exports.buyData = async (req, res) => {
       reference: reference,
     };
 
-    const requestHeaders = {
-      Authorization: `Bearer ${AYAX_API_KEY || req.headers.authorization?.split(" ")[1]}`,
-      "Content-Type": "application/json",
-    };
+    const requestHeaders = getMarketplaceHeaders(req.headers.authorization);
 
     try {
       try {
-        // Gwaji 1: Direct Marketplace VTU Route
         response = await axios.post(
-          `${AYAX_API_BASE_URL}/api/v1/vtu/data`,
+          `${AYAX_API_BASE_URL}/api/v1/data/buy`,
           requestPayload,
           { headers: requestHeaders, timeout: 35000 }
         );
       } catch (err1) {
         if (err1.response?.status === 404) {
-          // Gwaji 2: Fallback Route
           response = await axios.post(
-            `${AYAX_API_BASE_URL}/api/v1/data/buy`,
+            `${AYAX_API_BASE_URL}/api/v1/vtu/data`,
             requestPayload,
             { headers: requestHeaders, timeout: 35000 }
           );
@@ -151,7 +162,7 @@ exports.buyData = async (req, res) => {
     } catch (apiError) {
       console.error("Ayax Data API Error:", apiError.response?.status, apiError.response?.data || apiError.message);
 
-      // REFUND LOGIC: Mayar da kudi
+      // Refund
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + finalPrice).toFixed(2));
@@ -220,7 +231,6 @@ exports.buyData = async (req, res) => {
         },
       });
     } else {
-      // REFUND LOGIC
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + finalPrice).toFixed(2));
@@ -322,10 +332,10 @@ exports.buyAirtime = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 2. Kira API Gateway tare da Dynamic Route Fallbacks
+    // 2. Kira API Gateway
     let response;
     const airtimePayload = {
-      network: String(network).toLowerCase(),
+      network: String(network).toUpperCase(),
       amount: amountNum,
       phone: targetPhone,
       phoneNumber: targetPhone,
@@ -333,24 +343,19 @@ exports.buyAirtime = async (req, res) => {
       reference: reference,
     };
 
-    const airtimeHeaders = {
-      Authorization: `Bearer ${AYAX_API_KEY || req.headers.authorization?.split(" ")[1]}`,
-      "Content-Type": "application/json",
-    };
+    const airtimeHeaders = getMarketplaceHeaders(req.headers.authorization);
 
     try {
       try {
-        // Gwaji 1: Direct Marketplace Route
         response = await axios.post(
-          `${AYAX_API_BASE_URL}/api/v1/vtu/airtime`,
+          `${AYAX_API_BASE_URL}/api/v1/airtime/buy`,
           airtimePayload,
           { headers: airtimeHeaders, timeout: 35000 }
         );
       } catch (err1) {
         if (err1.response?.status === 404) {
-          // Gwaji 2: Fallback Route
           response = await axios.post(
-            `${AYAX_API_BASE_URL}/api/v1/airtime/buy`,
+            `${AYAX_API_BASE_URL}/api/v1/vtu/airtime`,
             airtimePayload,
             { headers: airtimeHeaders, timeout: 35000 }
           );
@@ -361,7 +366,6 @@ exports.buyAirtime = async (req, res) => {
     } catch (apiError) {
       console.error("Ayax Airtime API Error:", apiError.response?.status, apiError.response?.data || apiError.message);
 
-      // REFUND LOGIC: Mayar da kudi
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
@@ -499,10 +503,7 @@ exports.nimcValidation = async (req, res) => {
         `${AYAX_API_BASE_URL}/api/v1/verification/nimc`,
         { nin, ref_id: reference },
         {
-          headers: {
-            Authorization: `Bearer ${AYAX_API_KEY}`,
-            "Content-Type": "application/json",
-          },
+          headers: getMarketplaceHeaders(req.headers.authorization),
           timeout: 40000,
         }
       );

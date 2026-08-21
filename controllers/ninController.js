@@ -4,10 +4,19 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const axios = require("axios");
 
-const AYAX_API_BASE_URL =
+// 1. Tabbatar da Ingantaccen URL ba tare da maimaita /api/v1 ba
+const RAW_URL =
   process.env.AYAX_API_BASE_URL ||
-  "https://ayax-api-marketplace.onrender.com/api/v1";
-const AYAX_API_KEY = process.env.AYAX_API_KEY;
+  process.env.MARKETPLACE_API_URL ||
+  "https://ayax-api-marketplace.onrender.com";
+
+const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
+
+const AYAX_API_KEY =
+  process.env.AYAX_API_KEY ||
+  process.env.MARKETPLACE_API_KEY ||
+  "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
 
 // @desc    User submits a new Validation request via Ayax APIs
 // @route   POST /api/v1/validation/submit
@@ -18,7 +27,6 @@ exports.submitValidation = async (req, res) => {
 
   try {
     const { type, nin, pin, amount, formData } = req.body;
-
     const userId = req.user ? req.user._id || req.user.id : req.body.userId;
 
     if (!type || !nin || !pin || amount === undefined || !userId) {
@@ -33,6 +41,7 @@ exports.submitValidation = async (req, res) => {
     const user = await User.findById(userId)
       .select("+pin +walletBalance balance")
       .session(session);
+
     if (!user) {
       await session.abortTransaction();
       session.endSession();
@@ -47,7 +56,7 @@ exports.submitValidation = async (req, res) => {
     if (user.matchPin) {
       isPinValid = await user.matchPin(pin);
     } else if (user.pin) {
-      isPinValid = user.pin === pin;
+      isPinValid = String(user.pin) === String(pin);
     } else {
       isPinValid = pin === "0000";
     }
@@ -62,8 +71,7 @@ exports.submitValidation = async (req, res) => {
     }
 
     // 2. Duba Balance
-    const currentBal =
-      user.walletBalance !== undefined ? user.walletBalance : user.balance || 0;
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const amountNum = Number(amount);
 
     if (currentBal < amountNum) {
@@ -95,6 +103,7 @@ exports.submitValidation = async (req, res) => {
       oldBalance: currentBal,
       newBalance: newBal,
       type: "validation_service",
+      category: "identity",
       details: `Payment for Validation Service (${type})`,
       status: "pending",
     });
@@ -105,7 +114,7 @@ exports.submitValidation = async (req, res) => {
       user: userId,
       userId,
       type,
-      nin,
+      nin: String(nin).trim(),
       amount: amountNum,
       status: "pending",
       transactionId,
@@ -117,34 +126,40 @@ exports.submitValidation = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 6. Kira Ayax APIs Verification Gateway tare da x-api-key
+    // 6. Kira Ayax APIs Verification Gateway tare da Dynamic Headers
     let response;
+    const requestPayload = {
+      type,
+      nin: String(nin).trim(),
+      reference,
+      ref_id: reference,
+      amount: amountNum,
+      formData: formData || {},
+    };
+
+    const requestHeaders = {
+      "Content-Type": "application/json",
+      "x-api-key": AYAX_API_KEY,
+      Authorization: `Bearer ${AYAX_API_KEY}`,
+    };
+
     try {
       response = await axios.post(
         `${AYAX_API_BASE_URL}/identity/validation/process`,
+        requestPayload,
         {
-          type,
-          nin: String(nin).trim(),
-          reference,
-          amount: amountNum,
-          formData: formData || {},
-        },
-        {
-          headers: {
-            "x-api-key": AYAX_API_KEY,
-            Authorization: `Bearer ${AYAX_API_KEY}`,
-            "Content-Type": "application/json",
-          },
+          headers: requestHeaders,
           timeout: 40000,
         }
       );
     } catch (apiError) {
       console.error(
         "Ayax Validation API Error:",
+        apiError.response?.status,
         apiError.response?.data || apiError.message
       );
 
-      // Auto Refund
+      // Auto Refund idan kiran ya gaza
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number(
@@ -160,7 +175,11 @@ exports.submitValidation = async (req, res) => {
 
       await Transaction.findOneAndUpdate(
         { reference },
-        { status: "failed", refundReason: errMsg, details: `Failed & Refunded: ${errMsg}` }
+        {
+          status: "failed",
+          refundReason: errMsg,
+          details: `Failed & Refunded: ${errMsg}`,
+        }
       );
 
       await ValidationRequest.findOneAndUpdate(
@@ -179,6 +198,8 @@ exports.submitValidation = async (req, res) => {
       resData &&
       (resData.success === true ||
         resData.status === "success" ||
+        resData.status === true ||
+        resData.code === 200 ||
         resData.code === "200");
 
     if (isSuccessful) {
@@ -204,7 +225,7 @@ exports.submitValidation = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: "An sarrafa bukatarka cikin nasara",
+        message: "An sarrafa buƙatarku cikin nasara",
         data: {
           request: newRequest,
           providerResponse: resData.data || resData,
@@ -212,6 +233,7 @@ exports.submitValidation = async (req, res) => {
         newBalance: user.walletBalance,
       });
     } else {
+      // Auto Refund idan Gateway ta ki karba
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number(
@@ -226,7 +248,7 @@ exports.submitValidation = async (req, res) => {
         { reference },
         {
           status: "failed",
-          refundReason: resData.message || "Provider declined",
+          refundReason: resData?.message || "Provider declined",
         }
       );
 
@@ -238,7 +260,7 @@ exports.submitValidation = async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          resData.message ||
+          resData?.message ||
           "Ayax validation service declined the request. Money refunded.",
       });
     }

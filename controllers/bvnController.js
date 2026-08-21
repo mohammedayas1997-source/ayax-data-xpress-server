@@ -1,10 +1,26 @@
 const DataPlan = require("../models/DataPlan");
 const axios = require("axios");
 
-const AYAX_API_BASE_URL =
+// 1. Tabbatar da Ingantaccen URL ba tare da maimaita /api/v1 ba
+const RAW_URL =
   process.env.AYAX_API_BASE_URL ||
-  "https://ayax-api-marketplace.onrender.com/api/v1";
-const AYAX_API_KEY = process.env.AYAX_API_KEY;
+  process.env.MARKETPLACE_API_URL ||
+  "https://ayax-api-marketplace.onrender.com";
+
+const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
+
+const AYAX_API_KEY =
+  process.env.AYAX_API_KEY ||
+  process.env.MARKETPLACE_API_KEY ||
+  "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
+
+// Helper don tsara Headers
+const getHeaders = () => ({
+  "Content-Type": "application/json",
+  "x-api-key": AYAX_API_KEY,
+  Authorization: `Bearer ${AYAX_API_KEY}`,
+});
 
 // 1. Get all plans for admin dashboard
 const getAdminPlans = async (req, res) => {
@@ -91,17 +107,26 @@ const setPlanPrice = async (req, res) => {
 // 3. Sync Plans from Ayax API Marketplace
 const syncAyaxPlans = async (req, res) => {
   try {
-    const response = await axios.get(`${AYAX_API_BASE_URL}/data/plans`, {
-      headers: {
-        "x-api-key": AYAX_API_KEY,
-        Authorization: `Bearer ${AYAX_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      timeout: 30000,
-    });
+    let response;
+    try {
+      response = await axios.get(`${AYAX_API_BASE_URL}/data/plans`, {
+        headers: getHeaders(),
+        timeout: 30000,
+      });
+    } catch (err) {
+      if (err.response?.status === 404) {
+        response = await axios.get(`${AYAX_API_BASE_URL}/plans`, {
+          headers: getHeaders(),
+          timeout: 30000,
+        });
+      } else {
+        throw err;
+      }
+    }
 
     const resData = response.data;
-    const plansList = resData.data || resData.plans || resData;
+    const plansList =
+      resData?.data || resData?.plans || (Array.isArray(resData) ? resData : []);
 
     if (!Array.isArray(plansList) || plansList.length === 0) {
       return res.status(400).json({
@@ -147,8 +172,12 @@ const syncAyaxPlans = async (req, res) => {
       message: `Successfully synchronized ${syncedCount} plans from Ayax APIs`,
     });
   } catch (error) {
-    console.error("Sync Plans Error:", error.response?.data || error.message);
-    return res.status(500).json({
+    console.error(
+      "Sync Plans Error:",
+      error.response?.status,
+      error.response?.data || error.message
+    );
+    return res.status(error.response?.status || 500).json({
       success: false,
       message: "Failed to sync plans from Ayax APIs",
       error: error.response?.data?.message || error.message,

@@ -5,10 +5,26 @@ const NIMCRequest = require("../models/NIMCRequest");
 const NIMCPrice = require("../models/NIMCPrice");
 const Activity = require("../models/Activity");
 
-const AYAX_API_BASE_URL =
+// 1. Tabbatar da Ingantaccen URL ba tare da maimaita /api/v1 ba
+const RAW_URL =
   process.env.AYAX_API_BASE_URL ||
-  "https://ayax-api-marketplace.onrender.com/api/v1";
-const AYAX_API_KEY = process.env.AYAX_API_KEY;
+  process.env.MARKETPLACE_API_URL ||
+  "https://ayax-api-marketplace.onrender.com";
+
+const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
+
+const AYAX_API_KEY =
+  process.env.AYAX_API_KEY ||
+  process.env.MARKETPLACE_API_KEY ||
+  "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
+
+// Helper don tsara Headers
+const getHeaders = () => ({
+  "Content-Type": "application/json",
+  "x-api-key": AYAX_API_KEY,
+  Authorization: `Bearer ${AYAX_API_KEY}`,
+});
 
 // @desc    User submits a new NIMC modification or service request via Ayax APIs
 // @route   POST /api/v1/nimc/request-modification (ko /api/v1/nimc/submit)
@@ -60,8 +76,10 @@ exports.submitNIMCRequest = async (req, res) => {
     let isPinValid = false;
     if (user.matchPin) {
       isPinValid = await user.matchPin(pin);
+    } else if (user.transactionPin) {
+      isPinValid = String(user.transactionPin) === String(pin);
     } else if (user.pin) {
-      isPinValid = user.pin === pin;
+      isPinValid = String(user.pin) === String(pin);
     } else {
       isPinValid = pin === "0000";
     }
@@ -73,8 +91,7 @@ exports.submitNIMCRequest = async (req, res) => {
     }
 
     // 3. Check for sufficient wallet balance
-    const currentBal =
-      user.walletBalance !== undefined ? user.walletBalance : user.balance || 0;
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     if (currentBal < amountToCharge) {
       await session.abortTransaction();
       session.endSession();
@@ -102,6 +119,7 @@ exports.submitNIMCRequest = async (req, res) => {
       oldBalance: currentBal,
       newBalance: newBal,
       type: "nimc_service",
+      category: "identity",
       details: `Payment for NIMC Service (${finalServiceType})`,
       status: "pending",
     });
@@ -111,7 +129,7 @@ exports.submitNIMCRequest = async (req, res) => {
     const request = new NIMCRequest({
       user: user._id,
       serviceType: finalServiceType,
-      ninNumber: finalNin,
+      ninNumber: String(finalNin).trim(),
       formData: finalDetails,
       amount: amountToCharge,
       status: "pending",
@@ -123,7 +141,7 @@ exports.submitNIMCRequest = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    // 7. Tura buƙata zuwa Ayax APIs NIMC Gateway tare da x-api-key
+    // 7. Tura buƙata zuwa Ayax APIs NIMC Gateway
     try {
       const ayaxResponse = await axios.post(
         `${AYAX_API_BASE_URL}/identity/nimc/process`,
@@ -131,22 +149,24 @@ exports.submitNIMCRequest = async (req, res) => {
           serviceType: finalServiceType,
           nin: String(finalNin).trim(),
           reference,
+          ref_id: reference,
           details: finalDetails,
           amount: amountToCharge,
         },
         {
-          headers: {
-            "x-api-key": AYAX_API_KEY,
-            Authorization: `Bearer ${AYAX_API_KEY}`,
-            "Content-Type": "application/json",
-          },
+          headers: getHeaders(),
           timeout: 40000,
         }
       );
 
       const resData = ayaxResponse.data;
       const isSuccessful =
-        resData && (resData.success === true || resData.status === "success" || resData.code === "200");
+        resData &&
+        (resData.success === true ||
+          resData.status === "success" ||
+          resData.status === true ||
+          resData.code === 200 ||
+          resData.code === "200");
 
       if (isSuccessful) {
         await Transaction.findOneAndUpdate(
@@ -178,11 +198,11 @@ exports.submitNIMCRequest = async (req, res) => {
           newBalance: user.walletBalance,
         });
       } else {
-        throw new Error(resData.message || "Ayax NIMC service declined the request.");
+        throw new Error(resData?.message || "Ayax NIMC service declined the request.");
       }
     } catch (apiError) {
-      // REFUND LOGIC: Idan waje ya fadi ko API ta ki amincewa, a mayar wa da user kudin sa
-      console.error("Ayax NIMC API Error:", apiError.response?.data || apiError.message);
+      // REFUND LOGIC: Idan server ta fadi ko provider ya ki amincewa, a mayar wa user kudinsa
+      console.error("Ayax NIMC API Error:", apiError.response?.status, apiError.response?.data || apiError.message);
 
       const refundUser = await User.findById(user._id);
       if (refundUser) {
@@ -344,17 +364,21 @@ exports.verifyNIMC = async (req, res) => {
       `${AYAX_API_BASE_URL}/identity/nin/verify`,
       payload,
       {
-        headers: {
-          "x-api-key": AYAX_API_KEY,
-          Authorization: `Bearer ${AYAX_API_KEY}`,
-          "Content-Type": "application/json",
-        },
+        headers: getHeaders(),
         timeout: 30000,
       }
     );
 
     const resData = response.data;
-    if (resData && (resData.success === true || resData.status === "success" || resData.code === "200")) {
+    const isSuccessful =
+      resData &&
+      (resData.success === true ||
+        resData.status === "success" ||
+        resData.status === true ||
+        resData.code === 200 ||
+        resData.code === "200");
+
+    if (isSuccessful) {
       return res.status(200).json({
         success: true,
         message: "NIMC verification successful via Ayax APIs",
@@ -364,10 +388,10 @@ exports.verifyNIMC = async (req, res) => {
 
     return res.status(400).json({
       success: false,
-      message: resData.message || "NIMC Verification Failed",
+      message: resData?.message || "NIMC Verification Failed",
     });
   } catch (error) {
-    console.error("NIMC Verification Error:", error.response?.data || error.message);
+    console.error("NIMC Verification Error:", error.response?.status, error.response?.data || error.message);
     return res.status(error.response?.status || 500).json({
       success: false,
       message: error.response?.data?.message || "Kuskure wajen tantancewa daga Ayax APIs.",
