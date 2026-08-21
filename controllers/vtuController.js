@@ -157,21 +157,24 @@ exports.buyAirtime = async (req, res) => {
         });
       }
 
-      // Ajiye Activity tare da 'user' field
       // A cikin buyAirtime:
 try {
   if (typeof Activity !== "undefined") {
-    await Activity.create({
-      user: userId || user._id,       // <-- WANNAN LAYIN SHI NE MAFITA
-      staffId: userId || user._id,
-      action: "BUY_AIRTIME",
-      details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
-      targetUser: userId || user._id,
-    });
+    const actUserId = user?._id || user?.id || req.user?._id || req.user?.id;
+    
+    if (actUserId) {
+      await Activity.create({
+        user: actUserId,
+        staffId: actUserId,
+        action: "BUY_AIRTIME",
+        details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
+        targetUser: actUserId,
+      });
+    }
   }
 } catch (actErr) {
-  // Ko da Activity ya gaza, kada ya hana transaction wucewa
-  console.warn("Activity log skipped:", actErr.message);
+  // Wannan zai hana Activity error ya dakatar da sayen katin
+  console.warn("Activity logging skipped:", actErr.message);
 }
 
       return res.status(200).json({
