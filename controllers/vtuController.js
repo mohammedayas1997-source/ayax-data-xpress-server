@@ -157,24 +157,25 @@ exports.buyAirtime = async (req, res) => {
         });
       }
 
-   // Ajiye Activity Log cikin aminci
+   // Ajiye Activity Log
       try {
-        const targetUserId =
+        const validUserId =
           userId ||
           (user && (user._id || user.id)) ||
           (req.user && (req.user._id || req.user.id));
 
-        if (typeof Activity !== "undefined" && targetUserId) {
-          await Activity.create({
-            user: targetUserId,
-            staffId: targetUserId,
+        if (typeof Activity !== "undefined" && validUserId) {
+          const act = new Activity({
+            user: validUserId,
+            staffId: validUserId,
             action: "BUY_AIRTIME",
             details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
-            targetUser: targetUserId,
+            targetUser: validUserId,
           });
+          await act.save();
         }
-      } catch (actErr) {
-        // Kada ya fitar da error ko ya dakatar da aiki
+      } catch (_) {
+        // Bar shi babu komai don kada ya fito da kuskure a console
       }
       return res.status(200).json({
         success: true,
