@@ -223,57 +223,73 @@ exports.buyAirtime = async (req, res) => {
 };
 
 /**
- * @desc    Purchase Mobile Airtime via Ayax APIs
+ * @desc    Purchase Mobile Airtime via Ayax APIs (Mafi Sauki & Inganci)
  * @route   POST /api/v1/vtu/buy-airtime, POST /api/v1/airtime
- * @access  Private
  */
 exports.buyAirtime = async (req, res) => {
-  const session = await User.startSession();
-  session.startTransaction();
+  const userId = req.user?._id || req.user?.id;
+  const { network, phoneNumber, phone, amount, pin } = req.body;
+  const targetPhone = phoneNumber || phone;
+  const amountNum = Number(amount);
+
+  let isDeducted = false;
+  let reference = `AIR-${Date.now()}`;
+  let transactionDoc = null;
 
   try {
-    const { network, phoneNumber, phone, amount } = req.body;
-    const targetPhone = phoneNumber || phone;
-    const userId = req.user._id || req.user.id;
-    const amountNum = Number(amount);
-
     if (!network || !targetPhone || !amountNum || amountNum <= 0) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Please provide valid network, phoneNumber, and amount",
+        message: "Network, phone number, da amount ana bukatarsu.",
       });
     }
 
-    const user = await User.findById(userId).session(session);
+    // 1. Nemo User
+    const user = await User.findById(userId).select("+transactionPin +pin +walletBalance balance");
     if (!user) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
+    // 2. Tantance PIN
+    if (pin) {
+      let isPinValid = false;
+      if (user.matchPin) {
+        isPinValid = await user.matchPin(pin);
+      } else if (user.transactionPin) {
+        isPinValid = String(user.transactionPin) === String(pin);
+      } else if (user.pin) {
+        isPinValid = String(user.pin) === String(pin);
+      } else {
+        isPinValid = pin === "0000";
+      }
 
+      if (!isPinValid) {
+        return res.status(400).json({
+          success: false,
+          message: "Kuskure: PIN ba daidai ba ne.",
+        });
+      }
+    }
+
+    // 3. Tantance Balance
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     if (currentBal < amountNum) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
         success: false,
-        message: `Insufficient wallet balance. Required: ₦${amountNum}, Available: ₦${currentBal}`,
+        message: `Kudinka bai isa ba. Ana bukata: ₦${amountNum}, kana da: ₦${currentBal}`,
       });
     }
 
-    const transactionId = `AIR${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    const reference = `AYAX-AIR-${Date.now()}`;
-
-    // 1. Cire kudi a wallet
+    // 4. Cire Kudi
     const newBal = Number((currentBal - amountNum).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
-    await user.save({ session });
+    await user.save();
+    isDeducted = true;
 
-    const transaction = new Transaction({
+    // 5. Ajiye Transaction History
+    const transactionId = `AIR${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    transactionDoc = await Transaction.create({
       user: userId,
       transactionId,
       reference,
@@ -284,15 +300,10 @@ exports.buyAirtime = async (req, res) => {
       newBalance: newBal,
       phoneNumber: targetPhone,
       status: "pending",
-      details: `Ayax Airtime: ₦${amountNum} for ${targetPhone}`,
+      details: `₦${amountNum} Airtime to ${targetPhone}`,
     });
-    await transaction.save({ session });
 
-    await session.commitTransaction();
-    session.endSession();
-
-    // 2. Kira API Gateway
-    let response;
+    // 6. Kira Ayax Marketplace API
     const airtimePayload = {
       network: String(network).toUpperCase(),
       amount: amountNum,
@@ -304,106 +315,69 @@ exports.buyAirtime = async (req, res) => {
 
     const airtimeHeaders = getMarketplaceHeaders(req.headers.authorization);
 
-    try {
-      try {
-        response = await axios.post(
-          `${AYAX_API_BASE_URL}/api/v1/airtime/buy`,
-          airtimePayload,
-          { headers: airtimeHeaders, timeout: 35000 }
-        );
-      } catch (err1) {
-        if (err1.response?.status === 404) {
-          response = await axios.post(
-            `${AYAX_API_BASE_URL}/api/v1/vtu/airtime`,
-            airtimePayload,
-            { headers: airtimeHeaders, timeout: 35000 }
-          );
-        } else {
-          throw err1;
-        }
-      }
-    } catch (apiError) {
-      console.error("Ayax Airtime API Error:", apiError.response?.status, apiError.response?.data || apiError.message);
+    const response = await axios.post(
+      `${AYAX_API_BASE_URL}/airtime/buy`,
+      airtimePayload,
+      { headers: airtimeHeaders, timeout: 40000 }
+    );
 
-      const refundUser = await User.findById(userId);
-      if (refundUser) {
-        refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
-        if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
-        await refundUser.save();
-      }
-
-      await Transaction.findOneAndUpdate(
-        { reference },
-        { status: "failed", refundReason: "Gateway connection error", details: "Failed & Refunded" }
-      );
-
-      return res.status(502).json({
-        success: false,
-        message: "Failed to connect to Ayax airtime provider. Money refunded.",
-        error: apiError.response?.data?.message || apiError.message,
-      });
-    }
-
-    const resData = response.data;
+    const resData = response?.data;
     const isSuccessful =
       resData &&
-      (resData.status === true ||
+      (resData.success === true ||
+        resData.status === true ||
         resData.status === "success" ||
         resData.code === 200 ||
-        resData.code === "200" ||
-        resData.success === true);
+        resData.code === "200");
 
     if (isSuccessful) {
-      await Transaction.findOneAndUpdate(
-        { reference },
-        { status: "success", details: `Success: ₦${amountNum} airtime sent to ${targetPhone}` }
-      );
-
-      await Activity.create({
-        staffId: user._id,
-        action: "BUY_AIRTIME",
-        details: `Purchased ₦${amountNum} airtime for ${targetPhone}`,
-        targetUser: user._id,
-      });
-
-      await Notification.create({
-        recipient: user._id,
-        title: "Airtime Purchase Successful",
-        message: `Successfully purchased ₦${amountNum} airtime for ${targetPhone}`,
-        type: "vtu",
-      });
+      if (transactionDoc) {
+        await Transaction.findByIdAndUpdate(transactionDoc._id, {
+          status: "success",
+          details: `Success: ₦${amountNum} airtime sent to ${targetPhone}`,
+        });
+      }
 
       return res.status(200).json({
         success: true,
         message: "Airtime purchase successful",
-        data: { transactionId: transaction.transactionId, newBalance: user.walletBalance },
+        data: {
+          transactionId: transactionDoc ? transactionDoc.transactionId : transactionId,
+          newBalance: user.walletBalance,
+        },
       });
     } else {
-      const refundUser = await User.findById(userId);
-      if (refundUser) {
-        refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
-        if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
-        await refundUser.save();
-      }
-
-      await Transaction.findOneAndUpdate(
-        { reference },
-        { status: "failed", refundReason: resData?.message || "Provider declined" }
-      );
-
-      return res.status(400).json({
-        success: false,
-        message: resData?.message || "Ayax airtime provider error. Money refunded.",
-      });
+      throw new Error(resData?.message || "Marketplace declined transaction.");
     }
   } catch (error) {
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
-    session.endSession();
+    console.error("Airtime Error:", error.response?.data || error.message);
 
-    console.error("Buy Airtime Internal Error:", error);
-    return res.status(500).json({ success: false, message: "Airtime processing error", error: error.message });
+    // AUTO-REFUND NAN TAKE
+    if (isDeducted && userId) {
+      try {
+        const refundUser = await User.findById(userId);
+        if (refundUser) {
+          refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
+          if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
+          await refundUser.save();
+        }
+
+        if (transactionDoc) {
+          await Transaction.findByIdAndUpdate(transactionDoc._id, {
+            status: "failed",
+            refundReason: error.message,
+            details: `Failed & Refunded: ${error.message}`,
+          });
+        }
+      } catch (refundErr) {
+        console.error("Refund failed:", refundErr.message);
+      }
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: error.response?.data?.message || error.message || "Airtime processing failed",
+    });
   }
 };
 
