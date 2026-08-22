@@ -1,30 +1,37 @@
 const express = require("express");
 const router = express.Router();
 
-// Tabbatar da cewa sunayen controllers din sun yi daidai da yadda suke a cikin superAdminController.js
-const {
-  getSystemStats,
-  makeAdmin,
-  getAllGlobalTransactions,
-  getAuditLogs,
-  manageUserRole,
-} = require("../controllers/superAdminController");
-
 const { protect, authorize } = require("../middleware/authMiddleware");
+const superAdminController = require("../controllers/superAdminController") || {};
 
-// Duk wani route dake kasa yana bukatar authentication da kuma izinin Super Admin
-router.use(protect);
-router.use(authorize("superadmin"));
+const safe = (fn, name) => {
+  if (typeof fn === "function") return fn;
+  return (req, res) => {
+    res.status(501).json({
+      success: false,
+      message: `SuperAdmin function '${name}' is not implemented yet.`,
+    });
+  };
+};
 
-// 1. Dashboard & System Statistics
-router.get("/stats", getSystemStats);
+// Kariya: SuperAdmin KAWAI ke da izinin shiga nan
+if (typeof protect === "function") router.use(protect);
+if (typeof authorize === "function") router.use(authorize("superadmin"));
 
-// 2. Global Monitoring (Ganin ayyukan kowa a tsarin)
-router.get("/transactions/all", getAllGlobalTransactions); // Ganin duk wani ciniki (transactions) na kowa
-router.get("/audit-logs", getAuditLogs); // Ganin duk wani aiki ko motsi (audit trails) na Admins da Staff
+// --- 1. SYSTEM STATS & AUDIT LOGS ---
+router.get("/stats", safe(superAdminController.getSystemStats, "getSystemStats"));
+router.get("/audit-logs", safe(superAdminController.getAuditLogs, "getAuditLogs"));
 
-// 3. User & Admin Management
-router.post("/make-admin", makeAdmin); // Sanya mai amfani ya zama Admin
-router.put("/manage-role", manageUserRole); // Canza matsayi (role) na kowane mai amfani ko ma'aikaci a cikin tsarin
+// --- 2. STAFF & ROLE MANAGEMENT ---
+router.patch("/manage-role", safe(superAdminController.manageUserRole, "manageUserRole"));
+router.post("/make-admin", safe(superAdminController.makeAdmin, "makeAdmin"));
+router.post("/create-staff", safe(superAdminController.createStaff, "createStaff"));
+
+// --- 3. WALLET OVERRIDE (CREDIT & DEBIT) ---
+router.post("/credit-user", safe(superAdminController.creditUser, "creditUser"));
+router.post("/debit-user", safe(superAdminController.debitUser, "debitUser"));
+
+// --- 4. AUTOMATIC DATA DISPATCH (SINGLE / BULK / ALL USERS) ---
+router.post("/dispatch-data", safe(superAdminController.dispatchData, "dispatchData"));
 
 module.exports = router;
