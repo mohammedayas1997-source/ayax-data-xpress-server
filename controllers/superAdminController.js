@@ -1,7 +1,7 @@
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 
-// 1. Data & VTU Platform Overview Telemetry
+// 1. Overview Telemetry
 exports.getGlobalDataOverview = async (req, res) => {
   try {
     const [totalUsers, totalAgents, totalSupervisors, totalAdmins] = await Promise.all([
@@ -35,7 +35,7 @@ exports.getGlobalDataOverview = async (req, res) => {
   }
 };
 
-// 2. Data Plan Dispatcher (MTN, Airtel, Glo, 9mobile)
+// 2. Data Plan Dispatcher
 exports.dispatchDataBundle = async (req, res) => {
   try {
     const { network, planType, planCode, price, costPrice, validityDays, recipients, sendToAllUsers } = req.body;
@@ -43,7 +43,7 @@ exports.dispatchDataBundle = async (req, res) => {
     if (!network || !planCode || !price || !validityDays) {
       return res.status(400).json({
         success: false,
-        message: "Please provide all required fields: Network, Plan Size, Price, and Validity Days."
+        message: "Network, Plan Size, Price, and Validity Days are required."
       });
     }
 
@@ -64,7 +64,7 @@ exports.dispatchDataBundle = async (req, res) => {
   }
 };
 
-// 3. SuperAdmin Exclusive Refund Engine
+// 3. SuperAdmin Exclusive Refund
 exports.processRefundSuperAdminOnly = async (req, res) => {
   try {
     const { transactionId, targetUserId, refundAmount, reason } = req.body;
@@ -112,7 +112,7 @@ exports.adjustUserWallet = async (req, res) => {
     const numericAmount = Number(amount);
 
     if (!userId || !numericAmount || numericAmount <= 0) {
-      return res.status(400).json({ success: false, message: "Please enter a valid User Identifier and positive numeric amount." });
+      return res.status(400).json({ success: false, message: "Please provide a valid User Identifier and positive numeric amount." });
     }
 
     const user = await User.findOne({

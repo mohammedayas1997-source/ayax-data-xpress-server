@@ -5,7 +5,7 @@ const {
   dispatchDataBundle,
   processRefundSuperAdminOnly,
   adjustUserWallet,
-  toggleWalletLock
+  toggleWalletLock,
 } = require("../controllers/superAdminMasterController");
 
 router.get("/stats", getGlobalDataOverview);
