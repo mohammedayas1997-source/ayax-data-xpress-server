@@ -230,49 +230,81 @@ exports.register = async (req, res) => {
   }
 };
 
-// @desc    Universal Login (Supports Email or Phone + Direct Bcrypt Compare)
+// @desc    Universal Login (Fixed credentials query & password retrieval)
 exports.login = async (req, res) => {
   try {
     const { email, phone, password } = req.body;
     const identifier = (email || phone || "").toLowerCase().trim();
 
     if (!identifier || !password) {
-      return res.status(400).json({ success: false, message: "Credentials required." });
+      return res.status(400).json({
+        success: false,
+        message: "Please enter your email or phone number and password.",
+      });
     }
 
-    // Nemo User ta Email ko Phone Number
+    // 1. Ciro User tare da PASSWORD da PIN kai tsaye ta amfani da .select("+password")
     const user = await User.findOne({
-      $or: [{ email: identifier }, { phone: identifier }],
+      $or: [
+        { email: identifier },
+        { phone: identifier },
+        { phone: identifier.replace(/^0/, "+234") },
+        { phone: identifier.replace(/^\+234/, "0") },
+      ],
     }).select("+password +pin +transactionPin");
 
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Invalid credentials.",
+        message: "Authentication failed: Account not found with these credentials.",
       });
     }
 
-    // Tabbatar da Password (yana duba matchPassword method ko kuma bcrypt direct)
-    let isPasswordCorrect = false;
-    if (typeof user.matchPassword === "function") {
-      isPasswordCorrect = await user.matchPassword(password);
-    }
-    
-    if (!isPasswordCorrect && user.password) {
-      isPasswordCorrect = await bcrypt.compare(password, user.password);
+    if (user.isSuspended || user.status === "suspended" || user.status === "banned") {
+      return res.status(403).json({
+        success: false,
+        message: "Access suspended. Please contact platform administration.",
+      });
     }
 
-    if (!isPasswordCorrect) {
+    // 2. Tabbatar da Password ta kowace hanya (matchPassword ko kai tsaye da bcrypt)
+    let isPasswordMatch = false;
+
+    if (user.password) {
+      if (typeof user.matchPassword === "function") {
+        try {
+          isPasswordMatch = await user.matchPassword(password);
+        } catch (e) {
+          isPasswordMatch = false;
+        }
+      }
+
+      if (!isPasswordMatch) {
+        isPasswordMatch = await bcrypt.compare(password, user.password);
+      }
+
+      // Fallback: Idan asusun yana dauke da plain text daidai
+      if (!isPasswordMatch && user.password === password) {
+        isPasswordMatch = true;
+      }
+    }
+
+    if (!isPasswordMatch) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Invalid credentials.",
+        message: "Authentication failed: Invalid password.",
       });
     }
 
+    // 3. Tura Token da dukkan bayanan User
     return sendToken(user, 200, res);
   } catch (error) {
-    console.error("Login Protocol Error:", error);
-    return res.status(500).json({ success: false, message: "Authentication server error.", error: error.message });
+    console.error("Critical Login Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Authentication server error.",
+      error: error.message,
+    });
   }
 };
 
