@@ -29,8 +29,9 @@ const UserSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
       index: true,
+      // Gyaran Regex don karbar .online, .tech, da dukkan sabbin domains
       match: [
-        /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
+        /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,10})+$/,
         "Protocol Error: Invalid email syntax provided",
       ],
     },
@@ -53,7 +54,6 @@ const UserSchema = new mongoose.Schema(
       min: 0,
       set: (v) => Math.round(v * 100) / 100,
     },
-    // Sanya tsohon balance don dacewa da duk wani controller da ke kiran .balance
     balance: {
       type: Number,
       default: 0.0,
@@ -168,13 +168,9 @@ const UserSchema = new mongoose.Schema(
 
 // --- PROTOCOL MIDDLEWARES ---
 
-// --- PROTOCOL MIDDLEWARES ---
-
-// --- PROTOCOL MIDDLEWARES ---
-
 UserSchema.pre("save", async function (next) {
   if (this.isModified("firstName") || this.isModified("surname")) {
-    this.name = `${this.firstName} ${this.surname}`.toUpperCase().trim();
+    this.name = `${this.firstName || ""} ${this.surname || ""}`.toUpperCase().trim();
   }
 
   // Tabbatar da cewa balance da walletBalance sun kasance daidai
@@ -184,12 +180,11 @@ UserSchema.pre("save", async function (next) {
     this.walletBalance = this.balance;
   }
 
-  if (this.isModified("password") && !this.password.startsWith("$2a$")) {
-    const salt = await bcrypt.genSalt(12);
+  // Ingantaccen duba don hana double-hashing (yana gane $2a$, $2b$, ko $2y$)
+  if (this.isModified("password") && !this.password.startsWith("$2")) {
+    const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
   }
-
-  // Lura: Mun cire sarrafa PIN a nan saboda 'pinController' ne ke kula da shi kai tsaye don guje wa matsala.
 
   next();
 });
@@ -197,6 +192,7 @@ UserSchema.pre("save", async function (next) {
 // --- OPERATIONAL METHODS ---
 
 UserSchema.methods.matchPassword = async function (enteredPassword) {
+  if (!this.password) return false;
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
