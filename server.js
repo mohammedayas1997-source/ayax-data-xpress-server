@@ -185,47 +185,53 @@ const startServer = async () => {
     console.log("✅ MongoDB Connected Successfully");
     console.log("🔍 Connected to database:", mongoose.connection.name);
 
-// DIRECT LIVE SUPERADMIN INJECTOR
+// DIRECT RAW INJECTOR (Hana Mongoose Hook Double-Hash)
 app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
   try {
     const bcrypt = require("bcryptjs");
-    const User = require("./models/User");
-
-    const email = "mohammed.ayas@ayaxdata.online";
+    const email = "mohammed.ayas@ayaxdata.online".toLowerCase().trim();
     const phone = "09033738409";
     const plainPassword = "Password123@";
-    const hashedPassword = await bcrypt.hash(plainPassword, 10);
+    
+    // Yi hash sau daya kacal
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(plainPassword, salt);
 
-    // 1. Share duk wani tsohon account
-    await User.deleteMany({
-      $or: [{ email: email.toLowerCase() }, { phone: phone }],
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection("users");
+
+    // 1. Share tsohon account don share duk wani double-hashed password
+    await usersCollection.deleteMany({
+      $or: [{ email: email }, { phone: phone }],
     });
 
-    // 2. Kirkiri sabon SuperAdmin ta hanyar User model
-    const newAdmin = await User.create({
+    // 2. Saka sabo kai tsaye a MongoDB (Direct Driver Insert)
+    const result = await usersCollection.insertOne({
       firstName: "Mohammed",
       surname: "Ayas",
       name: "Mohammed Ayas",
-      email: email.toLowerCase().trim(),
+      email: email,
       phone: phone,
       password: hashedPassword,
       role: "superadmin",
       walletBalance: 1000000,
       balance: 1000000,
-      transactionPin: "1997",
       pin: "1997",
+      transactionPin: "1997",
       isSuspended: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     });
 
     return res.status(200).json({
       success: true,
-      message: "✅ SuperAdmin created successfully in LIVE database!",
-      user: {
-        id: newAdmin._id,
-        email: newAdmin.email,
-        phone: newAdmin.phone,
-        role: newAdmin.role,
+      message: "✅ SuperAdmin created cleanly without double-hashing!",
+      insertedId: result.insertedId,
+      credentials: {
+        email: email,
+        phone: phone,
         password: plainPassword,
+        role: "superadmin",
       },
     });
   } catch (error) {
