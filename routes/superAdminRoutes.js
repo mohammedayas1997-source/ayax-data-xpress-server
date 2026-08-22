@@ -4,17 +4,25 @@ const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 
-// In-Memory or DB Fallback for System Service Prices
-let systemServicePrices = {
-  // NIMC Printing Services
+// Centralized System Pricing Store
+let systemTariffs = {
+  // 1. NIMC PRINTING
+  nimc_basicSlip: 300,
+  nimc_standardSlip: 500,
+  nimc_premiumCard: 1500,
   nimc_nin: 1000,
   nimc_phone: 1000,
   nimc_trackingId: 1000,
-  nimc_premiumCard: 1500,
-  nimc_standardSlip: 500,
-  nimc_basicSlip: 300,
 
-  // NIN Validation Services
+  // 2. NIMC MODIFICATION
+  mod_name: 2500,
+  mod_phone: 2000,
+  mod_dob: 3000,
+  mod_address: 1500,
+  mod_name_dob: 4500,
+  mod_name_phone: 3500,
+
+  // 3. NIN VALIDATION
   val_noRecord: 1300,
   val_sim: 1300,
   val_vnin: 1300,
@@ -23,18 +31,21 @@ let systemServicePrices = {
   val_mod: 1700,
   val_photoError: 1400,
 
-  // Identity & Verification Gateway
+  // 4. IDENTITY & BVN
   verify_phone: 300,
   verify_bvn_basic: 200,
   verify_bvn_full: 500,
   verify_face_id: 800,
 
-  // Surcharges for Utilities & Cable
+  // 5. UTILITY SURCHARGES & BILLS
   fee_electricity: 100,
   fee_cable: 50,
 };
 
-// 1. Telemetry, Pricing & Real-Time Financial Ledger
+// Global Notifications Memory Store
+let systemNotificationsLog = [];
+
+// 1. Master Telemetry, Audit History & Tariffs
 router.get("/stats", async (req, res) => {
   try {
     const [
@@ -86,15 +97,16 @@ router.get("/stats", async (req, res) => {
         pendingRefunds:
           (await Transaction.countDocuments({ status: "refund_requested" })) || 0,
       },
-      prices: systemServicePrices,
-      recentTransactions: allTransactions.slice(0, 25),
+      prices: systemTariffs,
+      recentTransactions: allTransactions,
+      notifications: systemNotificationsLog.slice(0, 30),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// 2. Global Price Setup Controller (Saita Farashin Kowane Aiki)
+// 2. Saita Farashin Kowane Aiki Daban-Daban (Update Service Tariff)
 router.post("/update-service-price", async (req, res) => {
   try {
     const { serviceKey, newPrice } = req.body;
@@ -103,23 +115,58 @@ router.post("/update-service-price", async (req, res) => {
     if (!serviceKey || isNaN(numericPrice) || numericPrice < 0) {
       return res.status(400).json({
         success: false,
-        message: "Invalid service identifier or pricing amount.",
+        message: "Invalid service identifier or price amount.",
       });
     }
 
-    systemServicePrices[serviceKey] = numericPrice;
+    systemTariffs[serviceKey] = numericPrice;
 
     return res.status(200).json({
       success: true,
-      message: `Updated ${serviceKey} service tariff to ₦${numericPrice.toLocaleString()}.`,
-      updatedPrices: systemServicePrices,
+      message: `Updated tariff for ${serviceKey} to ₦${numericPrice.toLocaleString()}.`,
+      updatedPrices: systemTariffs,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// 3. User & Staff Password Override
+// 3. Tura Broadcast Push Notification ga Users
+router.post("/broadcast-notification", async (req, res) => {
+  try {
+    const { title, message, targetType, targetUserId } = req.body;
+
+    if (!title || !message) {
+      return res.status(400).json({
+        success: false,
+        message: "Title and message body are required.",
+      });
+    }
+
+    const notificationPayload = {
+      id: "NT_" + Date.now(),
+      title: title.trim(),
+      message: message.trim(),
+      targetType: targetType || "all",
+      targetUserId: targetUserId ? targetUserId.trim() : "ALL_USERS",
+      createdAt: new Date().toISOString(),
+    };
+
+    systemNotificationsLog.unshift(notificationPayload);
+
+    return res.status(200).json({
+      success: true,
+      message: `Broadcast notification successfully queued for ${
+        targetType === "single" ? targetUserId : "ALL USERS"
+      }.`,
+      notification: notificationPayload,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 4. SuperAdmin Direct Password Override
 router.post("/override-password", async (req, res) => {
   try {
     const { userId, newPassword } = req.body;
@@ -149,14 +196,14 @@ router.post("/override-password", async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `Password overridden successfully for ${user.firstName || user.name || user.phone}.`,
+      message: `Password changed successfully for ${user.firstName || user.name || user.phone}.`,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// 4. Suspend / Reactivate User or Staff
+// 5. Suspend / Activate Account
 router.post("/toggle-suspension", async (req, res) => {
   try {
     const { userId, suspend } = req.body;
@@ -186,7 +233,7 @@ router.post("/toggle-suspension", async (req, res) => {
   }
 });
 
-// 5. Direct Ledger Adjustment (Credit / Debit)
+// 6. Direct Ledger Injection (Credit / Debit)
 router.post("/adjust-wallet", async (req, res) => {
   try {
     const { userId, amount, reason, actionType } = req.body;
@@ -224,7 +271,7 @@ router.post("/adjust-wallet", async (req, res) => {
   }
 });
 
-// 6. SuperAdmin Exclusive Refund Engine
+// 7. SuperAdmin Exclusive Refund
 router.post("/process-refund", async (req, res) => {
   try {
     const { transactionId, targetUserId, refundAmount, reason } = req.body;
@@ -265,7 +312,7 @@ router.post("/process-refund", async (req, res) => {
   }
 });
 
-// 7. Data Plan Dispatcher
+// 8. Data Plan Dispatcher
 router.post("/dispatch-data", async (req, res) => {
   try {
     const { network, planType, planCode, price, costPrice, validityDays, recipients, sendToAllUsers } = req.body;
@@ -287,7 +334,7 @@ router.post("/dispatch-data", async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `Successfully provisioned ${planCode} (${network} ${planType || "SME"}) for ₦${price} (${validityDays} Days) to ${targetPhones.length} destination(s).`,
+      message: `Provisioned ${planCode} (${network} ${planType || "SME"}) for ₦${price} (${validityDays} Days) to ${targetPhones.length} destinations.`,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
