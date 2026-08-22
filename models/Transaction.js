@@ -4,12 +4,12 @@ const TransactionSchema = new mongoose.Schema(
   {
     // Mai amfani da ya yi ma'amalar
     user: {
-      type: mongoose.Schema.Types.ObjectId, 
+      type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true, // Indexing don binciken tarihin kudi ya yi sauri sosai
+      index: true,
     },
-    
+
     // Lambar transaction ta musamman (Unique transaction ID)
     transactionId: {
       type: String,
@@ -44,22 +44,22 @@ const TransactionSchema = new mongoose.Schema(
     },
 
     // Balance din user kafin da bayan wannan transaction din (Audit Trail)
-    oldBalance: { 
+    oldBalance: {
       type: Number,
       default: 0,
     },
-    newBalance: { 
+    newBalance: {
       type: Number,
       default: 0,
     },
 
-    // Bayanan lamba ko wurin da aka tura sabis din (misali: Phone number, Meter Number, SmartCard Number)
+    // Bayanan lamba ko wurin da aka tura sabis din (Phone, Meter, SmartCard)
     phoneNumber: {
       type: String,
       trim: true,
     },
-    
-    // Network ko Provider (Misali: MTN, GLO, DSTV, AEDC, Paystack, da sauransu)
+
+    // Network ko Provider (Misali: MTN, GLO, AIRTEL, 9MOBILE, AYAX_GATEWAY)
     provider: {
       type: String,
       trim: true,
@@ -68,46 +68,59 @@ const TransactionSchema = new mongoose.Schema(
     // Matsayin ma'amalar (status)
     status: {
       type: String,
-      enum: ["pending", "success", "failed", "refunded", "processing"],
+      enum: ["pending", "processing", "success", "failed", "refunded"],
       default: "pending",
       index: true,
     },
 
-    // Lambar reference ta kofa ko gateway (rigakafin double funding da duplicate requests)
+    // Lambar reference ta kofa ko gateway (Ayax APIs / Paystack / Monnify)
     reference: {
       type: String,
-      unique: true, 
+      unique: true,
       sparse: true,
       index: true,
     },
 
-    // Karin bayani ko sakon da ya zo daga API/gateway (misali: "MTN 1GB to 0803...")
+    // Karin bayani (misali: "MTN 1GB to 09033738409")
     details: {
       type: String,
       trim: true,
     },
 
-    // Dalilin mayar da kudi (Refund reason) idan aka yi refund
-    refundReason: { 
+    // Cikakkiyar amsar da ta dawo daga Ayax API Gateway / Network
+    apiResponse: {
       type: String,
       trim: true,
-    }, 
+    },
 
-    // Ma'aikacin da ya amince ko ya aiwatar da transaction din (idan admin ne ya yi shi)
-    requestedBy: { 
-      type: mongoose.Schema.Types.ObjectId, 
+    // Bayanan mayar da kudi (Refund Information)
+    refundReason: {
+      type: String,
+      trim: true,
+    },
+    refundedAt: {
+      type: Date,
+    },
+    refundedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    // Ma'aikaci ko Admin da ya aiwatar da aikin da hannu (idan akwai)
+    requestedBy: {
+      type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       index: true,
     },
   },
   {
-    timestamps: true, // Yana samar da createdAt da updatedAt kai tsaye
-  },
+    timestamps: true,
+  }
 );
 
-// Ingantattun Indexes domin saukin lissafi da loda tarihin ma'amala a Dashboard
+// Indexes domin saukin bincike da gaggawar loda tarihi a Dashboard
 TransactionSchema.index({ user: 1, createdAt: -1 });
 TransactionSchema.index({ type: 1, status: 1, createdAt: -1 });
-TransactionSchema.index({ reference: 1 });
+TransactionSchema.index({ status: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Transaction", TransactionSchema);

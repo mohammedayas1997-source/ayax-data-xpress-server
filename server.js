@@ -78,6 +78,7 @@ const superAdminRoutes = require("./routes/superAdminRoutes");
 const validationRoutes = require("./routes/ninRoutes");
 const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 const dataRoutes = require("./routes/data.routes");
+const transactionRoutes = require("./routes/transaction.routes");
 
 // --- INJECTING MIDDLEWARE & USER MODEL ---
 const User = require("./models/User");
@@ -105,6 +106,7 @@ app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
 app.use("/api/v1/virtual-account", virtualAccountRoutes);
+app.use("/api/v1/transactions", transactionRoutes);
 
 // --- SECURE USER PROFILE ROUTE ---
 app.get("/api/v1/user/profile", async (req, res) => {
