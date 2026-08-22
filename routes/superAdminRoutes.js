@@ -3,6 +3,15 @@ const router = express.Router();
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
+const DataPlan = require("../models/DataPlan");
+
+// Network ID Mapping for VTU Gateways
+const NETWORK_IDS = {
+  MTN: "01",
+  GLO: "02",
+  "9MOBILE": "03",
+  AIRTEL: "04",
+};
 
 // Centralized System Pricing Store
 let systemTariffs = {
@@ -37,7 +46,7 @@ let systemTariffs = {
   verify_bvn_full: 500,
   verify_face_id: 800,
 
-  // Utility & Cable Surcharges (Dukkan Gidajen TV)
+  // 5. UTILITY & CABLE SURCHARGES
   fee_electricity: 100,
   fee_gotv: 50,
   fee_dstv: 100,
@@ -109,7 +118,7 @@ router.get("/stats", async (req, res) => {
   }
 });
 
-// 2. Saita Farashin Kowane Aiki Daban-Daban (Update Service Tariff)
+// 2. Dynamic Service Tariff Switch
 router.post("/update-service-price", async (req, res) => {
   try {
     const { serviceKey, newPrice } = req.body;
@@ -134,7 +143,7 @@ router.post("/update-service-price", async (req, res) => {
   }
 });
 
-// 3. Tura Broadcast Push Notification ga Users
+// 3. Broadcast Notification Dispatcher
 router.post("/broadcast-notification", async (req, res) => {
   try {
     const { title, message, targetType, targetUserId } = req.body;
@@ -169,7 +178,7 @@ router.post("/broadcast-notification", async (req, res) => {
   }
 });
 
-// 4. SuperAdmin Direct Password Override
+// 4. Force Password Override
 router.post("/override-password", async (req, res) => {
   try {
     const { userId, newPassword } = req.body;
@@ -206,7 +215,7 @@ router.post("/override-password", async (req, res) => {
   }
 });
 
-// 5. Suspend / Activate Account
+// 5. Account Suspension Toggle
 router.post("/toggle-suspension", async (req, res) => {
   try {
     const { userId, suspend } = req.body;
@@ -315,29 +324,92 @@ router.post("/process-refund", async (req, res) => {
   }
 });
 
-// 8. Data Plan Dispatcher
+// 8. Data Plan Dispatcher (Saves to MongoDB DataPlan Schema)
 router.post("/dispatch-data", async (req, res) => {
   try {
-    const { network, planType, planCode, price, costPrice, validityDays, recipients, sendToAllUsers } = req.body;
+    const {
+      network,
+      planType,
+      planCode,
+      price,
+      costPrice,
+      agentPrice,
+      planLabel,
+      sizeGB,
+    } = req.body;
 
-    if (!network || !planCode || !price || !validityDays) {
+    if (!network || !planCode || !price) {
       return res.status(400).json({
         success: false,
-        message: "Network, Plan Size, Price, and Validity Days are required.",
+        message: "Network, Plan Code/Size, and User Price are required.",
       });
     }
 
-    let targetPhones = [];
-    if (sendToAllUsers) {
-      const allUsers = await User.find({ isSuspended: { $ne: true } }).select("phone");
-      targetPhones = allUsers.map((u) => u.phone).filter(Boolean);
-    } else if (recipients) {
-      targetPhones = recipients.split(",").map((p) => p.trim()).filter(Boolean);
+    const netName = network.toUpperCase().trim();
+    const netId = NETWORK_IDS[netName] || "01";
+
+    let parsedSizeGB = Number(sizeGB);
+    if (isNaN(parsedSizeGB) || parsedSizeGB <= 0) {
+      const codeUpper = planCode.toUpperCase();
+      if (codeUpper.includes("GB")) {
+        parsedSizeGB = parseFloat(codeUpper.replace("GB", "").trim()) || 1;
+      } else if (codeUpper.includes("MB")) {
+        const mb = parseFloat(codeUpper.replace("MB", "").trim()) || 500;
+        parsedSizeGB = mb / 1000;
+      } else {
+        parsedSizeGB = 1;
+      }
     }
+
+    const savedPlan = await DataPlan.findOneAndUpdate(
+      {
+        networkName: netName,
+        planType: (planType || "SME").toUpperCase().trim(),
+        planCode: planCode.trim(),
+      },
+      {
+        networkName: netName,
+        networkId: netId,
+        planCode: planCode.trim(),
+        planLabel: planLabel || `${netName} ${planType || "SME"} ${planCode}`,
+        sizeGB: parsedSizeGB,
+        planType: (planType || "SME").toUpperCase().trim(),
+        userPrice: Number(price),
+        agentPrice: Number(agentPrice || price),
+        apiCost: Number(costPrice || price),
+        isActive: true,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
     return res.status(200).json({
       success: true,
-      message: `Provisioned ${planCode} (${network} ${planType || "SME"}) for ₦${price} (${validityDays} Days) to ${targetPhones.length} destinations.`,
+      message: `Successfully saved ${savedPlan.planLabel} (₦${savedPlan.userPrice}) to database.`,
+      data: savedPlan,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 9. Fetch Live Active Data Plans
+router.get("/plans", async (req, res) => {
+  try {
+    const { network, planType } = req.query;
+    const filter = { isActive: true };
+
+    if (network) {
+      filter.networkName = network.toUpperCase().trim();
+    }
+    if (planType && planType !== "ALL") {
+      filter.planType = planType.toUpperCase().trim();
+    }
+
+    const plans = await DataPlan.find(filter).sort({ sizeGB: 1, userPrice: 1 });
+
+    return res.status(200).json({
+      success: true,
+      data: plans,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
