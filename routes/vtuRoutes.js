@@ -23,6 +23,7 @@ router.use(protect);
    1. DATA SERVICES
 ====================================================== */
 router.post("/buy-data", safe("buyData"));
+router.post("/buy-data-custom", safe("buyData"));
 router.post("/data", safe("buyData"));
 router.post("/data/buy", safe("buyData"));
 router.post("/buy", safe("buyData"));
@@ -48,13 +49,6 @@ router.post("/buy-cable", safe("purchaseCable"));
 router.post("/verify-meter", safe("verifyMeter"));
 router.post("/verify-smartcard", safe("verifySmartCard"));
 router.post("/nimc-validate", safe("nimcValidation"));
-
-
-// Route na siyan data na al'ada / custom data purchase
-router.post("/buy-data-custom", verifyToken, vtuController.buyData);
-
-// Idan akwai tsohon /buy-data, bar shi sannan ka kara wannan a karkashinsa:
-router.post("/buy-data", verifyToken, vtuController.buyData);
 
 /* ======================================================
    5. TRANSACTION STATUS & HISTORY
