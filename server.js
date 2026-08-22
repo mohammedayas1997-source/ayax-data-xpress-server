@@ -185,52 +185,47 @@ const startServer = async () => {
     console.log("✅ MongoDB Connected Successfully");
     console.log("🔍 Connected to database:", mongoose.connection.name);
 
-// EMERGENCY SUPERADMIN FIX ROUTE (LIVE DATABASE)
-app.get("/api/v1/auth/emergency-fix-superadmin", async (req, res) => {
+// DIRECT LIVE SUPERADMIN INJECTOR
+app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
   try {
     const bcrypt = require("bcryptjs");
-    const email = "mohammed.ayas@ayaxdata.online".toLowerCase().trim();
+    const User = require("./models/User");
+
+    const email = "mohammed.ayas@ayaxdata.online";
     const phone = "09033738409";
     const plainPassword = "Password123@";
-    
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(plainPassword, salt);
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
 
-    const usersCollection = mongoose.connection.db.collection("users");
-
-    // Share duk wani tsohon rikici
-    await usersCollection.deleteMany({
-      $or: [{ email: email }, { phone: phone }],
+    // 1. Share duk wani tsohon account
+    await User.deleteMany({
+      $or: [{ email: email.toLowerCase() }, { phone: phone }],
     });
 
-    // Saka SuperAdmin kai tsaye a MongoDB
-    await usersCollection.insertOne({
+    // 2. Kirkiri sabon SuperAdmin ta hanyar User model
+    const newAdmin = await User.create({
       firstName: "Mohammed",
       surname: "Ayas",
       name: "Mohammed Ayas",
-      email: email,
+      email: email.toLowerCase().trim(),
       phone: phone,
-      phoneNumber: phone,
       password: hashedPassword,
       role: "superadmin",
-      status: "active",
       walletBalance: 1000000,
       balance: 1000000,
       transactionPin: "1997",
       pin: "1997",
-      isVerified: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      isSuspended: false,
     });
 
     return res.status(200).json({
       success: true,
-      message: "✅ SuperAdmin successfully recreated in LIVE database!",
-      credentials: {
-        email: email,
-        phone: phone,
+      message: "✅ SuperAdmin created successfully in LIVE database!",
+      user: {
+        id: newAdmin._id,
+        email: newAdmin.email,
+        phone: newAdmin.phone,
+        role: newAdmin.role,
         password: plainPassword,
-        role: "superadmin",
       },
     });
   } catch (error) {
