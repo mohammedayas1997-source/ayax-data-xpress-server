@@ -195,6 +195,34 @@ exports.buyAirtime = async (req, res) => {
   }
 };
 
+exports.buyData = async (req, res) => {
+  try {
+    const { network, phoneNumber, phone, planId, planSize, amount, pin } = req.body;
+    const userId = req.user._id || req.user.id;
+
+    // Tabbatar da PIN na Transaction idan an turo
+    if (pin && req.user.transactionPin && req.user.transactionPin !== pin) {
+      return res.status(400).json({
+        success: false,
+        message: "Wrong transaction PIN entered",
+      });
+    }
+
+    // Kiran Provider / GSM Gateway Service
+    // ... Logics na tura umarni zuwa Ayax APIs Gateway ...
+
+    return res.status(200).json({
+      success: true,
+      message: "Data purchase request submitted successfully",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to process data transaction",
+    });
+  }
+};
+
 /**
  * @desc    NIMC Identity Validation via Ayax APIs
  * @route   POST /api/v1/vtu/nimc-validation
