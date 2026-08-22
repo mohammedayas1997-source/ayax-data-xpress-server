@@ -37,9 +37,12 @@ let systemTariffs = {
   verify_bvn_full: 500,
   verify_face_id: 800,
 
-  // 5. UTILITY SURCHARGES & BILLS
+  // Utility & Cable Surcharges (Dukkan Gidajen TV)
   fee_electricity: 100,
-  fee_cable: 50,
+  fee_gotv: 50,
+  fee_dstv: 100,
+  fee_startimes: 50,
+  fee_showmax: 50,
 };
 
 // Global Notifications Memory Store
