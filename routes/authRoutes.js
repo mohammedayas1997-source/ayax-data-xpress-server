@@ -3,27 +3,69 @@ const router = express.Router();
 const authController = require("../controllers/authController");
 const { protect } = require("../middleware/authMiddleware");
 
-// --- AUTHENTICATION ROUTES ---
-router.post("/register", authController.register);
-router.post("/login", authController.login);
-router.post("/forgot-password", authController.forgotPassword);
-router.post("/reset-password", authController.resetPassword);
+// Helper don kiyaye kuskuren undefined route handler
+const safeAuth = (handlerName) => {
+  return (req, res, next) => {
+    if (typeof authController[handlerName] === "function") {
+      return authController[handlerName](req, res, next);
+    }
+    return res.status(501).json({
+      success: false,
+      message: `Auth handler '${handlerName}' is not implemented yet.`,
+    });
+  };
+};
 
-// --- PROTECTED USER PROFILE & SECURITY ROUTES ---
-router.get("/profile", protect, (req, res) => {
-  res.status(200).json({ success: true, user: req.user });
+// ==========================================
+// 1. PUBLIC AUTHENTICATION ROUTES
+// ==========================================
+router.post("/register", safeAuth("register"));
+router.post("/login", safeAuth("login"));
+router.post("/supervisor-login", safeAuth("supervisorLogin"));
+router.post("/forgot-password", safeAuth("forgotPassword"));
+router.post("/reset-password", safeAuth("resetPassword"));
+
+// Paystack Webhook (Public Callback)
+router.post("/paystack/webhook", safeAuth("paystackWebhook"));
+
+// ==========================================
+// 2. PROTECTED USER PROFILE & SECURITY ROUTES
+// ==========================================
+router.use(protect);
+
+router.get("/profile", (req, res) => {
+  res.status(200).json({
+    success: true,
+    user: req.user,
+    data: req.user,
+  });
 });
 
-router.put("/update-password", protect, authController.updatePassword);
+router.get("/me", (req, res) => {
+  res.status(200).json({
+    success: true,
+    user: req.user,
+    data: req.user,
+  });
+});
 
-// --- PIN MANAGEMENT ROUTES ---
-router.post("/create-pin", protect, authController.createPin);
-router.put("/create-pin", protect, authController.createPin);
+router.get("/check-auth", (req, res) => {
+  res.status(200).json({
+    success: true,
+    authenticated: true,
+    user: req.user,
+  });
+});
 
-router.post("/update-pin", protect, authController.updatePin);
-router.put("/update-pin", protect, authController.updatePin);
+router.put("/update-password", safeAuth("updatePassword"));
 
-// --- PAYSTACK WEBHOOK ---
-router.post("/paystack/webhook", authController.paystackWebhook);
+// ==========================================
+// 3. TRANSACTION PIN MANAGEMENT
+// ==========================================
+router.post("/create-pin", safeAuth("createPin"));
+router.put("/create-pin", safeAuth("createPin"));
+
+router.post("/update-pin", safeAuth("updatePin"));
+router.put("/update-pin", safeAuth("updatePin"));
 
 module.exports = router;

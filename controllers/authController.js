@@ -230,22 +230,42 @@ exports.register = async (req, res) => {
   }
 };
 
-// @desc    Universal Login
+// @desc    Universal Login (Supports Email or Phone + Direct Bcrypt Compare)
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
+    const { email, phone, password } = req.body;
+    const identifier = (email || phone || "").toLowerCase().trim();
+
+    if (!identifier || !password) {
       return res.status(400).json({ success: false, message: "Credentials required." });
     }
 
+    // Nemo User ta Email ko Phone Number
     const user = await User.findOne({
-      email: email.toLowerCase().trim(),
+      $or: [{ email: identifier }, { phone: identifier }],
     }).select("+password +pin +transactionPin");
 
-    if (!user || !(await user.matchPassword(password))) {
+    if (!user) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Invalid parameters.",
+        message: "Authentication failed: Invalid credentials.",
+      });
+    }
+
+    // Tabbatar da Password (yana duba matchPassword method ko kuma bcrypt direct)
+    let isPasswordCorrect = false;
+    if (typeof user.matchPassword === "function") {
+      isPasswordCorrect = await user.matchPassword(password);
+    }
+    
+    if (!isPasswordCorrect && user.password) {
+      isPasswordCorrect = await bcrypt.compare(password, user.password);
+    }
+
+    if (!isPasswordCorrect) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication failed: Invalid credentials.",
       });
     }
 
@@ -409,7 +429,15 @@ exports.updatePassword = async (req, res) => {
 
     const user = await User.findById(req.user.id).select("+password");
 
-    if (!(await user.matchPassword(currentPassword))) {
+    let isMatch = false;
+    if (typeof user.matchPassword === "function") {
+      isMatch = await user.matchPassword(currentPassword);
+    }
+    if (!isMatch && user.password) {
+      isMatch = await bcrypt.compare(currentPassword, user.password);
+    }
+
+    if (!isMatch) {
       return res.status(401).json({
         success: false,
         message: "Security check failed: Current key incorrect.",
@@ -431,7 +459,6 @@ exports.updatePassword = async (req, res) => {
 };
 
 // @desc    Create Transaction PIN (First time)
-// @desc    Create Transaction PIN (First time)
 exports.createPin = async (req, res) => {
   try {
     const pinToUse = req.body.newPin || req.body.pin;
@@ -450,7 +477,6 @@ exports.createPin = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // Yi hashing na PIN din da bcrypt kafin adanawa
     const salt = await bcrypt.genSalt(10);
     const hashedPin = await bcrypt.hash(pinToUse, salt);
 
@@ -502,7 +528,14 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    const isPasswordMatch = await user.matchPassword(password);
+    let isPasswordMatch = false;
+    if (typeof user.matchPassword === "function") {
+      isPasswordMatch = await user.matchPassword(password);
+    }
+    if (!isPasswordMatch && user.password) {
+      isPasswordMatch = await bcrypt.compare(password, user.password);
+    }
+
     if (!isPasswordMatch) {
       return res.status(401).json({
         success: false,
@@ -510,7 +543,6 @@ exports.updatePin = async (req, res) => {
       });
     }
 
-    // Yi hashing na sabon PIN din da bcrypt kafin adanawa
     const salt = await bcrypt.genSalt(10);
     const hashedPin = await bcrypt.hash(pinToUse, salt);
 
