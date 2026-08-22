@@ -36,14 +36,29 @@ const getMarketplaceHeaders = (userAuthHeader) => {
 
 /**
  * @desc    Purchase Mobile Data via Ayax APIs (Safe Balance & Auto-Refund)
- * @route   POST /api/v1/vtu/buy-data, POST /api/v1/data/buy
+ * @route   POST /api/v1/vtu/buy-data, POST /api/v1/vtu/buy-data-custom
  * @access  Private
  */
 exports.buyData = async (req, res) => {
   const userId = req.user?._id || req.user?.id;
-  const { network, planId, plan, phoneNumber, phone, pin, amount } = req.body;
-  const targetPhone = phoneNumber || phone;
-  const targetPlan = planId || plan;
+  const {
+    network,
+    networkId,
+    planId,
+    planCode,
+    plan,
+    planLabel: incomingLabel,
+    dataType,
+    phoneNumber,
+    phone,
+    pin,
+    transactionPin,
+    amount,
+  } = req.body;
+
+  const targetPhone = (phoneNumber || phone || "").trim();
+  const targetPlan = planId || planCode || plan;
+  const userEnteredPin = pin || transactionPin;
 
   let isDeducted = false;
   let finalPrice = 0;
@@ -51,59 +66,71 @@ exports.buyData = async (req, res) => {
   let transactionDoc = null;
 
   try {
-    if (!network || !targetPlan || !targetPhone) {
+    if (!targetPhone || (!targetPlan && !amount)) {
       return res.status(400).json({
         success: false,
-        message: "Please provide network, planId, and phoneNumber",
+        message: "Please provide a valid phone number and select a data plan.",
       });
     }
 
-    // 1. Nemo User da Data Plan
-    const [user, dataPlanDoc] = await Promise.all([
-      User.findById(userId).select("+transactionPin +pin +walletBalance balance role assignedSupervisor"),
-      DataPlan.findOne({
-        $or: [
-          { planCode: String(targetPlan) },
-          { planId: String(targetPlan) },
-          { _id: targetPlan.match(/^[0-9a-fA-F]{24}$/) ? targetPlan : null },
-        ].filter(Boolean),
-      }),
-    ]);
+    // 1. Nemo User da kuma Data Plan a Database
+    const userPromise = User.findById(userId).select(
+      "+transactionPin +pin +walletBalance balance role assignedSupervisor"
+    );
+
+    let planQuery = [];
+    if (targetPlan) {
+      if (typeof targetPlan === "string" && targetPlan.match(/^[0-9a-fA-F]{24}$/)) {
+        planQuery.push({ _id: targetPlan });
+      }
+      planQuery.push({ planCode: String(targetPlan) });
+      planQuery.push({ planLabel: String(targetPlan) });
+    }
+
+    const planPromise = planQuery.length > 0 ? DataPlan.findOne({ $or: planQuery }) : null;
+
+    const [user, dataPlanDoc] = await Promise.all([userPromise, planPromise]);
 
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
     // 2. Tantance Transaction PIN idan an turo
-    if (pin) {
+    if (userEnteredPin) {
       let isPinValid = false;
       if (user.matchPin) {
-        isPinValid = await user.matchPin(pin);
+        isPinValid = await user.matchPin(userEnteredPin);
       } else if (user.transactionPin) {
-        isPinValid = String(user.transactionPin) === String(pin);
+        isPinValid = String(user.transactionPin) === String(userEnteredPin);
       } else if (user.pin) {
-        isPinValid = String(user.pin) === String(pin);
+        isPinValid = String(user.pin) === String(userEnteredPin);
       } else {
-        isPinValid = pin === "0000";
+        isPinValid = userEnteredPin === "0000";
       }
 
       if (!isPinValid) {
         return res.status(400).json({
           success: false,
-          message: "Security Error: Invalid Transaction PIN",
+          message: "Security Error: Invalid Transaction PIN entered",
         });
       }
     }
 
-    // 3. Tantance Farashi
-    finalPrice = dataPlanDoc
-      ? user.role === "agent"
-        ? dataPlanDoc.agentPrice
-        : dataPlanDoc.userPrice
-      : Number(amount || 0);
+    // 3. Tantance Farashi (User vs Agent Price)
+    if (dataPlanDoc) {
+      finalPrice =
+        user.role === "agent" || user.role === "reseller"
+          ? dataPlanDoc.agentPrice || dataPlanDoc.userPrice
+          : dataPlanDoc.userPrice;
+    } else {
+      finalPrice = Number(amount || 0);
+    }
 
     if (finalPrice <= 0) {
-      return res.status(400).json({ success: false, message: "Invalid plan pricing" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid plan price configuration.",
+      });
     }
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
@@ -111,11 +138,11 @@ exports.buyData = async (req, res) => {
     if (currentBal < finalPrice) {
       return res.status(400).json({
         success: false,
-        message: `Kudinka bai isa ba! Ana buƙatar: ₦${finalPrice}, Kana da: ₦${currentBal}`,
+        message: `Kudinka bai isa ba! Ana buƙatar: ₦${finalPrice.toLocaleString()}, Kana da: ₦${currentBal.toLocaleString()}`,
       });
     }
 
-    // 4. Cire Kuɗi a Wallet (Atomic Deduction)
+    // 4. Cire Kudi a Wallet (Atomic Wallet Deduction)
     const newBal = Number((currentBal - finalPrice).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
@@ -123,7 +150,10 @@ exports.buyData = async (req, res) => {
     isDeducted = true;
 
     // 5. Ajiye Transaction History
-    const planLabel = dataPlanDoc?.planLabel || `${network} Data Plan`;
+    const resolvedPlanLabel =
+      dataPlanDoc?.planLabel || incomingLabel || `${network || "MTN"} Data Plan`;
+    const resolvedPlanType =
+      dataPlanDoc?.planType || dataType || "SME";
     const transactionId = `DATA${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
     transactionDoc = await Transaction.create({
@@ -131,20 +161,25 @@ exports.buyData = async (req, res) => {
       transactionId,
       reference,
       type: "data",
-      category: "data",
       amount: finalPrice,
       oldBalance: currentBal,
       newBalance: newBal,
       phoneNumber: targetPhone,
+      provider: dataPlanDoc?.networkName || network || "MTN",
       status: "pending",
-      details: `Ayax Data Purchase: ${planLabel} for ${targetPhone}`,
+      details: `Ayax Data Purchase: ${resolvedPlanLabel} (${resolvedPlanType}) to ${targetPhone}`,
     });
 
-    // 6. Kira Ayax API Marketplace Gateway
+    // 6. Kira Ayax APIs Marketplace Gateway
     const requestPayload = {
-      network: String(network).toUpperCase(),
-      plan: targetPlan,
-      planId: targetPlan,
+      network: dataPlanDoc?.networkName || String(network || "MTN").toUpperCase(),
+      networkId: dataPlanDoc?.networkId || networkId || "01",
+      plan: dataPlanDoc?.planCode || targetPlan,
+      planId: dataPlanDoc?.planCode || targetPlan,
+      planCode: dataPlanDoc?.planCode || targetPlan,
+      planSize: dataPlanDoc?.planLabel || resolvedPlanLabel,
+      sizeGB: dataPlanDoc?.sizeGB || 1,
+      dataType: resolvedPlanType,
       phone: targetPhone,
       phoneNumber: targetPhone,
       amount: finalPrice,
@@ -175,7 +210,9 @@ exports.buyData = async (req, res) => {
       }
     } catch (apiError) {
       console.error("Marketplace Data API Error:", apiError.response?.data || apiError.message);
-      throw new Error(apiError.response?.data?.message || "Kuskure wajen hadawa da uwar garke ta Data");
+      throw new Error(
+        apiError.response?.data?.message || "Kuskure wajen tura umarni zuwa GSM Gateway"
+      );
     }
 
     const resData = response?.data;
@@ -188,34 +225,34 @@ exports.buyData = async (req, res) => {
         resData.success === true);
 
     if (isSuccessful) {
-      // Sabunta Transaction zuwa Success
+      // 7. Sabunta Transaction zuwa Success
       if (transactionDoc) {
         await Transaction.findByIdAndUpdate(transactionDoc._id, {
           status: "success",
-          details: `Success: ${resData.message || planLabel}`,
+          details: `Success: ${resData.message || resolvedPlanLabel}`,
         });
       }
 
-      // Record Sales don Supervisors idan agent ne
+      // Record Sales don Supervisors idan Agent ne
       if (user.role === "agent" && user.assignedSupervisor && typeof Sale !== "undefined") {
         await Sale.create({
           agentId: user._id,
           supervisorId: user.assignedSupervisor,
           dataAmountGB: Number(dataPlanDoc?.sizeGB) || 0,
-          planName: planLabel,
+          planName: resolvedPlanLabel,
           amount: finalPrice,
           transactionRef: transactionDoc ? transactionDoc._id : null,
         }).catch(() => {});
       }
 
-      // Ajiye Activity tare da cikakken 'user' field
+      // Activity Log
       try {
         if (typeof Activity !== "undefined") {
           await Activity.create({
             user: userId,
             staffId: userId,
             action: "BUY_DATA",
-            details: `Purchased ${planLabel} for ${targetPhone} at ₦${finalPrice}`,
+            details: `Purchased ${resolvedPlanLabel} for ${targetPhone} at ₦${finalPrice}`,
             targetUser: userId,
           });
         }
@@ -223,13 +260,13 @@ exports.buyData = async (req, res) => {
         console.warn("Activity log skipped:", actErr.message);
       }
 
-      // Ajiye Notification
+      // Notification
       try {
         if (typeof Notification !== "undefined") {
           await Notification.create({
             recipient: userId,
             title: "Data Purchase Successful",
-            message: `Successfully sent ${planLabel} to ${targetPhone}. Amount: ₦${finalPrice}`,
+            message: `Successfully sent ${resolvedPlanLabel} to ${targetPhone}. Amount: ₦${finalPrice}`,
             type: "vtu",
           });
         }
@@ -239,19 +276,21 @@ exports.buyData = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: `Successfully sent ${planLabel} to ${targetPhone}`,
+        message: `Successfully sent ${resolvedPlanLabel} to ${targetPhone}`,
         data: {
           transactionId: transactionDoc ? transactionDoc.transactionId : transactionId,
           newBalance: user.walletBalance,
         },
       });
     } else {
-      throw new Error(resData?.message || "Marketplace declined data purchase.");
+      throw new Error(resData?.message || "Marketplace rejected data purchase.");
     }
   } catch (error) {
     console.error("Buy Data Internal Error:", error);
 
-    // AUTO-REFUND LOGIC
+    // ==========================================
+    // AUTO-REFUND LOGIC (MAYAR DA KUDI IDAN YA GAZA)
+    // ==========================================
     if (isDeducted && userId && finalPrice > 0) {
       try {
         const refundUser = await User.findById(userId);
@@ -259,7 +298,7 @@ exports.buyData = async (req, res) => {
           refundUser.walletBalance = Number((refundUser.walletBalance + finalPrice).toFixed(2));
           if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
           await refundUser.save();
-          console.log(`✓ Auto-Refunded Data: ₦${finalPrice} to user ${userId}`);
+          console.log(`✓ Auto-Refunded: ₦${finalPrice} returned to user ${userId}`);
         }
 
         if (transactionDoc) {
@@ -276,7 +315,7 @@ exports.buyData = async (req, res) => {
 
     return res.status(400).json({
       success: false,
-      message: error.message || "Data processing error",
+      message: error.message || "Failed to process data transaction",
     });
   }
 };
