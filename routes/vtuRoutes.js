@@ -1,84 +1,60 @@
 const express = require("express");
 const router = express.Router();
-
-// 1. Dauko Controllers daban-daban don tabbatar da cewa babu safe() fallback da ke makalewa
-const dataController = require("../controllers/data.controller");
-const airtimeController = require("../controllers/airtime.controller");
 const vtuController = require("../controllers/vtuController");
 const { protect } = require("../middleware/authMiddleware");
 
 // Helper don kiyaye kuskuren undefined callback
-const safe = (controller, handlerName) => {
+const safe = (handlerName) => {
   return (req, res, next) => {
-    if (controller && typeof controller[handlerName] === "function") {
-      return controller[handlerName](req, res, next);
+    if (vtuController && typeof vtuController[handlerName] === "function") {
+      return vtuController[handlerName](req, res, next);
     }
     return res.status(501).json({
       success: false,
-      message: `Endpoint handler '${handlerName}' is not implemented`,
+      message: `Endpoint handler '${handlerName}' is not implemented in vtuController`,
     });
   };
 };
 
-// Duk hanyoyin suna bukatar login
+// Duk hanyoyin suna buƙatar login
 router.use(protect);
 
 /* ======================================================
-   1. DATA SERVICES (Hada kai tsaye da dataController)
+   1. DATA SERVICES
 ====================================================== */
-const dataHandler = (req, res, next) => {
-  if (dataController && typeof dataController.buyData === "function") {
-    return dataController.buyData(req, res, next);
-  }
-  if (vtuController && typeof vtuController.buyData === "function") {
-    return vtuController.buyData(req, res, next);
-  }
-  return res.status(501).json({ success: false, message: "buyData handler not found" });
-};
-
-router.post("/buy-data", dataHandler);
-router.post("/buy-data-custom", dataHandler);
-router.post("/data", dataHandler);
-router.post("/data/buy", dataHandler);
-router.post("/buy", dataHandler);
+router.post("/buy-data", safe("buyData"));
+router.post("/buy-data-custom", safe("buyData"));
+router.post("/data", safe("buyData"));
+router.post("/data/buy", safe("buyData"));
+router.post("/buy", safe("buyData"));
 
 /* ======================================================
-   2. AIRTIME SERVICES (Hada kai tsaye da airtimeController)
+   2. AIRTIME SERVICES
 ====================================================== */
-const airtimeHandler = (req, res, next) => {
-  if (airtimeController && typeof airtimeController.buyAirtime === "function") {
-    return airtimeController.buyAirtime(req, res, next);
-  }
-  if (vtuController && typeof vtuController.buyAirtime === "function") {
-    return vtuController.buyAirtime(req, res, next);
-  }
-  return res.status(501).json({ success: false, message: "buyAirtime handler not found" });
-};
-
-router.post("/buy-airtime", airtimeHandler);
-router.post("/airtime", airtimeHandler);
-router.post("/airtime/buy", airtimeHandler);
+router.post("/buy-airtime", safe("buyAirtime"));
+router.post("/airtime", safe("buyAirtime"));
+router.post("/airtime/buy", safe("buyAirtime"));
 
 /* ======================================================
    3. UTILITY BILLS (ELECTRICITY & CABLE)
 ====================================================== */
-router.post("/electricity", safe(vtuController, "purchaseElectricity"));
-router.post("/buy-electricity", safe(vtuController, "purchaseElectricity"));
-router.post("/cable", safe(vtuController, "purchaseCable"));
-router.post("/buy-cable", safe(vtuController, "purchaseCable"));
+router.post("/electricity", safe("purchaseElectricity"));
+router.post("/buy-electricity", safe("purchaseElectricity"));
+router.post("/cable", safe("purchaseCable"));
+router.post("/buy-cable", safe("purchaseCable"));
 
 /* ======================================================
    4. VERIFICATION & VALIDATION
 ====================================================== */
-router.post("/verify-meter", safe(vtuController, "verifyMeter"));
-router.post("/verify-smartcard", safe(vtuController, "verifySmartCard"));
-router.post("/nimc-validate", safe(vtuController, "nimcValidation"));
+router.post("/verify-meter", safe("verifyMeter"));
+router.post("/verify-smartcard", safe("verifySmartCard"));
+router.post("/nimc-validate", safe("nimcValidation"));
 
 /* ======================================================
    5. TRANSACTION STATUS & HISTORY
 ====================================================== */
-router.get("/transactions", safe(vtuController, "getTransactionHistory"));
-router.get("/status/:reference", safe(vtuController, "getTransactionStatus"));
-router.get("/transaction-status/:reference", safe(vtuController, "getTransactionStatus"));
+router.get("/transactions", safe("getTransactionHistory"));
+router.get("/status/:reference", safe("getTransactionStatus"));
+router.get("/transaction-status/:reference", safe("getTransactionStatus"));
 
 module.exports = router;
