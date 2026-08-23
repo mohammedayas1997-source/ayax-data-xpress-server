@@ -195,30 +195,190 @@ exports.buyAirtime = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Purchase Mobile Data via Ayax APIs Marketplace
+ * @route   POST /api/v1/vtu/buy-data, POST /api/v1/data
+ * @access  Private
+ */
 exports.buyData = async (req, res) => {
-  try {
-    const { network, phoneNumber, phone, planId, planSize, amount, pin } = req.body;
-    const userId = req.user._id || req.user.id;
+  const userId = req.user?._id || req.user?.id;
+  const { network, phoneNumber, phone, planCode, planSize, planId, amount, pin, transactionPin } = req.body;
+  const targetPhone = String(phoneNumber || phone || "").trim();
+  const finalNetwork = String(network || "MTN").toUpperCase().trim();
+  const userPin = String(transactionPin || pin || "").trim();
+  const amountNum = Number(amount);
 
-    // Tabbatar da PIN na Transaction idan an turo
-    if (pin && req.user.transactionPin && req.user.transactionPin !== pin) {
+  // 1. Tace girman Plan ya zama lambobi zalla (misali 500, 1000, 2000, 5000)
+  let rawPlan = String(planCode || planSize || planId || "1000").toUpperCase();
+  let cleanPlanCode = "1000";
+
+  if (rawPlan.includes("500")) cleanPlanCode = "500";
+  else if (rawPlan.includes("1GB") || rawPlan.includes("1000") || rawPlan.includes("1.0GB")) cleanPlanCode = "1000";
+  else if (rawPlan.includes("2GB") || rawPlan.includes("2000") || rawPlan.includes("2.0GB")) cleanPlanCode = "2000";
+  else if (rawPlan.includes("3GB") || rawPlan.includes("3000")) cleanPlanCode = "3000";
+  else if (rawPlan.includes("5GB") || rawPlan.includes("5000")) cleanPlanCode = "5000";
+  else if (rawPlan.includes("10GB") || rawPlan.includes("10000")) cleanPlanCode = "10000";
+  else {
+    cleanPlanCode = rawPlan.replace(/[^0-9]/g, "") || "1000";
+  }
+
+  let isDeducted = false;
+  let reference = `DATA-${Date.now()}`;
+  let transactionDoc = null;
+
+  try {
+    if (!targetPhone || targetPhone.length < 11 || !amountNum || amountNum <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Wrong transaction PIN entered",
+        message: "Please provide valid network, 11-digit phone number, and plan amount.",
       });
     }
 
-    // Kiran Provider / GSM Gateway Service
-    // ... Logics na tura umarni zuwa Ayax APIs Gateway ...
+    // 2. Duba User
+    const user = await User.findById(userId).select("+transactionPin +pin +walletBalance balance");
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
 
-    return res.status(200).json({
-      success: true,
-      message: "Data purchase request submitted successfully",
+    // 3. Tabbatar da PIN
+    if (userPin) {
+      let isPinValid = false;
+      if (user.matchPin) {
+        isPinValid = await user.matchPin(userPin);
+      } else if (user.transactionPin) {
+        isPinValid = String(user.transactionPin) === String(userPin);
+      } else if (user.pin) {
+        isPinValid = String(user.pin) === String(userPin);
+      } else {
+        isPinValid = userPin === "0000";
+      }
+
+      if (!isPinValid) {
+        return res.status(400).json({
+          success: false,
+          message: "Security Error: Invalid Transaction PIN.",
+        });
+      }
+    }
+
+    // 4. Duba Wallet Balance
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
+    if (currentBal < amountNum) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient balance. Required: ₦${amountNum}, Available: ₦${currentBal}`,
+      });
+    }
+
+    // 5. Cire kudi daga Wallet
+    const newBal = Number((currentBal - amountNum).toFixed(2));
+    user.walletBalance = newBal;
+    if (user.balance !== undefined) user.balance = newBal;
+    await user.save();
+    isDeducted = true;
+
+    // 6. Ajiye Transaction History
+    const transactionId = `DATA${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    transactionDoc = await Transaction.create({
+      user: userId,
+      transactionId,
+      reference,
+      type: "data",
+      category: "data",
+      amount: amountNum,
+      oldBalance: currentBal,
+      newBalance: newBal,
+      phoneNumber: targetPhone,
+      status: "pending",
+      details: `${finalNetwork} (${cleanPlanCode}MB) Data for ${targetPhone}`,
     });
+
+    // 7. Kira Ayax Marketplace API Gateway
+    const dataPayload = {
+      network: finalNetwork,
+      amount: amountNum,
+      phone: targetPhone,
+      phoneNumber: targetPhone,
+      planCode: cleanPlanCode,
+      ref_id: reference,
+      reference: reference,
+    };
+
+    const dataHeaders = getMarketplaceHeaders(req.headers.authorization);
+
+    console.log(`[VTU DISPATCHING DATA TO GATEWAY]: ${AYAX_API_BASE_URL}/data/purchase`);
+    console.log(`Payload:`, JSON.stringify(dataPayload));
+
+    const response = await axios.post(
+      `${AYAX_API_BASE_URL}/data/purchase`,
+      dataPayload,
+      { headers: dataHeaders, timeout: 40000 }
+    );
+
+    const resData = response?.data;
+    const isSuccessful =
+      resData &&
+      (resData.success === true ||
+        resData.status === true ||
+        resData.status === "success" ||
+        resData.code === 200 ||
+        resData.code === "200" ||
+        resData.code === "TRANSACTION_QUEUED");
+
+    if (isSuccessful) {
+      if (transactionDoc) {
+        await Transaction.findByIdAndUpdate(transactionDoc._id, {
+          status: "success",
+          details: `Success: ${finalNetwork} ${cleanPlanCode}MB data sent to ${targetPhone}`,
+        });
+      }
+
+      await Activity.create({
+        user: user._id,
+        action: "BUY_DATA",
+        details: `Purchased ${finalNetwork} ${cleanPlanCode}MB data for ${targetPhone}`,
+      }).catch(() => {});
+
+      return res.status(200).json({
+        success: true,
+        message: "Data purchase successful.",
+        data: {
+          transactionId: transactionDoc ? transactionDoc.transactionId : transactionId,
+          reference,
+          newBalance: user.walletBalance,
+        },
+      });
+    } else {
+      throw new Error(resData?.message || "Marketplace gateway declined data purchase.");
+    }
   } catch (error) {
-    return res.status(500).json({
+    console.error("Data Purchase Error:", error.response?.data || error.message);
+
+    // AUTO-REFUND IDAN YA GAZA
+    if (isDeducted && userId) {
+      try {
+        const refundUser = await User.findById(userId);
+        if (refundUser) {
+          refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
+          if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
+          await refundUser.save();
+        }
+
+        if (transactionDoc) {
+          await Transaction.findByIdAndUpdate(transactionDoc._id, {
+            status: "failed",
+            refundReason: error.message,
+            details: `Failed & Refunded: ${error.message}`,
+          });
+        }
+      } catch (refundErr) {
+        console.error("Refund processing failed:", refundErr.message);
+      }
+    }
+
+    return res.status(400).json({
       success: false,
-      message: error.message || "Failed to process data transaction",
+      message: error.response?.data?.message || error.message || "Data processing failed.",
     });
   }
 };
