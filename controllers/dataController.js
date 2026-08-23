@@ -1,321 +1,308 @@
+const axios = require("axios");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
-const Notification = require("../models/Notification");
-const DataPlan = require("../models/DataPlan");
-const Sale = require("../models/Sale");
-const axios = require("axios");
+const bcrypt = require("bcryptjs");
 
-// 1. Tsaftace URL na API Marketplace
-const RAW_URL =
-  process.env.AYAX_API_BASE_URL ||
-  process.env.MARKETPLACE_API_URL ||
-  "https://ayax-api-marketplace.onrender.com";
-
-const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
-
-const AYAX_API_KEY =
-  process.env.AYAX_API_KEY ||
-  process.env.MARKETPLACE_API_KEY ||
+// Live API Key Backup
+const FALLBACK_API_KEY =
   "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
 
-// Helper don tsara Marketplace Headers
-const getMarketplaceHeaders = (userAuthHeader) => {
-  const headers = {
-    "Content-Type": "application/json",
-    "x-api-key": AYAX_API_KEY,
-  };
-  if (userAuthHeader) {
-    headers["Authorization"] = userAuthHeader;
-  } else if (AYAX_API_KEY) {
-    headers["Authorization"] = `Bearer ${AYAX_API_KEY}`;
+// Helper don tura Notification
+const sendNotification = async (userId, title, message) => {
+  try {
+    const user = await User.findById(userId);
+    if (user) {
+      if (!user.notifications) user.notifications = [];
+      user.notifications.push({
+        title,
+        message,
+        date: new Date(),
+        isRead: false,
+      });
+      await user.save();
+    }
+  } catch (error) {
+    console.error("Notification failed:", error);
   }
-  return headers;
 };
 
 /**
- * @desc    Purchase Mobile Data via Ayax APIs (Safe Balance & Auto-Refund)
- * @route   POST /api/v1/vtu/buy-data, POST /api/v1/vtu/buy-data-custom
- * @access  Private
+ * @desc    Sayen Data Bundle (VTU) via Ayax API Marketplace
+ * @route   POST /api/v1/vtu/buy-data (ko /api/v1/data/buy)
+ * @access  Private (User)
  */
 exports.buyData = async (req, res) => {
-  const userId = req.user?._id || req.user?.id;
-  const {
-    network,
-    networkId,
-    planId,
-    planCode,
-    plan,
-    planLabel: incomingLabel,
-    dataType,
-    phoneNumber,
-    phone,
-    pin,
-    transactionPin,
-    amount,
-  } = req.body;
-
-  const targetPhone = (phoneNumber || phone || "").trim();
-  const targetPlan = planId || planCode || plan;
-  const userEnteredPin = pin || transactionPin;
-
-  let isDeducted = false;
-  let finalPrice = 0;
-  let reference = `AYAX-DATA-${Date.now()}`;
-  let transactionDoc = null;
+  const session = await User.startSession();
+  session.startTransaction();
 
   try {
-    if (!targetPhone || (!targetPlan && !amount)) {
+    const { network, phone, phoneNumber, phoneNo, planCode, amount, transactionPin, pin } = req.body;
+    const userId = req.user._id || req.user.id;
+
+    const targetPhone = String(phoneNumber || phone || phoneNo || "").trim();
+    const finalNetwork = String(network || "").trim().toUpperCase();
+    const cleanPlanCode = String(planCode || "1000").trim();
+    const amountNum = Number(amount);
+    const userPin = String(transactionPin || pin || "").trim();
+
+    // 1. Validation
+    if (!finalNetwork || !targetPhone || !cleanPlanCode) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Please provide a valid phone number and select a data plan.",
+        message: "Please provide network, recipient phone number, and plan code",
       });
     }
 
-    // 1. Nemo User da kuma Data Plan a Database
-    const userPromise = User.findById(userId).select(
-      "+transactionPin +pin +walletBalance balance role assignedSupervisor"
-    );
-
-    let planQuery = [];
-    if (targetPlan) {
-      if (typeof targetPlan === "string" && targetPlan.match(/^[0-9a-fA-F]{24}$/)) {
-        planQuery.push({ _id: targetPlan });
-      }
-      planQuery.push({ planCode: String(targetPlan) });
-      planQuery.push({ planLabel: String(targetPlan) });
+    if (!userPin) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Transaction PIN is required",
+      });
     }
 
-    const planPromise = planQuery.length > 0 ? DataPlan.findOne({ $or: planQuery }) : null;
+    if (!amountNum || amountNum <= 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "Invalid data plan amount",
+      });
+    }
 
-    const [user, dataPlanDoc] = await Promise.all([userPromise, planPromise]);
+    const user = await User.findById(userId)
+      .select("+pin +transactionPin +walletBalance balance")
+      .session(session);
 
     if (!user) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // 2. Tantance Transaction PIN idan an turo
-    if (userEnteredPin) {
-      let isPinValid = false;
-      if (user.matchPin) {
-        isPinValid = await user.matchPin(userEnteredPin);
-      } else if (user.transactionPin) {
-        isPinValid = String(user.transactionPin) === String(userEnteredPin);
-      } else if (user.pin) {
-        isPinValid = String(user.pin) === String(userEnteredPin);
-      } else {
-        isPinValid = userEnteredPin === "0000";
-      }
-
-      if (!isPinValid) {
-        return res.status(400).json({
-          success: false,
-          message: "Security Error: Invalid Transaction PIN entered",
-        });
-      }
-    }
-
-    // 3. Tantance Farashi (User vs Agent Price)
-    if (dataPlanDoc) {
-      finalPrice =
-        user.role === "agent" || user.role === "reseller"
-          ? dataPlanDoc.agentPrice || dataPlanDoc.userPrice
-          : dataPlanDoc.userPrice;
+    // 2. Tabbatar da PIN
+    let isPinValid = false;
+    if (user.matchPin) {
+      isPinValid = await user.matchPin(userPin);
+    } else if (user.pin) {
+      isPinValid = user.pin === userPin || (await bcrypt.compare(userPin, user.pin));
     } else {
-      finalPrice = Number(amount || 0);
+      isPinValid = userPin === "0000";
     }
 
-    if (finalPrice <= 0) {
+    if (!isPinValid) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Invalid plan price configuration.",
+        message: "Security Error: Invalid Transaction PIN",
       });
     }
 
-    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
+    // 3. Duba Wallet Balance
+    const currentBal =
+      user.walletBalance !== undefined ? user.walletBalance : user.balance || 0;
 
-    if (currentBal < finalPrice) {
+    if (currentBal < amountNum) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
-        message: `Kudinka bai isa ba! Ana buƙatar: ₦${finalPrice.toLocaleString()}, Kana da: ₦${currentBal.toLocaleString()}`,
+        message: `Insufficient Wallet Balance. Required: ₦${amountNum}, Available: ₦${currentBal}`,
       });
     }
 
-    // 4. Cire Kudi a Wallet (Atomic Wallet Deduction)
-    const newBal = Number((currentBal - finalPrice).toFixed(2));
+    const transactionId = `DATA${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const reference = `AYAX-DATA-${Date.now()}`;
+
+    // 4. Cire Kudi daga Wallet nan take (Atomic Debit)
+    const newBal = Number((currentBal - amountNum).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
-    await user.save();
-    isDeducted = true;
+    await user.save({ session });
 
     // 5. Ajiye Transaction History
-    const resolvedPlanLabel =
-      dataPlanDoc?.planLabel || incomingLabel || `${network || "MTN"} Data Plan`;
-    const resolvedPlanType =
-      dataPlanDoc?.planType || dataType || "SME";
-    const transactionId = `DATA${Date.now()}${Math.floor(Math.random() * 1000)}`;
-
-    transactionDoc = await Transaction.create({
+    const newTransaction = new Transaction({
       user: userId,
       transactionId,
       reference,
       type: "data",
-      amount: finalPrice,
+      category: "vtu",
+      amount: amountNum,
       oldBalance: currentBal,
       newBalance: newBal,
-      phoneNumber: targetPhone,
-      provider: dataPlanDoc?.networkName || network || "MTN",
       status: "pending",
-      details: `Ayax Data Purchase: ${resolvedPlanLabel} (${resolvedPlanType}) to ${targetPhone}`,
+      details: `${finalNetwork} (${cleanPlanCode}) Data Bundle for ${targetPhone}`,
     });
+    await newTransaction.save({ session });
 
-    // 6. Kira Ayax APIs Marketplace Gateway
-    const requestPayload = {
-      network: dataPlanDoc?.networkName || String(network || "MTN").toUpperCase(),
-      networkId: dataPlanDoc?.networkId || networkId || "01",
-      plan: dataPlanDoc?.planCode || targetPlan,
-      planId: dataPlanDoc?.planCode || targetPlan,
-      planCode: dataPlanDoc?.planCode || targetPlan,
-      planSize: dataPlanDoc?.planLabel || resolvedPlanLabel,
-      sizeGB: dataPlanDoc?.sizeGB || 1,
-      dataType: resolvedPlanType,
-      phone: targetPhone,
-      phoneNumber: targetPhone,
-      amount: finalPrice,
-      ref_id: reference,
-      reference: reference,
-    };
+    await session.commitTransaction();
+    session.endSession();
 
-    const requestHeaders = getMarketplaceHeaders(req.headers.authorization);
+    // 6. Saita URL da API Key a Runtime (Marketplace Forwarding)
+    const activeApiKey = (
+      process.env.AYAX_API_KEY || FALLBACK_API_KEY
+    ).trim();
+
+    const rawBaseUrl =
+      process.env.AYAX_API_BASE_URL ||
+      "https://ayax-api-marketplace.onrender.com";
+
+    const cleanBaseUrl = rawBaseUrl
+      .replace(/\/+$/, "")
+      .replace(/\/api\/v1\/?$/, "");
+
+    // Endpoint na Marketplace Data Purchase
+    const targetUrl = `${cleanBaseUrl}/api/v1/data/purchase`;
 
     let response;
     try {
-      try {
-        response = await axios.post(
-          `${AYAX_API_BASE_URL}/data/buy`,
-          requestPayload,
-          { headers: requestHeaders, timeout: 40000 }
-        );
-      } catch (err1) {
-        if (err1.response?.status === 404) {
-          response = await axios.post(
-            `${AYAX_API_BASE_URL}/vtu/data`,
-            requestPayload,
-            { headers: requestHeaders, timeout: 40000 }
-          );
-        } else {
-          throw err1;
+      console.log(`[VTU DATA] Calling Marketplace: ${targetUrl}`);
+      console.log(`[VTU DATA] Dispatched Ref: ${reference} (${finalNetwork} ${cleanPlanCode}) -> ${targetPhone}`);
+
+      response = await axios.post(
+        targetUrl,
+        {
+          network: finalNetwork,
+          phone: targetPhone,
+          phoneNumber: targetPhone,
+          planCode: cleanPlanCode,
+          amount: amountNum,
+          reference: reference,
+        },
+        {
+          headers: {
+            "x-api-key": activeApiKey,
+            Authorization: `Bearer ${activeApiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 45000,
         }
-      }
-    } catch (apiError) {
-      console.error("Marketplace Data API Error:", apiError.response?.data || apiError.message);
-      throw new Error(
-        apiError.response?.data?.message || "Kuskure wajen tura umarni zuwa GSM Gateway"
       );
+    } catch (apiError) {
+      console.error(
+        "Ayax Data API Full Error:",
+        apiError.response?.data || apiError.message
+      );
+
+      // AUTO-REFUND: Mayar da kudi idan Marketplace ta kasa turawa
+      const refundUser = await User.findById(userId);
+      if (refundUser) {
+        refundUser.walletBalance = Number(
+          ((refundUser.walletBalance || 0) + amountNum).toFixed(2)
+        );
+        if (refundUser.balance !== undefined)
+          refundUser.balance = refundUser.walletBalance;
+        await refundUser.save();
+      }
+
+      const errMsg =
+        apiError.response?.data?.message ||
+        apiError.response?.data?.error ||
+        apiError.message ||
+        "Gateway connection error";
+
+      await Transaction.findOneAndUpdate(
+        { reference },
+        {
+          status: "failed",
+          refundReason: errMsg,
+          details: `Failed & Refunded: ${errMsg}`,
+        }
+      );
+
+      return res.status(502).json({
+        success: false,
+        message: `Failed to connect to Ayax data provider (${errMsg}). Money refunded.`,
+      });
     }
 
-    const resData = response?.data;
+    const resData = response.data;
     const isSuccessful =
       resData &&
-      (resData.status === true ||
+      (resData.success === true ||
         resData.status === "success" ||
-        resData.code === 200 ||
-        resData.code === "200" ||
-        resData.success === true);
+        resData.status === "SUCCESSFUL" ||
+        resData.code === "TRANSACTION_QUEUED");
 
     if (isSuccessful) {
-      // 7. Sabunta Transaction zuwa Success
-      if (transactionDoc) {
-        await Transaction.findByIdAndUpdate(transactionDoc._id, {
+      const providerData = resData.data || resData;
+
+      await Transaction.findOneAndUpdate(
+        { reference },
+        {
           status: "success",
-          details: `Success: ${resData.message || resolvedPlanLabel}`,
-        });
-      }
-
-      // Record Sales don Supervisors idan Agent ne
-      if (user.role === "agent" && user.assignedSupervisor && typeof Sale !== "undefined") {
-        await Sale.create({
-          agentId: user._id,
-          supervisorId: user.assignedSupervisor,
-          dataAmountGB: Number(dataPlanDoc?.sizeGB) || 0,
-          planName: resolvedPlanLabel,
-          amount: finalPrice,
-          transactionRef: transactionDoc ? transactionDoc._id : null,
-        }).catch(() => {});
-      }
-
-      // Activity Log
-      try {
-        if (typeof Activity !== "undefined") {
-          await Activity.create({
-            user: userId,
-            staffId: userId,
-            action: "BUY_DATA",
-            details: `Purchased ${resolvedPlanLabel} for ${targetPhone} at ₦${finalPrice}`,
-            targetUser: userId,
-          });
+          reference: providerData.reference || providerData.orderId || reference,
+          details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone}`,
         }
-      } catch (actErr) {
-        console.warn("Activity log skipped:", actErr.message);
-      }
+      );
 
-      // Notification
-      try {
-        if (typeof Notification !== "undefined") {
-          await Notification.create({
-            recipient: userId,
-            title: "Data Purchase Successful",
-            message: `Successfully sent ${resolvedPlanLabel} to ${targetPhone}. Amount: ₦${finalPrice}`,
-            type: "vtu",
-          });
-        }
-      } catch (notifErr) {
-        console.warn("Notification skipped:", notifErr.message);
-      }
+      await Activity.create({
+        user: user._id,
+        staffId: user._id,
+        action: "BUY_DATA",
+        details: `Purchased ${finalNetwork} (${cleanPlanCode}) data for ${targetPhone}`,
+        targetUser: user._id,
+      }).catch((err) => console.warn("Activity log error:", err.message));
+
+      await sendNotification(
+        userId,
+        "Data Bundle Successful 🎉",
+        `Your ${finalNetwork} data bundle purchase for ${targetPhone} was processed successfully.`
+      );
 
       return res.status(200).json({
         success: true,
-        message: `Successfully sent ${resolvedPlanLabel} to ${targetPhone}`,
-        data: {
-          transactionId: transactionDoc ? transactionDoc.transactionId : transactionId,
-          newBalance: user.walletBalance,
-        },
+        message: "Data Purchase Dispatched Successfully",
+        orderId: providerData.reference || reference,
+        network: finalNetwork,
+        phone: targetPhone,
+        amount: amountNum,
+        newBalance: user.walletBalance,
       });
     } else {
-      throw new Error(resData?.message || "Marketplace rejected data purchase.");
+      // Auto Refund idan ba a yi nasara ba
+      const refundUser = await User.findById(userId);
+      if (refundUser) {
+        refundUser.walletBalance = Number(
+          ((refundUser.walletBalance || 0) + amountNum).toFixed(2)
+        );
+        if (refundUser.balance !== undefined)
+          refundUser.balance = refundUser.walletBalance;
+        await refundUser.save();
+      }
+
+      const failReason = resData.message || "Provider declined data transaction";
+
+      await Transaction.findOneAndUpdate(
+        { reference },
+        {
+          status: "failed",
+          refundReason: failReason,
+          details: `Failed & Refunded: ${failReason}`,
+        }
+      );
+
+      return res.status(400).json({
+        success: false,
+        message: `${failReason}. Money refunded.`,
+      });
     }
   } catch (error) {
-    console.error("Buy Data Internal Error:", error);
-
-    // ==========================================
-    // AUTO-REFUND LOGIC (MAYAR DA KUDI IDAN YA GAZA)
-    // ==========================================
-    if (isDeducted && userId && finalPrice > 0) {
-      try {
-        const refundUser = await User.findById(userId);
-        if (refundUser) {
-          refundUser.walletBalance = Number((refundUser.walletBalance + finalPrice).toFixed(2));
-          if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
-          await refundUser.save();
-          console.log(`✓ Auto-Refunded: ₦${finalPrice} returned to user ${userId}`);
-        }
-
-        if (transactionDoc) {
-          await Transaction.findByIdAndUpdate(transactionDoc._id, {
-            status: "failed",
-            refundReason: error.message,
-            details: `Failed & Refunded: ${error.message}`,
-          });
-        }
-      } catch (refundErr) {
-        console.error("Critical: Data refund failed:", refundErr.message);
-      }
+    if (session.inTransaction()) {
+      await session.abortTransaction();
     }
+    session.endSession();
 
-    return res.status(400).json({
+    console.error("Buy Data System Error:", error);
+    return res.status(500).json({
       success: false,
-      message: error.message || "Failed to process data transaction",
+      message: "Data processing error",
+      error: error.message,
     });
   }
 };
