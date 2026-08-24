@@ -4,6 +4,7 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
 
 const app = express();
 
@@ -28,7 +29,7 @@ const corsOptions = {
     ) {
       callback(null, true);
     } else {
-      callback(null, true); // Fallback
+      callback(null, true);
     }
   },
   credentials: true,
@@ -41,12 +42,12 @@ const corsOptions = {
     "Authorization",
     "Accept-Version",
     "token",
-    "x-api-key", // An kara don Marketplace & External API headers
+    "x-api-key",
   ],
   optionsSuccessStatus: 200,
 };
 
-// 1. Aiwatar da CORS da Preflight OPTIONS
+// 1. Apply CORS & Preflight Handlers
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
@@ -80,12 +81,27 @@ const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 const dataRoutes = require("./routes/data.routes");
 const transactionRoutes = require("./routes/transaction.routes");
 
-// --- INJECTING MIDDLEWARE & USER MODEL ---
+// Additional Service Routes (Utility, Bills, Notifications)
+let utilityRoutes;
+try {
+  utilityRoutes = require("./routes/utilityRoutes");
+} catch (e) {
+  utilityRoutes = null;
+}
+
+let notificationRoutes;
+try {
+  notificationRoutes = require("./routes/notificationRoutes");
+} catch (e) {
+  notificationRoutes = null;
+}
+
+// --- USER MODEL ---
 const User = require("./models/User");
 
 // --- ROUTES REGISTRATION ---
-app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/nimc", nimcRoutes);
 app.use("/api/v1/bvn", bvnRoutes);
@@ -93,20 +109,35 @@ app.use("/api/v1/webhooks", webhookRoutes);
 app.use("/api/v1/payment", paymentRoutes);
 app.use("/api/v1/payments", paymentRoutes);
 app.use("/api/v1/wallet", walletRoutes);
+app.use("/api/v1/transactions", transactionRoutes);
+app.use("/api/v1/virtual-account", virtualAccountRoutes);
 
-// VTU & Purchase Route Aliases
+// VTU, Data & Airtime Routing
 app.use("/api/v1/vtu", vtuRoutes);
 app.use("/api/v1/data", dataRoutes);
 app.use("/api/v1/airtime", vtuRoutes);
-app.use("/api/v1/bills", vtuRoutes);
 
+// Electricity & Cable TV Bills Routing
+if (utilityRoutes) {
+  app.use("/api/v1/bills", utilityRoutes);
+  app.use("/api/v1/utility", utilityRoutes);
+  app.use("/api/v1/electricity", utilityRoutes);
+  app.use("/api/v1/cable", utilityRoutes);
+} else {
+  app.use("/api/v1/bills", vtuRoutes);
+}
+
+// Notifications Routing
+if (notificationRoutes) {
+  app.use("/api/v1/notifications", notificationRoutes);
+}
+
+// Hierarchy & Role Routes
 app.use("/api/v1/agent", agentRoutes);
 app.use("/api/v1/leader", leaderRoutes);
 app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
-app.use("/api/v1/virtual-account", virtualAccountRoutes);
-app.use("/api/v1/transactions", transactionRoutes);
 
 // --- SECURE USER PROFILE ROUTE ---
 app.get("/api/v1/user/profile", async (req, res) => {
@@ -133,7 +164,9 @@ app.get("/api/v1/user/profile", async (req, res) => {
 
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findById(decoded.id || decoded._id).select("-password -pin");
+      const user = await User.findById(decoded.id || decoded._id).select(
+        "-password -pin"
+      );
 
       if (!user) {
         return res.status(404).json({
@@ -155,7 +188,57 @@ app.get("/api/v1/user/profile", async (req, res) => {
       });
     }
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// --- SUPERADMIN GENERATOR ENDPOINT ---
+app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
+  try {
+    const email = "mohammed.ayas@ayaxdata.online".toLowerCase().trim();
+    const phone = "09033738409";
+    const plainPassword = "Password123@";
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(plainPassword, salt);
+
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection("users");
+
+    await usersCollection.deleteMany({
+      $or: [{ email: email }, { phone: phone }],
+    });
+
+    const result = await usersCollection.insertOne({
+      firstName: "Mohammed",
+      surname: "Ayas",
+      name: "Mohammed Ayas",
+      email: email,
+      phone: phone,
+      password: hashedPassword,
+      role: "superadmin",
+      walletBalance: 1000000,
+      balance: 1000000,
+      pin: "1997",
+      transactionPin: "1997",
+      isSuspended: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "SuperAdmin created successfully!",
+      insertedId: result.insertedId,
+      credentials: {
+        email: email,
+        phone: phone,
+        password: plainPassword,
+        role: "superadmin",
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -182,68 +265,14 @@ const PORT = process.env.PORT || 10000;
 const startServer = async () => {
   try {
     await connectDB();
-    console.log("✅ MongoDB Connected Successfully");
-    console.log("🔍 Connected to database:", mongoose.connection.name);
-
-// DIRECT RAW INJECTOR (Hana Mongoose Hook Double-Hash)
-app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
-  try {
-    const bcrypt = require("bcryptjs");
-    const email = "mohammed.ayas@ayaxdata.online".toLowerCase().trim();
-    const phone = "09033738409";
-    const plainPassword = "Password123@";
-    
-    // Yi hash sau daya kacal
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(plainPassword, salt);
-
-    const db = mongoose.connection.db;
-    const usersCollection = db.collection("users");
-
-    // 1. Share tsohon account don share duk wani double-hashed password
-    await usersCollection.deleteMany({
-      $or: [{ email: email }, { phone: phone }],
-    });
-
-    // 2. Saka sabo kai tsaye a MongoDB (Direct Driver Insert)
-    const result = await usersCollection.insertOne({
-      firstName: "Mohammed",
-      surname: "Ayas",
-      name: "Mohammed Ayas",
-      email: email,
-      phone: phone,
-      password: hashedPassword,
-      role: "superadmin",
-      walletBalance: 1000000,
-      balance: 1000000,
-      pin: "1997",
-      transactionPin: "1997",
-      isSuspended: false,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "✅ SuperAdmin created cleanly without double-hashing!",
-      insertedId: result.insertedId,
-      credentials: {
-        email: email,
-        phone: phone,
-        password: plainPassword,
-        role: "superadmin",
-      },
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
+    console.log(" MongoDB Connected Successfully");
+    console.log(" Connected to database:", mongoose.connection.name);
 
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`🚀 Server fully optimized and running on port ${PORT}`);
+      console.log(` Server fully optimized and running on port ${PORT}`);
     });
   } catch (err) {
-    console.error("❌ MongoDB Connection Failed:", err.message);
+    console.error(" MongoDB Connection Failed:", err.message);
     process.exit(1);
   }
 };

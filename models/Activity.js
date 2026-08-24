@@ -2,8 +2,7 @@ const mongoose = require("mongoose");
 
 const ActivitySchema = new mongoose.Schema(
   {
-    // User din da ya yi aikin (Staff, Admin, ko Agent)
-    // Mun ba da damar a yi amfani da 'user' ko 'staffId' a cikin code don guje wa matsala
+    // 1. Actor Performing Action (User, Staff, Agent, or Admin)
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -11,51 +10,112 @@ const ActivitySchema = new mongoose.Schema(
       index: true,
     },
 
-    // Don tallafawa duk wani controller da ke amfani da 'staffId' maimakon 'user'
     staffId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       index: true,
+      default: function () {
+        return this.user;
+      },
     },
 
-    // Wane irin aiki aka yi? (misali: "LOGIN", "REFUND_REQUEST", "CHANGE_ROLE", "BUY_DATA")
+    actorRole: {
+      type: String,
+      enum: ["USER", "AGENT", "SUPERVISOR", "ADMIN", "SUPERADMIN", "SYSTEM"],
+      default: "USER",
+      index: true,
+    },
+
+    // 2. Action Key Classification
     action: {
       type: String,
       required: true,
-      index: true, // Index don saurin bincike (Optimization)
+      trim: true,
+      index: true, // e.g. "AUTH_LOGIN", "DATA_PURCHASE", "REFUND_ISSUED", "WALLET_CREDITED", "NIMC_VERIFY", "ROLE_UPDATED"
     },
 
-    // Karin bayani game da aikin da aka yi
+    category: {
+      type: String,
+      enum: ["AUTH", "FINANCIAL", "VTU", "IDENTITY", "ADMIN_CONTROL", "SECURITY", "SYSTEM"],
+      default: "SYSTEM",
+      index: true,
+    },
+
+    // 3. Human-Readable Description & Metadata
     details: {
       type: String,
       required: true,
+      trim: true,
     },
 
-    // User din da abin ya shafa ko aikin ya zo a kan sa (idan akwai)
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+
+    // 4. Target Affected Entity
     targetUser: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       index: true,
+      default: null,
     },
 
-    // Tsaro: Daga wane IP address aikin ya fito?
+    targetReference: {
+      type: String,
+      trim: true,
+      index: true,
+      default: null,
+    },
+
+    // 5. Security & Device Footprint
     ipAddress: {
       type: String,
+      trim: true,
+      default: "0.0.0.0",
     },
 
-    // Browser ko App din da aka yi amfani da shi
     userAgent: {
       type: String,
+      trim: true,
+      default: "Unknown",
+    },
+
+    deviceType: {
+      type: String,
+      enum: ["MOBILE_APP", "WEB_PORTAL", "API_REQUEST", "ADMIN_PANEL"],
+      default: "MOBILE_APP",
+    },
+
+    // 6. Execution Outcome
+    status: {
+      type: String,
+      enum: ["SUCCESS", "FAILED", "WARNING", "BLOCKED"],
+      default: "SUCCESS",
+      index: true,
     },
   },
   {
-    timestamps: true, // Yana samar da 'createdAt' da 'updatedAt' ta atomatik
-  },
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
 );
 
-// Ingantattun Indexes don saurin loda Audit Logs da Dashboards
+// Pre-save synchronization for user and staffId
+ActivitySchema.pre("save", function (next) {
+  if (!this.staffId && this.user) {
+    this.staffId = this.user;
+  }
+  next();
+});
+
+// High-performance composite indexes for real-time audit logging and forensics
 ActivitySchema.index({ user: 1, createdAt: -1 });
 ActivitySchema.index({ staffId: 1, createdAt: -1 });
 ActivitySchema.index({ action: 1, createdAt: -1 });
+ActivitySchema.index({ category: 1, createdAt: -1 });
+ActivitySchema.index({ targetUser: 1, createdAt: -1 });
 
-module.exports = mongoose.model("Activity", ActivitySchema);
+module.exports =
+  mongoose.models.Activity || mongoose.model("Activity", ActivitySchema);

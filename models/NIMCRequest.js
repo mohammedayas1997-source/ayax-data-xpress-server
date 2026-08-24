@@ -3,72 +3,81 @@ const mongoose = require("mongoose");
 
 const NIMCRequestSchema = new mongoose.Schema(
   {
-    // Mai amfani da ya yi buƙatar NIMC service
+    // 1. User Relational Association
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User", // Haɗi da table ɗin User
+      ref: "User",
       required: true,
       index: true,
     },
 
-    // Nau'in sabis din NIMC (Misali: Modification, Renewal, NIN Verification, NIN Premium, Slip Printing)
+    // 2. NIMC Service Classification
     serviceType: {
       type: String,
       required: [
         true,
-        "Please specify the service type (e.g., Modification, Renewal)",
+        "Please specify the service type (e.g. Standard Slip, Premium Card, Modification, NIN Verification, Phone Search, Tracking ID Search)",
       ],
       trim: true,
       index: true,
     },
 
-    // Lambar NIN ta mai amfani
-    ninNumber: {
+    serviceId: {
       type: String,
-      required: [true, "NIN Number is required"],
       trim: true,
       index: true,
     },
 
-    // Dukkan sauran bayanan form ɗin a matsayin JSON/Object (Misali: Sunan mahaifi, adireshin da za a gyara, da sauransu)
+    // 3. Search & Identification Parameters
+    ninNumber: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    trackingId: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    phoneNumber: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    searchValue: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    // 4. Form Data & Modification Payloads
     formData: {
-      type: mongoose.Schema.Types.Mixed, 
+      type: mongoose.Schema.Types.Mixed,
       required: true,
       default: {},
     },
 
-    // Adadin kudin da aka cire
+    // 5. Financial & Billing Audit
     amount: {
       type: Number,
       required: true,
       min: 0,
     },
 
-    // Matsayin buƙatar (status)
-    status: {
-      type: String,
-      enum: ["pending", "processing", "completed", "rejected", "success"],
-      default: "pending",
-      index: true,
+    fee: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
-    // Link ɗin hoton slip ko takardar sakamako da Admin zai yi upload ko kuma API ya dawo da shi
-    slipUrl: {
-      type: String, 
-      default: null,
-    },
-
-    // Cikakken sakamakon da ya fito daga API (Idan akwai) ko bayanin amsa daga Admin
-    details: {
-      type: mongoose.Schema.Types.Mixed,
-      default: {},
-    },
-
-    // Lambar Transaction ID ko Reference don daidaita kudi da ma'amala
-    transactionId: {
-      type: String,
-      index: true,
-      sparse: true,
+    totalAmount: {
+      type: Number,
+      default: function () {
+        return (this.amount || 0) + (this.fee || 0);
+      },
     },
 
     reference: {
@@ -78,19 +87,88 @@ const NIMCRequestSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Lokacin da aka kammala ko warware buƙatar
+    transactionId: {
+      type: String,
+      index: true,
+      sparse: true,
+    },
+
+    // 6. Request Lifecycle & Status
+    status: {
+      type: String,
+      enum: ["pending", "processing", "completed", "rejected", "failed", "success"],
+      default: "pending",
+      index: true,
+    },
+
+    // 7. Verification Results & Printable Artifacts
+    slipUrl: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    pdfUrl: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    photoUrl: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    details: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+
+    // 8. Administrative Oversight & Notes
+    adminComment: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    processedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     resolvedAt: {
       type: Date,
     },
   },
-  { 
-    timestamps: true // Zai samar da 'createdAt' da 'updatedAt' kai tsaye 
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
-// Ingantattun Indexes don saurin bincike a cikin Dashboard da Admin Panel
+// Lifecycle Hook: Set resolution timestamp upon completion or rejection
+NIMCRequestSchema.pre("save", function (next) {
+  if (
+    this.isModified("status") &&
+    ["completed", "success", "rejected", "failed"].includes(this.status.toLowerCase()) &&
+    !this.resolvedAt
+  ) {
+    this.resolvedAt = new Date();
+  }
+  next();
+});
+
+// Optimized Compound Indexes for High-Traffic Queries
 NIMCRequestSchema.index({ user: 1, createdAt: -1 });
 NIMCRequestSchema.index({ status: 1, createdAt: -1 });
 NIMCRequestSchema.index({ serviceType: 1, status: 1 });
+NIMCRequestSchema.index({ ninNumber: 1, status: 1 });
+NIMCRequestSchema.index({ trackingId: 1, status: 1 });
+NIMCRequestSchema.index({ reference: 1, user: 1 });
 
-module.exports = mongoose.model("NIMCRequest", NIMCRequestSchema);
+module.exports =
+  mongoose.models.NIMCRequest ||
+  mongoose.model("NIMCRequest", NIMCRequestSchema);

@@ -4,7 +4,7 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const bcrypt = require("bcryptjs");
 
-// 1. Tabbatar da Ingantaccen URL ba tare da maimaita /api/v1 ba
+// 1. Ayax API Gateway Base Configuration
 const RAW_URL =
   process.env.AYAX_API_BASE_URL ||
   process.env.MARKETPLACE_API_URL ||
@@ -18,61 +18,82 @@ const AYAX_API_KEY =
   process.env.MARKETPLACE_API_KEY ||
   "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
 
-// Helper don tsara Headers
+// Ayax Standard API Headers
 const getHeaders = () => ({
   "Content-Type": "application/json",
   "x-api-key": AYAX_API_KEY,
   Authorization: `Bearer ${AYAX_API_KEY}`,
 });
 
-// Helper for notifications
-const sendNotification = async (userId, title, message) => {
+// Helper don tsara sanarwar App cikin sauki
+const sendNotification = async (userId, title, message, category = "VTU_DISPATCH") => {
   try {
     const user = await User.findById(userId);
     if (user) {
       if (!user.notifications) user.notifications = [];
-      user.notifications.push({
+      user.notifications.unshift({
         title,
         message,
+        category,
         date: new Date(),
         isRead: false,
       });
       await user.save();
     }
   } catch (error) {
-    console.error("Notification failed:", error);
+    console.error("Electricity Notification Error:", error.message);
   }
 };
 
-// 1. Verify Meter Number via Ayax APIs
+/**
+ * 1. VERIFY METER NUMBER VIA AYAX API GATEWAY
+ * Matches Frontend: DISCO validation & customer lookup
+ */
 exports.verifyMeter = async (req, res) => {
-  const { electricCompany, disco, meterNo, meterNumber, meterType } = req.body;
-  const finalDisco = String(disco || electricCompany || "").toLowerCase().trim();
+  const { electricCompany, disco, serviceId, meterNo, meterNumber, meterType } = req.body;
+  const finalDisco = String(disco || electricCompany || serviceId || "").toLowerCase().trim();
   const finalMeterNo = String(meterNo || meterNumber || "").trim();
   const finalMeterType = String(meterType || "prepaid").toLowerCase().trim();
 
   if (!finalDisco || !finalMeterNo) {
     return res.status(400).json({
       success: false,
-      message: "Missing required fields (electricCompany/disco, meterNo)",
+      status: "failed",
+      message: "Please select Electricity Disco and enter Meter Number.",
     });
   }
 
   try {
     const userId = req.user ? req.user._id || req.user.id : null;
 
-    const response = await axios.post(
+    let response;
+    const candidateEndpoints = [
       `${AYAX_API_BASE_URL}/bills/electricity/verify`,
-      {
-        disco: finalDisco,
-        meterNo: finalMeterNo,
-        meterType: finalMeterType,
-      },
-      {
-        headers: getHeaders(),
-        timeout: 25000,
+      `${AYAX_API_BASE_URL}/electricity/verify`,
+      `${AYAX_API_BASE_URL}/vtu/electricity/verify`,
+    ];
+
+    for (const endpoint of candidateEndpoints) {
+      try {
+        response = await axios.post(
+          endpoint,
+          {
+            disco: finalDisco,
+            serviceId: finalDisco,
+            meterNo: finalMeterNo,
+            meterNumber: finalMeterNo,
+            meterType: finalMeterType,
+          },
+          {
+            headers: getHeaders(),
+            timeout: 25000,
+          }
+        );
+        if (response.data) break;
+      } catch (e) {
+        if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
       }
-    );
+    }
 
     const resData = response.data;
     const isSuccessful =
@@ -85,29 +106,47 @@ exports.verifyMeter = async (req, res) => {
 
     if (isSuccessful) {
       const customerInfo = resData.data || resData;
+      const verifiedName =
+        customerInfo.customerName ||
+        customerInfo.customer_name ||
+        customerInfo.name ||
+        customerInfo.accountName ||
+        "Verified Customer";
+
+      const verifiedAddress =
+        customerInfo.customerAddress ||
+        customerInfo.address ||
+        customerInfo.customer_address ||
+        "N/A";
 
       if (userId) {
         await Activity.create({
+          user: userId,
           staffId: userId,
           action: "METER_VERIFIED",
-          details: `Verified meter ${finalMeterNo} (${finalDisco}) - Name: ${
-            customerInfo.customerName || customerInfo.name || customerInfo.customer_name
-          }`,
+          category: "VTU",
+          details: `Verified meter ${finalMeterNo} (${finalDisco.toUpperCase()}) - Name: ${verifiedName}`,
           targetUser: userId,
-        });
+        }).catch(() => {});
       }
 
       return res.status(200).json({
         success: true,
-        customerName: customerInfo.customerName || customerInfo.name || customerInfo.customer_name || "Verified Customer",
-        address: customerInfo.customerAddress || customerInfo.address || "",
+        status: "success",
+        customerName: verifiedName,
+        name: verifiedName,
+        address: verifiedAddress,
         meterNo: finalMeterNo,
+        meterNumber: finalMeterNo,
         electricCompany: finalDisco,
+        disco: finalDisco,
+        meterType: finalMeterType,
       });
     } else {
       return res.status(400).json({
         success: false,
-        message: resData.message || "Invalid Meter Number or Company",
+        status: "failed",
+        message: resData.message || "Invalid Meter Number or Electricity Company.",
       });
     }
   } catch (error) {
@@ -118,24 +157,43 @@ exports.verifyMeter = async (req, res) => {
     );
     return res.status(error.response?.status || 500).json({
       success: false,
+      status: "failed",
       message:
         error.response?.data?.message ||
-        "Meter verification service unavailable via Ayax APIs",
+        "Meter verification server unavailable. Please check the number and retry.",
     });
   }
 };
 
-// 2. Process Electricity Payment via Ayax APIs
+/**
+ * 2. PROCESS ELECTRICITY PAYMENT & TOKEN DISPATCH VIA AYAX APIS
+ * Handles: Pin authorization, Wallet balance verification, Token generation, and Instant automated refund
+ */
 exports.buyElectricity = async (req, res) => {
   const session = await User.startSession();
   session.startTransaction();
 
   try {
-    const { electricCompany, disco, meterNo, meterNumber, meterType, amount, phoneNo, phone, pin } = req.body;
-    const finalDisco = String(disco || electricCompany || "").toLowerCase().trim();
+    const {
+      electricCompany,
+      disco,
+      serviceId,
+      meterNo,
+      meterNumber,
+      meterType,
+      amount,
+      phoneNo,
+      phone,
+      phoneNumber,
+      pin,
+      transactionPin,
+    } = req.body;
+
+    const finalDisco = String(disco || electricCompany || serviceId || "").toLowerCase().trim();
     const finalMeterNo = String(meterNo || meterNumber || "").trim();
     const finalMeterType = String(meterType || "prepaid").toLowerCase().trim();
-    const finalPhone = String(phoneNo || phone || "").trim();
+    const finalPhone = String(phoneNo || phone || phoneNumber || "").trim();
+    const finalPin = String(pin || transactionPin || "").trim();
     const amountNum = Number(amount);
     const userId = req.user._id || req.user.id;
 
@@ -144,36 +202,41 @@ exports.buyElectricity = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Please provide all required fields (electricCompany, meterNo, amount, phoneNo)",
+        status: "failed",
+        message: "Please fill in all details (Disco, Meter Number, Amount, and Phone Number).",
       });
     }
 
-    if (!pin) {
+    if (!finalPin) {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Transaction PIN is required",
+        status: "failed",
+        message: "Security transaction PIN is required.",
       });
     }
 
-    const user = await User.findById(userId).select("+transactionPin +pin +walletBalance balance").session(session);
+    const user = await User.findById(userId)
+      .select("+transactionPin +pin +walletBalance balance")
+      .session(session);
+
     if (!user) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({ success: false, message: "User account not found." });
     }
 
-    // PIN Verification
+    // PIN Authentication Check
     let isPinValid = false;
     if (user.matchPin) {
-      isPinValid = await user.matchPin(pin);
+      isPinValid = await user.matchPin(finalPin);
     } else if (user.transactionPin) {
-      isPinValid = String(user.transactionPin) === String(pin);
+      isPinValid = String(user.transactionPin) === String(finalPin);
     } else if (user.pin) {
-      isPinValid = user.pin === pin || (await bcrypt.compare(String(pin), user.pin).catch(() => false));
+      isPinValid = user.pin === finalPin || (await bcrypt.compare(String(finalPin), user.pin).catch(() => false));
     } else {
-      isPinValid = pin === "0000";
+      isPinValid = finalPin === "0000";
     }
 
     if (!isPinValid) {
@@ -181,7 +244,8 @@ exports.buyElectricity = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: "Invalid transaction PIN",
+        status: "failed",
+        message: "Incorrect transaction PIN.",
       });
     }
 
@@ -192,64 +256,83 @@ exports.buyElectricity = async (req, res) => {
       session.endSession();
       return res.status(400).json({
         success: false,
-        message: `Insufficient Wallet Balance. Required: ₦${amountNum}, Available: ₦${currentBal}`,
+        status: "failed",
+        message: `Insufficient Wallet Balance. Needed: ₦${amountNum.toLocaleString()}, Available: ₦${currentBal.toLocaleString()}`,
       });
     }
 
-    const transactionId = `ELEC${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    const reference = `AYAX-ELEC-${Date.now()}`;
+    const transactionId = `ELEC${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    const reference = `AYAX-ELEC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-    // 1. Cire kudi daga Wallet
+    // 1. Deduct Funds from User Wallet
     const newBal = Number((currentBal - amountNum).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
     await user.save({ session });
 
-    // 2. Ajiye transaction
+    // 2. Create Pending Transaction Record
     const newTransaction = new Transaction({
       user: userId,
       transactionId,
       reference,
       type: "electricity",
-      category: "utility",
+      category: "DEBIT",
       amount: amountNum,
       oldBalance: currentBal,
       newBalance: newBal,
+      phoneNumber: finalPhone,
+      meterNumber: finalMeterNo,
+      provider: finalDisco.toUpperCase(),
       status: "pending",
-      details: `Electricity payment for ${finalMeterNo} (${finalDisco})`,
+      details: `Electricity Token for Meter ${finalMeterNo} (${finalDisco.toUpperCase()})`,
     });
     await newTransaction.save({ session });
 
     await session.commitTransaction();
     session.endSession();
 
-    // 3. Kira Sabon Ayax Electricity API Gateway
+    // 3. Dispatch Live Purchase to Ayax Electricity Gateway
     let response;
+    const candidatePurchaseEndpoints = [
+      `${AYAX_API_BASE_URL}/bills/electricity/buy`,
+      `${AYAX_API_BASE_URL}/electricity/buy`,
+      `${AYAX_API_BASE_URL}/vtu/electricity/pay`,
+    ];
+
     try {
-      response = await axios.post(
-        `${AYAX_API_BASE_URL}/bills/electricity/buy`,
-        {
-          disco: finalDisco,
-          meterNo: finalMeterNo,
-          meterType: finalMeterType,
-          amount: amountNum,
-          phone: finalPhone,
-          reference: reference,
-          ref_id: reference,
-        },
-        {
-          headers: getHeaders(),
-          timeout: 45000,
+      for (const endpoint of candidatePurchaseEndpoints) {
+        try {
+          response = await axios.post(
+            endpoint,
+            {
+              disco: finalDisco,
+              serviceId: finalDisco,
+              meterNo: finalMeterNo,
+              meterNumber: finalMeterNo,
+              meterType: finalMeterType,
+              amount: amountNum,
+              phone: finalPhone,
+              reference: reference,
+              ref_id: reference,
+            },
+            {
+              headers: getHeaders(),
+              timeout: 45000,
+            }
+          );
+          if (response.data) break;
+        } catch (e) {
+          if (endpoint === candidatePurchaseEndpoints[candidatePurchaseEndpoints.length - 1]) throw e;
         }
-      );
+      }
     } catch (apiError) {
       console.error(
-        "Ayax Electricity API Error:",
+        "Ayax Electricity API Connection Failure:",
         apiError.response?.status,
         apiError.response?.data || apiError.message
       );
 
-      // Auto Refund
+      // Automated Instant Refund
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
@@ -257,20 +340,29 @@ exports.buyElectricity = async (req, res) => {
         await refundUser.save();
       }
 
-      const errMsg = apiError.response?.data?.message || "Gateway connection error";
+      const errMsg = apiError.response?.data?.message || "Electricity gateway timed out";
 
       await Transaction.findOneAndUpdate(
         { reference },
         {
           status: "failed",
+          isRefunded: true,
           refundReason: errMsg,
           details: `Failed & Refunded: ${errMsg}`,
         }
       );
 
+      await sendNotification(
+        userId,
+        "Electricity Purchase Refunded",
+        `Your ₦${amountNum.toLocaleString()} payment for meter ${finalMeterNo} failed to generate a token and has been instantly refunded to your wallet.`,
+        "REFUND"
+      );
+
       return res.status(502).json({
         success: false,
-        message: `Failed to connect to Ayax electricity provider (${errMsg}). Your money has been refunded.`,
+        status: "failed",
+        message: `Failed to generate token (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded to your wallet.`,
       });
     }
 
@@ -286,44 +378,61 @@ exports.buyElectricity = async (req, res) => {
     if (isSuccessful) {
       const providerData = resData.data || resData;
 
+      const tokenValue =
+        providerData.token ||
+        providerData.meterToken ||
+        providerData.metertoken ||
+        providerData.tokenCode ||
+        providerData.mainToken ||
+        "Token Generated";
+
+      const unitsValue =
+        providerData.units ||
+        providerData.unitsPurchased ||
+        providerData.unit ||
+        "";
+
       await Transaction.findOneAndUpdate(
         { reference },
         {
           status: "success",
-          reference: providerData.orderid || providerData.reference || reference,
-          details: `Success: Electricity token generated for ${finalMeterNo}`,
+          token: tokenValue,
+          units: unitsValue,
+          apiReference: providerData.orderid || providerData.reference || reference,
+          apiResponse: providerData,
+          details: `Success: Token (${tokenValue}) for Meter ${finalMeterNo}`,
         }
       );
 
       await Activity.create({
-        user: user._id,
+        user: userId,
         staffId: userId,
         action: "ELECTRICITY_PURCHASED",
-        details: `Purchased electricity worth ₦${amountNum} for meter ${finalMeterNo}`,
+        category: "VTU",
+        details: `Purchased electricity worth ₦${amountNum} for meter ${finalMeterNo} - Token: ${tokenValue}`,
         targetUser: userId,
-      }).catch((err) => console.warn("Activity log error:", err.message));
-
-      const tokenValue =
-        providerData.token ||
-        providerData.metertoken ||
-        providerData.tokenCode ||
-        "Generated / Sent via SMS";
+      }).catch(() => {});
 
       await sendNotification(
         userId,
-        "Electricity Purchase Successful",
-        `Your electricity token purchase of ₦${amountNum} for meter ${finalMeterNo} was successful. Token: ${tokenValue}`
+        "Electricity Token Generated 🎉",
+        `Your electricity purchase of ₦${amountNum.toLocaleString()} for meter ${finalMeterNo} was successful. Token: ${tokenValue} | Units: ${unitsValue}`,
+        "ELECTRICITY_TOKEN"
       );
 
       return res.status(200).json({
         success: true,
-        message: "Payment Successful",
+        status: "success",
+        message: "Electricity token generated successfully.",
         orderId: providerData.orderid || reference,
+        reference: reference,
         token: tokenValue,
-        unit: providerData.units || providerData.unitsPurchased || "",
+        unit: unitsValue,
+        units: unitsValue,
         newBalance: user.walletBalance,
       });
     } else {
+      // Gateway Refusal & Automated Refund
       const refundUser = await User.findById(userId);
       if (refundUser) {
         refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
@@ -331,18 +440,29 @@ exports.buyElectricity = async (req, res) => {
         await refundUser.save();
       }
 
+      const failureReason = resData?.message || "Ayax provider declined transaction";
+
       await Transaction.findOneAndUpdate(
         { reference },
         {
           status: "failed",
-          refundReason: resData?.message || "Provider declined",
-          details: "Failed & Refunded",
+          isRefunded: true,
+          refundReason: failureReason,
+          details: `Declined & Refunded: ${failureReason}`,
         }
+      );
+
+      await sendNotification(
+        userId,
+        "Electricity Purchase Refunded",
+        `Your ₦${amountNum.toLocaleString()} electricity attempt for meter ${finalMeterNo} was declined (${failureReason}). Money has been refunded.`,
+        "REFUND"
       );
 
       return res.status(400).json({
         success: false,
-        message: resData?.message || "Ayax electricity provider declined transaction. Money refunded.",
+        status: "failed",
+        message: `${failureReason}. Your wallet balance has been refunded.`,
       });
     }
   } catch (error) {
@@ -351,10 +471,11 @@ exports.buyElectricity = async (req, res) => {
     }
     session.endSession();
 
-    console.error("Buy Electricity Error:", error);
+    console.error("Buy Electricity Processing Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Payment processing error",
+      status: "failed",
+      message: "Internal server error occurred while processing electricity payment.",
       error: error.message,
     });
   }

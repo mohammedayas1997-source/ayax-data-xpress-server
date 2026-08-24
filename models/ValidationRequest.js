@@ -2,54 +2,73 @@ const mongoose = require("mongoose");
 
 const ValidationSchema = new mongoose.Schema(
   {
-    // Nau'in bincike ko tabbatarwa (Misali: 'SIM Validation', 'NIN Verification', 'BVN Check')
-    type: { 
-      type: String, 
-      required: [true, "Please specify the validation type"], 
+    // 1. Validation Category & Specific Service Mapping
+    type: {
+      type: String,
+      required: [true, "Please specify the validation type"],
       trim: true,
       index: true,
     },
 
-    // Lambar NIN ko bayanin da ake son a bincika
-    nin: { 
-      type: String, 
-      required: [true, "NIN or Identification number is required"],
+    service: {
+      type: String,
+      default: "NIN_VALIDATION",
       trim: true,
       index: true,
     },
 
-    // Karin bayanai ko form data da ake bukata domin aikin binciken (Optional / Mixed)
+    serviceId: {
+      type: String,
+      trim: true,
+    },
+
+    // 2. Identification Target Fields (NIN, Phone, BVN, or Tracking ID)
+    nin: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    searchValue: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    // 3. Applicant Details for Admin Dashboard Identification
+    applicantName: {
+      type: String,
+      trim: true,
+    },
+
+    applicantPhone: {
+      type: String,
+      trim: true,
+    },
+
+    additionalNote: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    // 4. Flexible Container for Frontend Form Data / Dynamic Payloads
     formData: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
 
-    // Adadin kudin da aka cire don wannan sabis ɗin
-    amount: { 
-      type: Number, 
+    // 5. Financial & Transaction Ledgers
+    amount: {
+      type: Number,
       required: true,
       min: 0,
     },
 
-    // Matsayin buƙatar (status)
-    status: { 
-      type: String, 
-      enum: ["pending", "processing", "completed", "failed", "success"],
-      default: "pending",
-      index: true,
-    },
-
-    // Sakamakon binciken daga API ko bayanin da aka dawo da shi
-    responseDetails: {
-      type: mongoose.Schema.Types.Mixed,
-      default: {},
-    },
-
-    // Lambar Transaction ID ko Reference domin daidaita kudi da ma'amala
-    transactionId: {
-      type: String,
-      index: true,
-      sparse: true,
+    fee: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
 
     reference: {
@@ -59,22 +78,75 @@ const ValidationSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Mai amfani da ya yi buƙatar
-    userId: { 
-      type: mongoose.Schema.Types.ObjectId, 
+    transactionId: {
+      type: String,
+      index: true,
+      sparse: true,
+    },
+
+    // 6. Real-time Status Lifecycle
+    status: {
+      type: String,
+      enum: ["pending", "processing", "completed", "failed", "success", "rejected"],
+      default: "pending",
+      index: true,
+    },
+
+    // 7. Ayax VTU API Gateway Results & Slip Document Generation
+    responseDetails: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+
+    slipUrl: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    pdfUrl: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    apiReference: {
+      type: String,
+      trim: true,
+    },
+
+    adminComment: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    processedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    // 8. User Relational Link
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
       index: true,
     },
   },
-  { 
-    timestamps: true // Zai samar da 'createdAt' da 'updatedAt' ta atomatik
+  {
+    timestamps: true,
   }
 );
 
-// Ingantattun Indexes domin saurin loda Validation History da binciken Dashboard
+// High-performance composite indexes for query optimization
 ValidationSchema.index({ userId: 1, createdAt: -1 });
 ValidationSchema.index({ status: 1, createdAt: -1 });
-ValidationSchema.index({ type: 1, status: 1 });
+ValidationSchema.index({ service: 1, status: 1 });
+ValidationSchema.index({ nin: 1, status: 1 });
+ValidationSchema.index({ reference: 1, userId: 1 });
 
-module.exports = mongoose.model("ValidationRequest", ValidationSchema);
+module.exports =
+  mongoose.models.ValidationRequest ||
+  mongoose.model("ValidationRequest", ValidationSchema);

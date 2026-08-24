@@ -1,419 +1,142 @@
 const express = require("express");
 const router = express.Router();
-const bcrypt = require("bcryptjs");
-const User = require("../models/User");
-const Transaction = require("../models/Transaction");
-const DataPlan = require("../models/DataPlan");
 
-// Network ID Mapping for VTU Gateways
-const NETWORK_IDS = {
-  MTN: "01",
-  GLO: "02",
-  "9MOBILE": "03",
-  AIRTEL: "04",
+// 1. Authentication & Authorization Middleware
+let authMiddleware;
+try {
+  authMiddleware = require("../middleware/authMiddleware");
+} catch (e) {
+  authMiddleware = require("../middleware/auth");
+}
+
+const protect =
+  authMiddleware.protect || authMiddleware.verifyToken || authMiddleware;
+const authorize =
+  authMiddleware.authorize ||
+  authMiddleware.restrictTo ||
+  ((...roles) => (req, res, next) => next());
+
+// Strict SuperAdmin Role Check Middleware
+const superAdminOnly = authorize("superadmin");
+
+// 2. Controller Imports
+const superAdminController = require("../controllers/superAdminController");
+
+// Safe Route Handler Helper
+const safe = (fn, name) => {
+  if (typeof fn === "function") return fn;
+  return (req, res) => {
+    return res.status(501).json({
+      success: false,
+      status: "failed",
+      message: `SuperAdmin controller handler '${name}' is not implemented yet.`,
+    });
+  };
 };
 
-// Centralized System Pricing Store
-let systemTariffs = {
-  // 1. NIMC PRINTING
-  nimc_basicSlip: 300,
-  nimc_standardSlip: 500,
-  nimc_premiumCard: 1500,
-  nimc_nin: 1000,
-  nimc_phone: 1000,
-  nimc_trackingId: 1000,
+// ==========================================
+// 1. GLOBAL TELEMETRY & SYSTEM ANALYTICS
+// ==========================================
+router.get(
+  "/overview",
+  protect,
+  superAdminOnly,
+  safe(superAdminController.getGlobalDataOverview, "getGlobalDataOverview")
+);
 
-  // 2. NIMC MODIFICATION
-  mod_name: 2500,
-  mod_phone: 2000,
-  mod_dob: 3000,
-  mod_address: 1500,
-  mod_name_dob: 4500,
-  mod_name_phone: 3500,
+router.get(
+  "/telemetry",
+  protect,
+  superAdminOnly,
+  safe(superAdminController.getGlobalDataOverview, "getGlobalDataOverview")
+);
 
-  // 3. NIN VALIDATION
-  val_noRecord: 1300,
-  val_sim: 1300,
-  val_vnin: 1300,
-  val_update: 1300,
-  val_bank: 1300,
-  val_mod: 1700,
-  val_photoError: 1400,
+// ==========================================
+// 2. FINANCIAL DISPATCH & EXECUTIVE REFUNDS
+// ==========================================
+// Direct Wallet Credit / Debit
+router.post(
+  "/wallet/adjust",
+  protect,
+  superAdminOnly,
+  safe(superAdminController.adjustUserWallet, "adjustUserWallet")
+);
 
-  // 4. IDENTITY & BVN
-  verify_phone: 300,
-  verify_bvn_basic: 200,
-  verify_bvn_full: 500,
-  verify_face_id: 800,
+// Executive Override Refund
+router.post(
+  "/refunds/executive-override",
+  protect,
+  superAdminOnly,
+  safe(
+    superAdminController.processRefundSuperAdminOnly,
+    "processRefundSuperAdminOnly"
+  )
+);
 
-  // 5. UTILITY & CABLE SURCHARGES
-  fee_electricity: 100,
-  fee_gotv: 50,
-  fee_dstv: 100,
-  fee_startimes: 50,
-  fee_showmax: 50,
-};
+// ==========================================
+// 3. ROLE ELEVATION & SECURITY CONTROLS
+// ==========================================
+// Promote / Demote User Role
+router.patch(
+  "/users/change-role",
+  protect,
+  superAdminOnly,
+  safe(superAdminController.changeUserRole, "changeUserRole")
+);
 
-// Global Notifications Memory Store
-let systemNotificationsLog = [];
+// Force Override Password / PIN
+router.post(
+  "/users/force-reset-security",
+  protect,
+  superAdminOnly,
+  safe(
+    superAdminController.forceResetUserSecurity,
+    "forceResetUserSecurity"
+  )
+);
 
-// 1. Master Telemetry, Audit History & Tariffs
-router.get("/stats", async (req, res) => {
-  try {
-    const [
-      totalUsers,
-      totalAgents,
-      totalSupervisors,
-      totalAdmins,
-      allTransactions,
-    ] = await Promise.all([
-      User.countDocuments({ role: "user" }),
-      User.countDocuments({ role: "agent" }),
-      User.countDocuments({ role: { $in: ["supervisor", "leader"] } }),
-      User.countDocuments({ role: { $in: ["admin", "superadmin"] } }),
-      Transaction.find().sort({ createdAt: -1 }).limit(100),
-    ]);
+// Lock / Unlock User Account
+router.patch(
+  "/users/toggle-lock",
+  protect,
+  superAdminOnly,
+  safe(superAdminController.toggleWalletLock, "toggleWalletLock")
+);
 
-    let totalInflow = 0;
-    let totalOutflow = 0;
-    let successfulSalesCount = 0;
-    let totalWalletFundingCount = 0;
+// ==========================================
+// 4. BULK VTU & MARKETING AUTOMATION
+// ==========================================
+router.post(
+  "/vtu/dispatch-bulk",
+  protect,
+  superAdminOnly,
+  safe(superAdminController.dispatchDataBundle, "dispatchDataBundle")
+);
 
-    allTransactions.forEach((tx) => {
-      const amt = Number(tx.amount || 0);
-      if (
-        tx.type === "wallet_funding" ||
-        tx.type === "deposit" ||
-        tx.category === "credit"
-      ) {
-        totalInflow += amt;
-        totalWalletFundingCount++;
-      } else if (tx.status === "successful" || tx.status === "completed") {
-        totalOutflow += amt;
-        successfulSalesCount++;
-      }
-    });
+// ==========================================
+// 5. GLOBAL PRICING & TARIFF MATRIX OVERRIDE
+// ==========================================
+router.post(
+  "/pricing/set-global",
+  protect,
+  superAdminOnly,
+  safe(
+    superAdminController.setGlobalServicePrice,
+    "setGlobalServicePrice"
+  )
+);
 
-    return res.status(200).json({
-      success: true,
-      stats: {
-        totalInflow,
-        totalOutflow,
-        netRevenue: totalInflow - totalOutflow,
-        successfulSalesCount,
-        totalWalletFundingCount,
-        totalUsers,
-        totalAgents,
-        totalSupervisors,
-        totalAdmins,
-        pendingRefunds:
-          (await Transaction.countDocuments({ status: "refund_requested" })) || 0,
-      },
-      prices: systemTariffs,
-      recentTransactions: allTransactions,
-      notifications: systemNotificationsLog.slice(0, 30),
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// 2. Dynamic Service Tariff Switch
-router.post("/update-service-price", async (req, res) => {
-  try {
-    const { serviceKey, newPrice } = req.body;
-    const numericPrice = Number(newPrice);
-
-    if (!serviceKey || isNaN(numericPrice) || numericPrice < 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid service identifier or price amount.",
-      });
-    }
-
-    systemTariffs[serviceKey] = numericPrice;
-
-    return res.status(200).json({
-      success: true,
-      message: `Updated tariff for ${serviceKey} to ₦${numericPrice.toLocaleString()}.`,
-      updatedPrices: systemTariffs,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// 3. Broadcast Notification Dispatcher
-router.post("/broadcast-notification", async (req, res) => {
-  try {
-    const { title, message, targetType, targetUserId } = req.body;
-
-    if (!title || !message) {
-      return res.status(400).json({
-        success: false,
-        message: "Title and message body are required.",
-      });
-    }
-
-    const notificationPayload = {
-      id: "NT_" + Date.now(),
-      title: title.trim(),
-      message: message.trim(),
-      targetType: targetType || "all",
-      targetUserId: targetUserId ? targetUserId.trim() : "ALL_USERS",
-      createdAt: new Date().toISOString(),
-    };
-
-    systemNotificationsLog.unshift(notificationPayload);
-
-    return res.status(200).json({
-      success: true,
-      message: `Broadcast notification successfully queued for ${
-        targetType === "single" ? targetUserId : "ALL USERS"
-      }.`,
-      notification: notificationPayload,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// 4. Force Password Override
-router.post("/override-password", async (req, res) => {
-  try {
-    const { userId, newPassword } = req.body;
-
-    if (!userId || !newPassword || newPassword.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: "Valid identifier and a minimum 6-character password required.",
-      });
-    }
-
-    const user = await User.findOne({
-      $or: [
-        { _id: userId.match(/^[0-9a-fA-F]{24}$/) ? userId : null },
-        { email: userId.toLowerCase().trim() },
-        { phone: userId.trim() },
-      ],
-    });
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "Target account not found." });
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(newPassword.trim(), salt);
-    await user.save();
-
-    return res.status(200).json({
-      success: true,
-      message: `Password changed successfully for ${user.firstName || user.name || user.phone}.`,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// 5. Account Suspension Toggle
-router.post("/toggle-suspension", async (req, res) => {
-  try {
-    const { userId, suspend } = req.body;
-    const user = await User.findOne({
-      $or: [
-        { _id: userId.match(/^[0-9a-fA-F]{24}$/) ? userId : null },
-        { email: userId.toLowerCase().trim() },
-        { phone: userId.trim() },
-      ],
-    });
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "Target account not found." });
-    }
-
-    user.isSuspended = Boolean(suspend);
-    await user.save();
-
-    return res.status(200).json({
-      success: true,
-      message: `Account status for ${user.firstName || user.name || user.phone} set to: ${
-        suspend ? "SUSPENDED" : "ACTIVE"
-      }`,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// 6. Direct Ledger Injection (Credit / Debit)
-router.post("/adjust-wallet", async (req, res) => {
-  try {
-    const { userId, amount, reason, actionType } = req.body;
-    const numericAmount = Number(amount);
-
-    if (!userId || !numericAmount || numericAmount <= 0) {
-      return res.status(400).json({ success: false, message: "Valid Identifier and positive amount required." });
-    }
-
-    const user = await User.findOne({
-      $or: [
-        { _id: userId.match(/^[0-9a-fA-F]{24}$/) ? userId : null },
-        { email: userId.toLowerCase().trim() },
-        { phone: userId.trim() },
-      ],
-    });
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "Target user not found." });
-    }
-
-    const currentBal = user.walletBalance || user.balance || 0;
-    const newBal = actionType === "credit" ? currentBal + numericAmount : Math.max(0, currentBal - numericAmount);
-
-    user.walletBalance = newBal;
-    user.balance = newBal;
-    await user.save();
-
-    return res.status(200).json({
-      success: true,
-      message: `Processed ${actionType.toUpperCase()} of ₦${numericAmount.toLocaleString()}. New Balance: ₦${newBal.toLocaleString()}`,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// 7. SuperAdmin Exclusive Refund
-router.post("/process-refund", async (req, res) => {
-  try {
-    const { transactionId, targetUserId, refundAmount, reason } = req.body;
-    const numericAmount = Number(refundAmount);
-
-    if (!targetUserId || !numericAmount || numericAmount <= 0) {
-      return res.status(400).json({ success: false, message: "Invalid target user or refund amount." });
-    }
-
-    const user = await User.findOne({
-      $or: [
-        { _id: targetUserId.match(/^[0-9a-fA-F]{24}$/) ? targetUserId : null },
-        { email: targetUserId.toLowerCase().trim() },
-        { phone: targetUserId.trim() },
-      ],
-    });
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "Target user not found." });
-    }
-
-    const prevBal = user.walletBalance || user.balance || 0;
-    const newBal = prevBal + numericAmount;
-    user.walletBalance = newBal;
-    user.balance = newBal;
-    await user.save();
-
-    if (transactionId) {
-      await Transaction.findByIdAndUpdate(transactionId, { status: "refunded" });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: `Refund of ₦${numericAmount.toLocaleString()} disbursed to ${user.firstName || user.name || user.phone}. New Balance: ₦${newBal.toLocaleString()}`,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// 8. Data Plan Dispatcher (Saves to MongoDB DataPlan Schema)
-router.post("/dispatch-data", async (req, res) => {
-  try {
-    const {
-      network,
-      planType,
-      planCode,
-      price,
-      costPrice,
-      agentPrice,
-      planLabel,
-      sizeGB,
-    } = req.body;
-
-    if (!network || !planCode || !price) {
-      return res.status(400).json({
-        success: false,
-        message: "Network, Plan Code/Size, and User Price are required.",
-      });
-    }
-
-    const netName = network.toUpperCase().trim();
-    const netId = NETWORK_IDS[netName] || "01";
-
-    let parsedSizeGB = Number(sizeGB);
-    if (isNaN(parsedSizeGB) || parsedSizeGB <= 0) {
-      const codeUpper = planCode.toUpperCase();
-      if (codeUpper.includes("GB")) {
-        parsedSizeGB = parseFloat(codeUpper.replace("GB", "").trim()) || 1;
-      } else if (codeUpper.includes("MB")) {
-        const mb = parseFloat(codeUpper.replace("MB", "").trim()) || 500;
-        parsedSizeGB = mb / 1000;
-      } else {
-        parsedSizeGB = 1;
-      }
-    }
-
-    const savedPlan = await DataPlan.findOneAndUpdate(
-      {
-        networkName: netName,
-        planType: (planType || "SME").toUpperCase().trim(),
-        planCode: planCode.trim(),
-      },
-      {
-        networkName: netName,
-        networkId: netId,
-        planCode: planCode.trim(),
-        planLabel: planLabel || `${netName} ${planType || "SME"} ${planCode}`,
-        sizeGB: parsedSizeGB,
-        planType: (planType || "SME").toUpperCase().trim(),
-        userPrice: Number(price),
-        agentPrice: Number(agentPrice || price),
-        apiCost: Number(costPrice || price),
-        isActive: true,
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-
-    return res.status(200).json({
-      success: true,
-      message: `Successfully saved ${savedPlan.planLabel} (₦${savedPlan.userPrice}) to database.`,
-      data: savedPlan,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// 9. Fetch Live Active Data Plans
-router.get("/plans", async (req, res) => {
-  try {
-    const { network, planType } = req.query;
-    const filter = { isActive: true };
-
-    if (network) {
-      filter.networkName = network.toUpperCase().trim();
-    }
-    if (planType && planType !== "ALL") {
-      filter.planType = planType.toUpperCase().trim();
-    }
-
-    const plans = await DataPlan.find(filter).sort({ sizeGB: 1, userPrice: 1 });
-
-    return res.status(200).json({
-      success: true,
-      data: plans,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-});
+// ==========================================
+// 6. FORENSIC AUDIT EXPUNGING
+// ==========================================
+router.delete(
+  "/logs/expunge",
+  protect,
+  superAdminOnly,
+  safe(
+    superAdminController.expungeSystemAuditLogs,
+    "expungeSystemAuditLogs"
+  )
+);
 
 module.exports = router;

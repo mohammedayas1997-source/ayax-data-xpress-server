@@ -2,43 +2,97 @@ const mongoose = require("mongoose");
 
 const NIMCPriceSchema = new mongoose.Schema(
   {
-    // Nau'in sabis din NIMC
-    serviceType: {
+    // 1. Service Identifier Key
+    serviceId: {
       type: String,
       required: true,
       unique: true,
-      enum: ["nin_verification", "nin_premium", "nin_search"], // Nau'ikan NIMC
+      trim: true,
+      index: true, // e.g. "nin", "phone", "trackingId", "standardSlip", "premiumCard", "basicSlip"
+    },
+
+    // 2. Service Category (Dynamic Enum matching app modules)
+    serviceType: {
+      type: String,
+      required: true,
+      trim: true,
+      enum: [
+        "nin",
+        "phone",
+        "trackingId",
+        "standardSlip",
+        "premiumCard",
+        "basicSlip",
+        "nin_verification",
+        "nin_premium",
+        "nin_search",
+        "nimc_modification",
+        "bvn_standard",
+        "bvn_premium",
+        "bvn_phone",
+        "bvn_basic",
+      ],
       index: true,
     },
 
-    // Farashin sabis din (Amount a Naira)
-    amount: { 
-      type: Number, 
+    // 3. User-Friendly Display Title
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    // 4. Pricing Configuration (Naira)
+    amount: {
+      type: Number,
       required: true,
       min: 0,
     },
 
-    // Takaitaccen bayani game da sabis din (Optional)
+    agentPrice: {
+      type: Number,
+      min: 0,
+      default: function () {
+        return this.amount;
+      },
+    },
+
+    costPrice: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    // 5. Service Status & Metadata
+    isActive: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+
     description: {
       type: String,
       trim: true,
+      default: "",
     },
 
-    // Wane Admin ne ya yi wannan sauyi a karshe
+    // 6. Administrative Audit Trail
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
+      default: null,
     },
   },
   {
-    timestamps: true, // Yana sarrafa 'createdAt' da 'updatedAt' ta atomatik
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
-// Tabbatar cewa updatedAt yana samun sabuwar rana duk lokacin da aka yi save
-NIMCPriceSchema.pre("save", function (next) {
-  this.updatedAt = Date.now();
-  next();
-});
+// High-speed index for rapid checkout & pricing retrieval
+NIMCPriceSchema.index({ serviceId: 1, isActive: 1 });
+NIMCPriceSchema.index({ serviceType: 1, isActive: 1 });
 
-module.exports = mongoose.model("NIMCPrice", NIMCPriceSchema);
+module.exports =
+  mongoose.models.NIMCPrice || mongoose.model("NIMCPrice", NIMCPriceSchema);

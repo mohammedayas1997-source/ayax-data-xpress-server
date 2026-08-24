@@ -2,14 +2,14 @@ const mongoose = require("mongoose");
 
 const TargetHistorySchema = new mongoose.Schema(
   {
-    // Wanda aka baiwa target din (Supervisor ko Agent)
+    // 1. Relational Assignment Mapping
     assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
       index: true,
     },
-    // Shugaban da ya bayar da target din (Leader ko Admin)
+
     assignedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -17,68 +17,167 @@ const TargetHistorySchema = new mongoose.Schema(
       index: true,
     },
 
-    // Burin da aka sa (Goals)
-    dataGoal: { 
-      type: Number, 
+    // 2. Performance Targets & KPI Metrics
+    dataGoal: {
+      type: Number,
       required: true,
       min: 0,
-      default: 0,
-    }, // Misali: 500GB
-    
-    agentGoal: { 
-      type: Number, 
-      required: true,
-      min: 0,
-      default: 0,
-    }, // Misali: Sabbin Agents 10
+      default: 0, // Volume target in Gigabytes (GB)
+    },
 
-    // Abin da aka samu (Actual Achievements)
-    achievedData: { 
-      type: Number, 
+    agentGoal: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0, // Onboarded agents count
+    },
+
+    salesGoal: {
+      type: Number,
+      min: 0,
+      default: 0, // Monetary sales target in Naira (₦)
+    },
+
+    // 3. Real-Time Achieved Records
+    achievedData: {
+      type: Number,
       default: 0,
       min: 0,
     },
-    
-    achievedAgents: { 
-      type: Number, 
+
+    achievedAgents: {
+      type: Number,
       default: 0,
       min: 0,
     },
 
-    // Watan da target din yake nufi (Misali: "May 2026" ko tsarin YYYY-MM don sauƙaƙe bincike)
+    achievedSales: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // 4. Period & Temporal Tracking
     month: {
       type: String,
       required: true,
       trim: true,
-      index: true, // Misali: "May 2026"
+      index: true, // Standard formatted month (e.g. "August 2026")
     },
 
+    periodCode: {
+      type: String,
+      trim: true,
+      index: true, // Machine searchable key (e.g. "2026-08")
+    },
+
+    startDate: {
+      type: Date,
+    },
+
+    endDate: {
+      type: Date,
+    },
+
+    // 5. Target Lifecycle & Evaluation Status
     status: {
       type: String,
-      enum: ["Active", "Completed", "Failed", "Pending"],
+      enum: ["Active", "Completed", "Failed", "Pending", "Reviewed"],
       default: "Active",
       index: true,
+    },
+
+    bonusAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    isBonusPaid: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    notes: {
+      type: String,
+      trim: true,
+      default: "",
     },
   },
   {
     timestamps: true,
-    // Wannan zai bamu damar lissafa percentage kai tsaye a cikin JSON
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  },
+  }
 );
 
-// VIRTUALS: Lissafin kashi nawa aka cimma (Performance Percentage) da kuma jimlar nasara
+// Virtual Calculation: Data Completion Percentage
 TargetHistorySchema.virtual("dataProgress").get(function () {
-  return this.dataGoal > 0 ? Number(((this.achievedData / this.dataGoal) * 100).toFixed(2)) : 0;
+  if (!this.dataGoal || this.dataGoal <= 0) return 0;
+  const percent = (this.achievedData / this.dataGoal) * 100;
+  return Number(Math.min(percent, 100).toFixed(2));
 });
 
+// Virtual Calculation: Agent Onboarding Completion Percentage
 TargetHistorySchema.virtual("agentProgress").get(function () {
-  return this.agentGoal > 0 ? Number(((this.achievedAgents / this.agentGoal) * 100).toFixed(2)) : 0;
+  if (!this.agentGoal || this.agentGoal <= 0) return 0;
+  const percent = (this.achievedAgents / this.agentGoal) * 100;
+  return Number(Math.min(percent, 100).toFixed(2));
 });
 
-// Ingantattun Indexes domin Dashboard ya rinka fito da tarihin watanni da lissafin aiki da sauri sosai
-TargetHistorySchema.index({ assignedTo: 1, month: -1 });
-TargetHistorySchema.index({ status: 1, month: -1 });
+// Virtual Calculation: Overall Composite Target Progress
+TargetHistorySchema.virtual("overallProgress").get(function () {
+  let activeGoals = 0;
+  let totalScore = 0;
 
-module.exports = mongoose.model("TargetHistory", TargetHistorySchema);
+  if (this.dataGoal > 0) {
+    activeGoals += 1;
+    totalScore += Math.min((this.achievedData / this.dataGoal) * 100, 100);
+  }
+
+  if (this.agentGoal > 0) {
+    activeGoals += 1;
+    totalScore += Math.min((this.achievedAgents / this.agentGoal) * 100, 100);
+  }
+
+  if (this.salesGoal > 0) {
+    activeGoals += 1;
+    totalScore += Math.min((this.achievedSales / this.salesGoal) * 100, 100);
+  }
+
+  return activeGoals > 0 ? Number((totalScore / activeGoals).toFixed(2)) : 0;
+});
+
+// Automatic lifecycle evaluator before persistence
+TargetHistorySchema.pre("save", function (next) {
+  if (!this.periodCode && this.month) {
+    const d = new Date(this.month);
+    if (!isNaN(d.getTime())) {
+      const year = d.getFullYear();
+      const monthNum = String(d.getMonth() + 1).padStart(2, "0");
+      this.periodCode = `${year}-${monthNum}`;
+    }
+  }
+
+  if (
+    this.status === "Active" &&
+    this.dataGoal > 0 &&
+    this.achievedData >= this.dataGoal &&
+    (this.agentGoal === 0 || this.achievedAgents >= this.agentGoal)
+  ) {
+    this.status = "Completed";
+  }
+
+  next();
+});
+
+// Optimized compound indexes for analytics queries and supervisor performance matrices
+TargetHistorySchema.index({ assignedTo: 1, month: -1 });
+TargetHistorySchema.index({ assignedTo: 1, periodCode: -1 });
+TargetHistorySchema.index({ status: 1, month: -1 });
+TargetHistorySchema.index({ assignedBy: 1, createdAt: -1 });
+
+module.exports =
+  mongoose.models.TargetHistory ||
+  mongoose.model("TargetHistory", TargetHistorySchema);

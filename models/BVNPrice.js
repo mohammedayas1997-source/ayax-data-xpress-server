@@ -2,43 +2,90 @@ const mongoose = require("mongoose");
 
 const BVNPriceSchema = new mongoose.Schema(
   {
-    // Nau'in sabis din BVN
-    serviceType: {
+    // 1. Service Identifier Key (Matching frontend keys)
+    serviceId: {
       type: String,
       required: true,
       unique: true,
-      enum: ["bvn_full", "bvn_basic", "bvn_face", "bvn_phone"], // Wadannan sune nau'ikan BVN din
+      trim: true,
+      index: true, // e.g. "bvn_standard", "bvn_premium", "bvn_phone", "bvn_basic"
+    },
+
+    // 2. Service Classification & Types
+    serviceType: {
+      type: String,
+      required: true,
+      trim: true,
+      enum: [
+        "bvn_standard",
+        "bvn_premium",
+        "bvn_phone",
+        "bvn_basic",
+        "bvn_full",
+        "bvn_face",
+        "bvn_verification",
+      ],
       index: true,
     },
 
-    // Farashin sabis din (Amount a Naira)
-    amount: { 
-      type: Number, 
-      required: true, 
-      min: 0 
-    },
-
-    // Bayani ko takaitaccen bayanin sabis din
-    description: {
+    // 3. User-Friendly Display Title
+    name: {
       type: String,
+      required: true,
       trim: true,
     },
 
-    // Wane Admin ne ya yi sauye-sauye a karshe (Optional)
+    // 4. Multi-Tier Pricing Matrix (Naira)
+    amount: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    agentPrice: {
+      type: Number,
+      min: 0,
+      default: function () {
+        return this.amount;
+      },
+    },
+
+    costPrice: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    // 5. Service Status & Metadata
+    isActive: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+
+    description: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    // 6. Administrative Audit Trail
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
+      default: null,
     },
   },
   {
-    timestamps: true, // Yana sarrafa 'createdAt' da 'updatedAt' ta atomatik
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
-// Idan ana so a tabbatar updatedAt yana sauyawa duk lokacin da aka yi updating
-BVNPriceSchema.pre("save", function (next) {
-  this.updatedAt = Date.now();
-  next();
-});
+// High-speed index for rapid checkout & pricing retrieval
+BVNPriceSchema.index({ serviceId: 1, isActive: 1 });
+BVNPriceSchema.index({ serviceType: 1, isActive: 1 });
 
-module.exports = mongoose.model("BVNPrice", BVNPriceSchema);
+module.exports =
+  mongoose.models.BVNPrice || mongoose.model("BVNPrice", BVNPriceSchema);
