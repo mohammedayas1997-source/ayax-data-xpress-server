@@ -30,7 +30,13 @@ const getHeaders = () => ({
   Authorization: `Bearer ${AYAX_API_KEY}`,
 });
 
-const sendNotification = async (userId, title, message, category = "SUPERADMIN_ACTION") => {
+// Helper for In-App Notifications
+const sendNotification = async (
+  userId,
+  title,
+  message,
+  category = "SUPERADMIN_ACTION"
+) => {
   try {
     const user = await User.findById(userId);
     if (user) {
@@ -47,6 +53,21 @@ const sendNotification = async (userId, title, message, category = "SUPERADMIN_A
   } catch (error) {
     console.error("SuperAdmin Notification Error:", error.message);
   }
+};
+
+// Helper for finding user across identifier types
+const findUserByIdentifier = async (identifier, session = null) => {
+  if (!identifier) return null;
+  const cleanId = String(identifier).trim();
+  const query = {
+    $or: [
+      { _id: mongoose.Types.ObjectId.isValid(cleanId) ? cleanId : null },
+      { email: cleanId.toLowerCase() },
+      { phone: cleanId },
+      { username: cleanId.toLowerCase() },
+    ],
+  };
+  return session ? User.findOne(query).session(session) : User.findOne(query);
 };
 
 // =========================================================================
@@ -69,6 +90,8 @@ exports.getGlobalDataOverview = async (req, res) => {
       systemWalletLiabilities,
       pendingNIMC,
       pendingBVN,
+      nimcPrices,
+      bvnPrices,
     ] = await Promise.all([
       User.countDocuments({ role: "user" }),
       User.countDocuments({ role: "agent" }),
@@ -100,6 +123,8 @@ exports.getGlobalDataOverview = async (req, res) => {
       ]),
       NIMCRequest.countDocuments({ status: "pending" }),
       BVNRequest.countDocuments({ status: "pending" }),
+      NIMCPrice.find().lean(),
+      BVNPrice.find().lean(),
     ]);
 
     let gatewayBalance = "N/A";
@@ -116,6 +141,17 @@ exports.getGlobalDataOverview = async (req, res) => {
     } catch (e) {
       gatewayBalance = "Gateway Unreachable";
     }
+
+    // Combine all active custom tariff prices into key-value pairs
+    const pricesMap = {};
+    nimcPrices.forEach((p) => {
+      if (p.serviceId) pricesMap[p.serviceId] = p.amount;
+      if (p.serviceType) pricesMap[p.serviceType] = p.amount;
+    });
+    bvnPrices.forEach((p) => {
+      if (p.serviceId) pricesMap[p.serviceId] = p.amount;
+      if (p.serviceType) pricesMap[p.serviceType] = p.amount;
+    });
 
     return res.status(200).json({
       success: true,
@@ -138,6 +174,7 @@ exports.getGlobalDataOverview = async (req, res) => {
         totalPlatformAccounts:
           totalUsers + totalAgents + totalSupervisors + totalAdmins + totalSuperAdmins,
       },
+      prices: pricesMap,
     });
   } catch (error) {
     console.error("getGlobalDataOverview Error:", error);
@@ -150,45 +187,53 @@ exports.getGlobalDataOverview = async (req, res) => {
   }
 };
 
+// Alias for stats endpoint
+exports.getStats = exports.getGlobalDataOverview;
+
 // =========================================================================
 // 2. FINANCIAL DISPATCH: CREDIT, DEBIT & DIRECT OVERRIDE REFUNDS
 // =========================================================================
 
 exports.adjustUserWallet = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  let session = null;
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
+  } catch (err) {
+    session = null;
+  }
 
   try {
-    const { userId, amount, reason, actionType } = req.body;
+    const { userId, targetUserId, amount, reason, actionType } = req.body;
+    const identifier = userId || targetUserId;
     const numericAmount = Number(amount);
     const superAdminId = req.user?._id || req.user?.id;
     const action = String(actionType || "credit").toLowerCase();
 
-    if (!userId || isNaN(numericAmount) || numericAmount <= 0) {
-      await session.abortTransaction();
-      session.endSession();
+    if (!identifier || isNaN(numericAmount) || numericAmount <= 0) {
+      if (session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Please provide a valid user identifier (ID, email, or phone) and a positive amount.",
+        message:
+          "Please provide a valid user identifier (Phone, Email, or ID) and a positive numeric amount.",
       });
     }
 
-    const user = await User.findOne({
-      $or: [
-        { _id: mongoose.Types.ObjectId.isValid(userId) ? userId : null },
-        { email: String(userId).toLowerCase().trim() },
-        { phone: String(userId).trim() },
-      ],
-    }).session(session);
+    const user = await findUserByIdentifier(identifier, session);
 
     if (!user) {
-      await session.abortTransaction();
-      session.endSession();
+      if (session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
       return res.status(404).json({
         success: false,
         status: "failed",
-        message: "Target user account not found.",
+        message: "Target beneficiary account not found.",
       });
     }
 
@@ -200,7 +245,7 @@ exports.adjustUserWallet = async (req, res) => {
 
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
-    await user.save({ session });
+    await user.save(session ? { session } : undefined);
 
     const ref = `SUPER-ADJ-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     const adjustmentTxn = new Transaction({
@@ -213,41 +258,58 @@ exports.adjustUserWallet = async (req, res) => {
       oldBalance: oldBal,
       newBalance: newBal,
       status: "success",
-      details: `SuperAdmin ${action.toUpperCase()}: ${reason || "Direct wallet balance adjustment"}`,
+      details: `SuperAdmin ${action.toUpperCase()}: ${
+        reason || "Direct wallet balance adjustment"
+      }`,
       requestedBy: superAdminId,
     });
-    await adjustmentTxn.save({ session });
+    await adjustmentTxn.save(session ? { session } : undefined);
 
-    await session.commitTransaction();
-    session.endSession();
+    if (session) {
+      await session.commitTransaction();
+      session.endSession();
+    }
 
     await Activity.create({
       user: superAdminId,
       staffId: superAdminId,
       actorRole: "SUPERADMIN",
-      action: action === "credit" ? "SUPERADMIN_WALLET_CREDIT" : "SUPERADMIN_WALLET_DEBIT",
+      action:
+        action === "credit"
+          ? "SUPERADMIN_WALLET_CREDIT"
+          : "SUPERADMIN_WALLET_DEBIT",
       category: "FINANCIAL",
-      details: `SuperAdmin performed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on user ${user.phone || user.email}. Reason: ${reason || "None specified"}`,
+      details: `SuperAdmin performed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on user ${
+        user.phone || user.email
+      }. Reason: ${reason || "Manual balance override"}`,
       targetUser: user._id,
     }).catch(() => {});
 
     await sendNotification(
       user._id,
       action === "credit" ? "Wallet Credited by Admin 💰" : "Wallet Debited by Admin ⚠️",
-      `Your wallet balance has been ${action === "credit" ? "credited" : "debited"} with ₦${numericAmount.toLocaleString()}. Reason: ${reason || "Administrative balance sync"}. New Balance: ₦${newBal.toLocaleString()}`,
+      `Your wallet balance has been ${
+        action === "credit" ? "credited" : "debited"
+      } with ₦${numericAmount.toLocaleString()}. Reason: ${
+        reason || "Administrative balance sync"
+      }. New Balance: ₦${newBal.toLocaleString()}`,
       "FINANCIAL"
     );
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Successfully executed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on ${user.phone || user.email}.`,
+      message: `Successfully executed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on ${
+        user.phone || user.email
+      }.`,
       newBalance: newBal,
       reference: ref,
     });
   } catch (error) {
-    if (session.inTransaction()) await session.abortTransaction();
-    session.endSession();
+    if (session && session.inTransaction()) {
+      await session.abortTransaction();
+      session.endSession();
+    }
     console.error("adjustUserWallet Error:", error);
     return res.status(500).json({
       success: false,
@@ -259,46 +321,60 @@ exports.adjustUserWallet = async (req, res) => {
 };
 
 exports.processRefundSuperAdminOnly = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  let session = null;
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
+  } catch (err) {
+    session = null;
+  }
 
   try {
-    const { transactionId, reference, targetUserId, refundAmount, reason } = req.body;
+    const {
+      transactionId,
+      reference,
+      txRef,
+      targetUserId,
+      userId,
+      refundAmount,
+      amount,
+      reason,
+    } = req.body;
     const superAdminId = req.user?._id || req.user?.id;
 
     let txn = null;
-    if (transactionId || reference) {
+    const refKey = reference || txRef || transactionId;
+    if (refKey) {
       txn = await Transaction.findOne({
         $or: [
-          { _id: mongoose.Types.ObjectId.isValid(transactionId) ? transactionId : null },
-          { transactionId: transactionId || null },
-          { reference: reference || null },
+          { _id: mongoose.Types.ObjectId.isValid(refKey) ? refKey : null },
+          { transactionId: refKey },
+          { reference: refKey },
         ],
       }).session(session);
     }
 
-    const recipientIdentifier = targetUserId || txn?.user;
+    const recipientIdentifier = targetUserId || userId || txn?.user;
     if (!recipientIdentifier) {
-      await session.abortTransaction();
-      session.endSession();
+      if (session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Please provide a valid transaction ID, reference, or recipient user identifier.",
+        message:
+          "Please provide a valid transaction reference or beneficiary phone/email.",
       });
     }
 
-    const user = await User.findOne({
-      $or: [
-        { _id: mongoose.Types.ObjectId.isValid(recipientIdentifier) ? recipientIdentifier : null },
-        { email: String(recipientIdentifier).toLowerCase().trim() },
-        { phone: String(recipientIdentifier).trim() },
-      ],
-    }).session(session);
+    const user = await findUserByIdentifier(recipientIdentifier, session);
 
     if (!user) {
-      await session.abortTransaction();
-      session.endSession();
+      if (session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
       return res.status(404).json({
         success: false,
         status: "failed",
@@ -306,10 +382,12 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
       });
     }
 
-    const finalRefundAmount = Number(refundAmount || txn?.amount || 0);
-    if (finalRefundAmount <= 0) {
-      await session.abortTransaction();
-      session.endSession();
+    const finalRefundAmount = Number(refundAmount || amount || txn?.amount || 0);
+    if (isNaN(finalRefundAmount) || finalRefundAmount <= 0) {
+      if (session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
       return res.status(400).json({
         success: false,
         status: "failed",
@@ -322,7 +400,7 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
 
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
-    await user.save({ session });
+    await user.save(session ? { session } : undefined);
 
     if (txn) {
       txn.status = "refunded";
@@ -330,10 +408,12 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
       txn.refundReason = reason || "SuperAdmin direct executive refund override";
       txn.refundedBy = superAdminId;
       txn.refundedAt = new Date();
-      await txn.save({ session });
+      await txn.save(session ? { session } : undefined);
     }
 
-    const refundRef = `SUPER-REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+    const refundRef = `SUPER-REF-${Date.now()}-${Math.floor(
+      100 + Math.random() * 900
+    )}`;
     const refundLog = new Transaction({
       user: user._id,
       transactionId: `TXN-SUPER-REF-${Date.now()}`,
@@ -344,14 +424,18 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
       oldBalance: oldBal,
       newBalance: newBal,
       status: "success",
-      details: `SuperAdmin Refund: ₦${finalRefundAmount.toLocaleString()} for ${txn?.reference || "Direct Override"}`,
+      details: `Executive Refund of ₦${finalRefundAmount.toLocaleString()} for ${
+        txn?.reference || "Manual Override"
+      }`,
       refundReason: reason || "Executive Overrule",
       requestedBy: superAdminId,
     });
-    await refundLog.save({ session });
+    await refundLog.save(session ? { session } : undefined);
 
-    await session.commitTransaction();
-    session.endSession();
+    if (session) {
+      await session.commitTransaction();
+      session.endSession();
+    }
 
     await Activity.create({
       user: superAdminId,
@@ -359,7 +443,9 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
       actorRole: "SUPERADMIN",
       action: "SUPERADMIN_EXECUTIVE_REFUND",
       category: "FINANCIAL",
-      details: `Executed executive refund of ₦${finalRefundAmount.toLocaleString()} to ${user.phone || user.email}`,
+      details: `Executed executive refund of ₦${finalRefundAmount.toLocaleString()} to ${
+        user.phone || user.email
+      }`,
       targetUser: user._id,
     }).catch(() => {});
 
@@ -373,13 +459,17 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Executive refund of ₦${finalRefundAmount.toLocaleString()} successfully credited to ${user.phone || user.email}.`,
+      message: `Executive refund of ₦${finalRefundAmount.toLocaleString()} successfully credited to ${
+        user.phone || user.email
+      }.`,
       newBalance: newBal,
       refundReference: refundRef,
     });
   } catch (error) {
-    if (session.inTransaction()) await session.abortTransaction();
-    session.endSession();
+    if (session && session.inTransaction()) {
+      await session.abortTransaction();
+      session.endSession();
+    }
     console.error("processRefundSuperAdminOnly Error:", error);
     return res.status(500).json({
       success: false,
@@ -396,11 +486,22 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
 
 exports.changeUserRole = async (req, res) => {
   try {
-    const { userId, newRole } = req.body;
+    const { userId, newRole, role } = req.body;
     const superAdminId = req.user?._id || req.user?.id;
-    const normalizedRole = String(newRole || "").toLowerCase().trim();
+    const normalizedRole = String(newRole || role || "").toLowerCase().trim();
 
-    const allowedRoles = ["user", "agent", "supervisor", "leader", "customer_service", "admin", "superadmin"];
+    const allowedRoles = [
+      "user",
+      "agent",
+      "supervisor",
+      "leader",
+      "customer_service",
+      "customer_care",
+      "support",
+      "admin",
+      "superadmin",
+    ];
+
     if (!allowedRoles.includes(normalizedRole)) {
       return res.status(400).json({
         success: false,
@@ -409,13 +510,7 @@ exports.changeUserRole = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({
-      $or: [
-        { _id: mongoose.Types.ObjectId.isValid(userId) ? userId : null },
-        { email: String(userId).toLowerCase().trim() },
-        { phone: String(userId).trim() },
-      ],
-    });
+    const user = await findUserByIdentifier(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -435,14 +530,18 @@ exports.changeUserRole = async (req, res) => {
       actorRole: "SUPERADMIN",
       action: "USER_ROLE_PROMOTED_OR_DEMOTED",
       category: "ADMIN_CONTROL",
-      details: `Changed role of user ${user.phone || user.email} from ${previousRole.toUpperCase()} to ${normalizedRole.toUpperCase()}`,
+      details: `Changed role of user ${user.phone || user.email} from ${String(
+        previousRole
+      ).toUpperCase()} to ${normalizedRole.toUpperCase()}`,
       targetUser: user._id,
     }).catch(() => {});
 
     await sendNotification(
       user._id,
       "Account Role Updated 🎖️",
-      `Your platform account role has been updated from ${previousRole.toUpperCase()} to ${normalizedRole.toUpperCase()}.`,
+      `Your platform account role has been updated from ${String(
+        previousRole
+      ).toUpperCase()} to ${normalizedRole.toUpperCase()}.`,
       "SYSTEM"
     );
 
@@ -471,10 +570,11 @@ exports.changeUserRole = async (req, res) => {
 
 exports.forceResetUserSecurity = async (req, res) => {
   try {
-    const { userId, newPassword, newPin } = req.body;
+    const { userId, newPassword, newPin, pin } = req.body;
     const superAdminId = req.user?._id || req.user?.id;
+    const targetPin = newPin || pin;
 
-    if (!userId || (!newPassword && !newPin)) {
+    if (!userId || (!newPassword && !targetPin)) {
       return res.status(400).json({
         success: false,
         status: "failed",
@@ -482,13 +582,7 @@ exports.forceResetUserSecurity = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({
-      $or: [
-        { _id: mongoose.Types.ObjectId.isValid(userId) ? userId : null },
-        { email: String(userId).toLowerCase().trim() },
-        { phone: String(userId).trim() },
-      ],
-    });
+    const user = await findUserByIdentifier(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -503,9 +597,9 @@ exports.forceResetUserSecurity = async (req, res) => {
       user.password = await bcrypt.hash(String(newPassword), salt);
     }
 
-    if (newPin) {
-      user.pin = String(newPin);
-      user.transactionPin = String(newPin);
+    if (targetPin) {
+      user.pin = String(targetPin);
+      user.transactionPin = String(targetPin);
     }
 
     await user.save();
@@ -516,21 +610,25 @@ exports.forceResetUserSecurity = async (req, res) => {
       actorRole: "SUPERADMIN",
       action: "SECURITY_CREDENTIALS_OVERRIDDEN",
       category: "SECURITY",
-      details: `Force-reset security credentials (Password: ${Boolean(newPassword)}, PIN: ${Boolean(newPin)}) for ${user.phone || user.email}`,
+      details: `Force-reset credentials (Password: ${Boolean(
+        newPassword
+      )}, PIN: ${Boolean(targetPin)}) for ${user.phone || user.email}`,
       targetUser: user._id,
     }).catch(() => {});
 
     await sendNotification(
       user._id,
       "Security Credentials Reset 🔐",
-      "Your account security credentials (Password/PIN) have been updated by administration. If you did not request this, please contact support immediately.",
+      "Your account credentials have been updated by administration. If you did not request this, please contact support immediately.",
       "SECURITY"
     );
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Security credentials successfully updated for user ${user.phone || user.email}.`,
+      message: `Security credentials successfully updated for user ${
+        user.phone || user.email
+      }.`,
     });
   } catch (error) {
     console.error("forceResetUserSecurity Error:", error);
@@ -545,16 +643,11 @@ exports.forceResetUserSecurity = async (req, res) => {
 
 exports.toggleWalletLock = async (req, res) => {
   try {
-    const { userId, lock, reason } = req.body;
+    const { userId, lock, suspend, reason } = req.body;
     const superAdminId = req.user?._id || req.user?.id;
+    const lockState = Boolean(lock !== undefined ? lock : suspend);
 
-    const user = await User.findOne({
-      $or: [
-        { _id: mongoose.Types.ObjectId.isValid(userId) ? userId : null },
-        { email: String(userId).toLowerCase().trim() },
-        { phone: String(userId).trim() },
-      ],
-    });
+    const user = await findUserByIdentifier(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -564,7 +657,6 @@ exports.toggleWalletLock = async (req, res) => {
       });
     }
 
-    const lockState = Boolean(lock);
     user.isSuspended = lockState;
     user.status = lockState ? "suspended" : "active";
     await user.save();
@@ -575,14 +667,18 @@ exports.toggleWalletLock = async (req, res) => {
       actorRole: "SUPERADMIN",
       action: lockState ? "ACCOUNT_LOCKED" : "ACCOUNT_UNLOCKED",
       category: "SECURITY",
-      details: `${lockState ? "Locked" : "Unlocked"} user account ${user.phone || user.email}. Reason: ${reason || "Administrative review"}`,
+      details: `${lockState ? "Locked" : "Unlocked"} user account ${
+        user.phone || user.email
+      }. Reason: ${reason || "Administrative inspection"}`,
       targetUser: user._id,
     }).catch(() => {});
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `User account is now ${lockState ? "LOCKED / SUSPENDED" : "ACTIVE / UNLOCKED"}.`,
+      message: `User account is now ${
+        lockState ? "LOCKED / SUSPENDED" : "ACTIVE / UNLOCKED"
+      }.`,
       isSuspended: user.isSuspended,
       accountStatus: user.status,
     });
@@ -598,8 +694,95 @@ exports.toggleWalletLock = async (req, res) => {
 };
 
 // =========================================================================
-// 4. BULK VTU & MARKETING AUTOMATION
+// 4. BROADCAST NOTIFICATIONS & MARKETING CAMPAIGNS
 // =========================================================================
+
+exports.broadcastNotification = async (req, res) => {
+  try {
+    const { title, message, targetType, targetUserId, recipientId, category } =
+      req.body;
+    const superAdminId = req.user?._id || req.user?.id;
+
+    if (!title || !message) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Notification title and body message are required.",
+      });
+    }
+
+    const singleTarget = targetUserId || recipientId;
+
+    if (singleTarget && targetType !== "all") {
+      const user = await findUserByIdentifier(singleTarget);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          status: "failed",
+          message: "Designated recipient not found.",
+        });
+      }
+
+      await sendNotification(
+        user._id,
+        title.trim(),
+        message.trim(),
+        category || "ADMIN_BROADCAST"
+      );
+
+      return res.status(200).json({
+        success: true,
+        status: "success",
+        message: `Notification delivered directly to ${user.phone || user.email}.`,
+      });
+    }
+
+    // Broadcast to all non-suspended accounts
+    const updateResult = await User.updateMany(
+      { isSuspended: { $ne: true } },
+      {
+        $push: {
+          notifications: {
+            $each: [
+              {
+                title: title.trim(),
+                message: message.trim(),
+                category: category || "BROADCAST",
+                date: new Date(),
+                isRead: false,
+              },
+            ],
+            $position: 0,
+          },
+        },
+      }
+    );
+
+    await Activity.create({
+      user: superAdminId,
+      staffId: superAdminId,
+      actorRole: "SUPERADMIN",
+      action: "BROADCAST_NOTIFICATION_DISPATCHED",
+      category: "COMMUNICATION",
+      details: `Broadcast alert: "${title}" delivered to ${updateResult.modifiedCount} accounts`,
+    }).catch(() => {});
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: `Broadcast delivered successfully to ${updateResult.modifiedCount} active users.`,
+      dispatchedCount: updateResult.modifiedCount,
+    });
+  } catch (error) {
+    console.error("broadcastNotification Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to dispatch broadcast notification.",
+      error: error.message,
+    });
+  }
+};
 
 exports.dispatchDataBundle = async (req, res) => {
   try {
@@ -608,8 +791,6 @@ exports.dispatchDataBundle = async (req, res) => {
       planType,
       planCode,
       price,
-      costPrice,
-      validityDays,
       recipients,
       sendToAllUsers,
     } = req.body;
@@ -624,7 +805,9 @@ exports.dispatchDataBundle = async (req, res) => {
 
     let targetPhones = [];
     if (sendToAllUsers) {
-      const allUsers = await User.find({ isSuspended: { $ne: true } }).select("phone");
+      const allUsers = await User.find({ isSuspended: { $ne: true } }).select(
+        "phone"
+      );
       targetPhones = allUsers.map((u) => u.phone).filter(Boolean);
     } else if (recipients) {
       targetPhones = (Array.isArray(recipients) ? recipients : recipients.split(","))
@@ -638,14 +821,18 @@ exports.dispatchDataBundle = async (req, res) => {
       actorRole: "SUPERADMIN",
       action: "BULK_DATA_CAMPAIGN_DISPATCHED",
       category: "VTU",
-      details: `Dispatched campaign ${network.toUpperCase()} ${planCode} (₦${price}) to ${targetPhones.length} recipient numbers`,
+      details: `Dispatched campaign ${network.toUpperCase()} ${planCode} (₦${price}) to ${
+        targetPhones.length
+      } recipient numbers`,
       targetUser: null,
     }).catch(() => {});
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Bulk package campaign for ${network.toUpperCase()} (${planCode}) queued for ${targetPhones.length} recipient(s).`,
+      message: `Bulk package campaign for ${network.toUpperCase()} (${planCode}) queued for ${
+        targetPhones.length
+      } recipient(s).`,
       recipientCount: targetPhones.length,
     });
   } catch (error) {
@@ -665,25 +852,40 @@ exports.dispatchDataBundle = async (req, res) => {
 
 exports.setGlobalServicePrice = async (req, res) => {
   try {
-    const { serviceCategory, serviceId, serviceType, amount, agentPrice, costPrice, name, description } = req.body;
-    const category = String(serviceCategory || "").toLowerCase().trim();
+    const {
+      serviceCategory,
+      serviceId,
+      serviceKey,
+      serviceType,
+      amount,
+      newPrice,
+      agentPrice,
+      costPrice,
+      name,
+      description,
+    } = req.body;
 
-    if (!category || (!serviceId && !serviceType) || amount === undefined) {
+    const category = String(serviceCategory || "").toLowerCase().trim();
+    const key = String(serviceId || serviceKey || serviceType || "").trim();
+    const finalAmount = Number(amount !== undefined ? amount : newPrice);
+
+    if (!key || isNaN(finalAmount)) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Provide serviceCategory (nimc, bvn, or data), identifier key, and amount.",
+        message: "Provide service key identifier and numeric amount/newPrice.",
       });
     }
 
-    const priceNum = Number(amount);
-    const agentPriceNum = agentPrice !== undefined ? Number(agentPrice) : priceNum;
+    const priceNum = finalAmount;
+    const agentPriceNum =
+      agentPrice !== undefined ? Number(agentPrice) : priceNum;
     const costPriceNum = costPrice !== undefined ? Number(costPrice) : 0;
-    const key = String(serviceId || serviceType).trim();
 
-    let updatedDoc;
+    let updatedDoc = null;
 
-    if (category === "nimc" || category === "nin") {
+    // Detect or update according to category or fallback check
+    if (category.includes("nimc") || category.includes("nin")) {
       updatedDoc = await NIMCPrice.findOneAndUpdate(
         { $or: [{ serviceId: key }, { serviceType: key }] },
         {
@@ -699,7 +901,7 @@ exports.setGlobalServicePrice = async (req, res) => {
         },
         { upsert: true, new: true, runValidators: true }
       );
-    } else if (category === "bvn") {
+    } else if (category.includes("bvn")) {
       updatedDoc = await BVNPrice.findOneAndUpdate(
         { $or: [{ serviceId: key }, { serviceType: key }] },
         {
@@ -715,7 +917,7 @@ exports.setGlobalServicePrice = async (req, res) => {
         },
         { upsert: true, new: true, runValidators: true }
       );
-    } else if (category === "data") {
+    } else if (category.includes("data")) {
       updatedDoc = await DataPlan.findOneAndUpdate(
         { planCode: key },
         {
@@ -727,11 +929,21 @@ exports.setGlobalServicePrice = async (req, res) => {
         { new: true }
       );
     } else {
-      return res.status(400).json({
-        success: false,
-        status: "failed",
-        message: "Unsupported service category. Use: 'nimc', 'bvn', or 'data'.",
-      });
+      // Universal upsert fallback (NIMC / BVN / General)
+      updatedDoc = await NIMCPrice.findOneAndUpdate(
+        { $or: [{ serviceId: key }, { serviceType: key }] },
+        {
+          serviceId: key,
+          serviceType: key,
+          name: name || key,
+          amount: priceNum,
+          agentPrice: agentPriceNum,
+          costPrice: costPriceNum,
+          isActive: true,
+          updatedBy: req.user._id,
+        },
+        { upsert: true, new: true }
+      );
     }
 
     await Activity.create({
@@ -740,13 +952,13 @@ exports.setGlobalServicePrice = async (req, res) => {
       actorRole: "SUPERADMIN",
       action: "GLOBAL_PRICING_UPDATED",
       category: "ADMIN_CONTROL",
-      details: `Updated ${category.toUpperCase()} tariff [${key}] - User: ₦${priceNum}, Agent: ₦${agentPriceNum}, Cost: ₦${costPriceNum}`,
+      details: `Updated tariff [${key}] - User: ₦${priceNum}, Agent: ₦${agentPriceNum}, Cost: ₦${costPriceNum}`,
     }).catch(() => {});
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Successfully updated ${category.toUpperCase()} pricing matrix.`,
+      message: `Successfully updated pricing for ${key}.`,
       data: updatedDoc,
     });
   } catch (error) {
@@ -761,7 +973,7 @@ exports.setGlobalServicePrice = async (req, res) => {
 };
 
 // =========================================================================
-// 6. SYSTEM PURGE & FORENSIC AUDIT EXPUNGING
+// 6. FORENSIC AUDIT EXPUNGING
 // =========================================================================
 
 exports.expungeSystemAuditLogs = async (req, res) => {

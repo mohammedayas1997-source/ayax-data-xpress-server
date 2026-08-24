@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-// 1. Authentication & Authorization Middleware
+// 1. Dynamic Authentication & Authorization Middleware Loader
 let authMiddleware;
 try {
   authMiddleware = require("../middleware/authMiddleware");
@@ -34,20 +34,25 @@ const safe = (fn, name) => {
   };
 };
 
+// Apply Global SuperAdmin Protection
+router.use(protect);
+router.use(superAdminOnly);
+
 // ==========================================
 // 1. GLOBAL TELEMETRY & SYSTEM ANALYTICS
 // ==========================================
 router.get(
   "/overview",
-  protect,
-  superAdminOnly,
   safe(superAdminController.getGlobalDataOverview, "getGlobalDataOverview")
 );
 
 router.get(
   "/telemetry",
-  protect,
-  superAdminOnly,
+  safe(superAdminController.getGlobalDataOverview, "getGlobalDataOverview")
+);
+
+router.get(
+  "/stats",
   safe(superAdminController.getGlobalDataOverview, "getGlobalDataOverview")
 );
 
@@ -57,16 +62,25 @@ router.get(
 // Direct Wallet Credit / Debit
 router.post(
   "/wallet/adjust",
-  protect,
-  superAdminOnly,
+  safe(superAdminController.adjustUserWallet, "adjustUserWallet")
+);
+
+router.post(
+  "/adjust-wallet",
   safe(superAdminController.adjustUserWallet, "adjustUserWallet")
 );
 
 // Executive Override Refund
 router.post(
   "/refunds/executive-override",
-  protect,
-  superAdminOnly,
+  safe(
+    superAdminController.processRefundSuperAdminOnly,
+    "processRefundSuperAdminOnly"
+  )
+);
+
+router.post(
+  "/process-refund",
   safe(
     superAdminController.processRefundSuperAdminOnly,
     "processRefundSuperAdminOnly"
@@ -79,16 +93,25 @@ router.post(
 // Promote / Demote User Role
 router.patch(
   "/users/change-role",
-  protect,
-  superAdminOnly,
+  safe(superAdminController.changeUserRole, "changeUserRole")
+);
+
+router.post(
+  "/change-user-role",
   safe(superAdminController.changeUserRole, "changeUserRole")
 );
 
 // Force Override Password / PIN
 router.post(
   "/users/force-reset-security",
-  protect,
-  superAdminOnly,
+  safe(
+    superAdminController.forceResetUserSecurity,
+    "forceResetUserSecurity"
+  )
+);
+
+router.post(
+  "/override-password",
   safe(
     superAdminController.forceResetUserSecurity,
     "forceResetUserSecurity"
@@ -98,18 +121,32 @@ router.post(
 // Lock / Unlock User Account
 router.patch(
   "/users/toggle-lock",
-  protect,
-  superAdminOnly,
+  safe(superAdminController.toggleWalletLock, "toggleWalletLock")
+);
+
+router.post(
+  "/toggle-suspension",
   safe(superAdminController.toggleWalletLock, "toggleWalletLock")
 );
 
 // ==========================================
-// 4. BULK VTU & MARKETING AUTOMATION
+// 4. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
 // ==========================================
 router.post(
+  "/broadcast-notification",
+  safe(
+    superAdminController.broadcastNotification,
+    "broadcastNotification"
+  )
+);
+
+router.post(
   "/vtu/dispatch-bulk",
-  protect,
-  superAdminOnly,
+  safe(superAdminController.dispatchDataBundle, "dispatchDataBundle")
+);
+
+router.post(
+  "/dispatch-data",
   safe(superAdminController.dispatchDataBundle, "dispatchDataBundle")
 );
 
@@ -118,8 +155,14 @@ router.post(
 // ==========================================
 router.post(
   "/pricing/set-global",
-  protect,
-  superAdminOnly,
+  safe(
+    superAdminController.setGlobalServicePrice,
+    "setGlobalServicePrice"
+  )
+);
+
+router.post(
+  "/update-service-price",
   safe(
     superAdminController.setGlobalServicePrice,
     "setGlobalServicePrice"
@@ -131,8 +174,6 @@ router.post(
 // ==========================================
 router.delete(
   "/logs/expunge",
-  protect,
-  superAdminOnly,
   safe(
     superAdminController.expungeSystemAuditLogs,
     "expungeSystemAuditLogs"
