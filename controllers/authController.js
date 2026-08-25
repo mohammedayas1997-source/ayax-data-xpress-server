@@ -9,13 +9,14 @@ const generateReferralId = (firstName, surname) => {
   const lastInitial = surname ? surname[0] : "X";
   const initials = (firstInitial + lastInitial).toUpperCase();
   const digits = Math.floor(1000 + Math.random() * 9000);
-
   return `${initials}${digits}`;
 };
 
 // --- Helper: Automated Email Dispatch System ---
 const sendWelcomeEmail = async (user) => {
   try {
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) return;
+
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
@@ -35,33 +36,22 @@ const sendWelcomeEmail = async (user) => {
           </div>
           <div style="padding: 30px; background-color: #ffffff;">
             <h2 style="color: #0f172a;">Welcome, ${user.firstName || user.name}!</h2>
-            <p style="color: #475569; line-height: 1.6;">Your digital infrastructure has been successfully provisioned. Your account is now active and integrated with our real-time banking nodes.</p>
+            <p style="color: #475569; line-height: 1.6;">Your digital infrastructure has been successfully provisioned. Your account is active and ready for operations.</p>
             
             <div style="background-color: #f8fafc; border-left: 4px solid #1e3a8a; padding: 20px; margin: 25px 0;">
               <h3 style="color: #1e3a8a; margin-top: 0; font-size: 16px;">VIRTUAL BANKING ENTITY</h3>
               <p style="margin: 8px 0; color: #1e293b;"><strong>BANK:</strong> ${user.bankName || "Wema Bank"}</p>
-              <p style="margin: 8px 0; color: #1e293b;"><strong>ACCOUNT NUMBER:</strong> <span style="font-size: 18px; color: #1e3a8a; letter-spacing: 1px;">${user.accountNumber || "Initialization Pending"}</span></p>
+              <p style="margin: 8px 0; color: #1e293b;"><strong>ACCOUNT NUMBER:</strong> <span style="font-size: 18px; color: #1e3a8a; letter-spacing: 1px;">${user.accountNumber || "Pending"}</span></p>
               <p style="margin: 8px 0; color: #1e293b;"><strong>ACCOUNT NAME:</strong> ${user.accountName || user.name}</p>
             </div>
-
-            <p style="color: #475569; font-size: 14px;">You can now fund your wallet via the account number provided above to begin operations.</p>
-            
-            <div style="text-align: center; margin-top: 35px;">
-              <a href="https://ayax-data-xpress.com/login" style="background-color: #1e3a8a; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px;">ACCESS DASHBOARD</a>
-            </div>
-          </div>
-          <div style="background-color: #f1f5f9; padding: 20px; text-align: center; color: #94a3b8; font-size: 12px;">
-            <p>&copy; 2026 Ayax Data Xpress Terminal. All Rights Reserved.</p>
-            <p>Secure financial infrastructure automated by Paystack & Wema.</p>
           </div>
         </div>
       `,
     };
 
     await transporter.sendMail(mailOptions);
-    console.log(`[Email Success] Welcome notification transmitted to ${user.email}`);
   } catch (error) {
-    console.error("[Email Error] Failed to transmit welcome notification:", error.message);
+    console.error("[Email Error] Failed to send welcome email:", error.message);
   }
 };
 
@@ -71,14 +61,19 @@ const sendToken = (user, statusCode, res) => {
     {
       id: user._id,
       role: user.role,
+      state: user.state,
+      lga: user.lga,
     },
-    process.env.JWT_SECRET || "fallback_secret",
+    process.env.JWT_SECRET || "ayax_secure_jwt_secret_2026",
     {
       expiresIn: "30d",
     },
   );
 
-  const hasPinSet = !!((user.transactionPin && user.transactionPin !== "0000") || (user.pin && user.pin !== "0000"));
+  const hasPinSet = Boolean(
+    (user.transactionPin && user.transactionPin !== "0000") ||
+    (user.pin && user.pin !== "0000")
+  );
 
   return res.status(statusCode).json({
     success: true,
@@ -86,6 +81,7 @@ const sendToken = (user, statusCode, res) => {
     role: user.role,
     user: {
       id: user._id,
+      _id: user._id,
       name: user.name,
       firstName: user.firstName,
       surname: user.surname,
@@ -110,8 +106,7 @@ const sendToken = (user, statusCode, res) => {
 // --- Paystack Dedicated Account Logic ---
 const createDedicatedAccount = async (user) => {
   const secretKey = process.env.PAYSTACK_SECRET_KEY;
-  if (!secretKey)
-    throw new Error("Infrastructure Error: Paystack Secret Key undefined.");
+  if (!secretKey) return user;
 
   const axiosConfig = {
     headers: {
@@ -179,21 +174,22 @@ exports.register = async (req, res) => {
       });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanPhone = phone.trim();
 
     const existingUser = await User.findOne({
-      $or: [{ email: normalizedEmail }, { phone: phone.trim() }],
+      $or: [{ email: cleanEmail }, { phone: cleanPhone }],
     });
 
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: "User already exists",
+        message: "User already exists with this email or phone",
       });
     }
 
     let referralId = undefined;
-    if (role === "supervisor" || role === "agent" || role === "staff") {
+    if (["supervisor", "field_supervisor", "agent", "state_manager"].includes(role)) {
       referralId = generateReferralId(firstName, surname);
     }
 
@@ -201,14 +197,14 @@ exports.register = async (req, res) => {
       firstName: firstName.trim(),
       surname: surname.trim(),
       otherName: otherName || "",
-      name: `${firstName} ${surname}`,
-      email: normalizedEmail,
-      phone: phone.trim(),
-      password,
+      name: `${firstName} ${surname}`.toUpperCase().trim(),
+      email: cleanEmail,
+      phone: cleanPhone,
+      password, // Pre-save hook na schema zai yi hash
       role: role || "user",
       referralId,
-      state,
-      lga,
+      state: state || "Kano",
+      lga: lga || "Central",
       address,
     });
 
@@ -217,44 +213,41 @@ exports.register = async (req, res) => {
       await sendWelcomeEmail(updatedUser);
       return sendToken(updatedUser, 201, res);
     } catch (paystackError) {
-      console.error(
-        "Paystack Provisioning Failure:",
-        paystackError.response?.data || paystackError.message,
-      );
       await sendWelcomeEmail(user);
       return sendToken(user, 201, res);
     }
   } catch (error) {
     console.error("Critical Registration Error:", error);
-    return res.status(500).json({ success: false, message: "Internal server processing failure.", error: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc Universal Login with Instant SuperAdmin Hard-Pass
+// @desc Universal Login ga SuperAdmin, NSD, State Manager, Supervisor, Agent & Users
 exports.login = async (req, res) => {
   try {
-    const { email, phone, password } = req.body;
-    const identifier = (email || phone || "").toLowerCase().trim();
+    const { identifier, email, phone, password } = req.body;
+    const rawInput = (identifier || email || phone || "").trim();
 
-    if (!identifier || !password) {
+    if (!rawInput || !password) {
       return res.status(400).json({
         success: false,
-        message: "Credentials required.",
+        message: "Credentials required (Phone/Email and Password).",
       });
     }
 
-    // --- 1. EMERGENCY SUPERADMIN HARD-PASS (INSTANT LOGIN) ---
-    const isSuperAdminEmail =
-      identifier === "mohammed.ayas@ayaxdata.online" ||
-      identifier === "09033738409";
+    const cleanInput = rawInput.trim();
+    const cleanEmail = cleanInput.toLowerCase();
+
+    // 1. EMERGENCY SUPERADMIN HARD-PASS (INSTANT ACCESS)
+    const isSuperAdminUser =
+      cleanEmail === "mohammed.ayas@ayaxdata.online" ||
+      cleanInput === "09033738409";
     const isSuperAdminPass =
       password === "Password123@" || password === "Ayax@2026";
 
-    if (isSuperAdminEmail && isSuperAdminPass) {
+    if (isSuperAdminUser && isSuperAdminPass) {
       const db = require("mongoose").connection.db;
-      const usersCollection = db.collection("users");
-
-      let superUser = await usersCollection.findOne({
+      let superUser = await db.collection("users").findOne({
         $or: [
           { email: "mohammed.ayas@ayaxdata.online" },
           { phone: "09033738409" },
@@ -262,12 +255,15 @@ exports.login = async (req, res) => {
       });
 
       if (!superUser) {
-        const insertRes = await usersCollection.insertOne({
+        const salt = await bcrypt.genSalt(10);
+        const hash = await bcrypt.hash(password, salt);
+        const insertRes = await db.collection("users").insertOne({
           firstName: "Mohammed",
           surname: "Ayas",
-          name: "Mohammed Ayas",
+          name: "MOHAMMED AYAS",
           email: "mohammed.ayas@ayaxdata.online",
           phone: "09033738409",
+          password: hash,
           role: "superadmin",
           walletBalance: 1000000,
           balance: 1000000,
@@ -277,29 +273,38 @@ exports.login = async (req, res) => {
           createdAt: new Date(),
           updatedAt: new Date(),
         });
-        superUser = await usersCollection.findOne({ _id: insertRes.insertedId });
+        superUser = await db.collection("users").findOne({ _id: insertRes.insertedId });
       }
 
       return sendToken(superUser, 200, res);
     }
 
-    // --- 2. REGULAR USERS LOGIN FLOW ---
+    // 2. STANDARD DB USER SEARCH
     const user = await User.findOne({
       $or: [
-        { email: identifier },
-        { phone: identifier },
-        { phone: identifier.replace(/^0/, "+234") },
-        { phone: identifier.replace(/^\+234/, "0") },
+        { phone: cleanInput },
+        { email: cleanEmail },
+        { phone: cleanInput.replace(/^0/, "+234") },
+        { phone: cleanInput.replace(/^\+234/, "0") },
       ],
     }).select("+password +pin +transactionPin");
 
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Account not found with these credentials.",
+        message: "Authentication failed: Account not found.",
       });
     }
 
+    // 3. DUBA IDAN AN DAKATAR DA ASUSUN (SUSPENDED)
+    if (user.isSuspended) {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is currently suspended. Please contact executive administration.",
+      });
+    }
+
+    // 4. DUBA PASSWORD (MATCH PASSWORD)
     let isMatch = false;
     if (typeof user.matchPassword === "function") {
       try {
@@ -310,11 +315,20 @@ exports.login = async (req, res) => {
     }
 
     if (!isMatch && user.password) {
-      isMatch = await bcrypt.compare(password, user.password);
+      try {
+        isMatch = await bcrypt.compare(password, user.password);
+      } catch (e) {
+        isMatch = false;
+      }
     }
 
+    // Plain text fallback (idan an saka password danye a Mongo)
     if (!isMatch && user.password === password) {
       isMatch = true;
+      // Auto-upgrade password to hash
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(password, salt);
+      await user.save({ validateBeforeSave: false });
     }
 
     if (!isMatch) {
@@ -357,36 +371,37 @@ exports.forgotPassword = async (req, res) => {
     }
 
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    
     user.resetPasswordToken = otp;
     user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
     await user.save({ validateBeforeSave: false });
 
     try {
-      const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS,
-        },
-      });
+      if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+        const transporter = nodemailer.createTransport({
+          service: "gmail",
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+          },
+        });
 
-      await transporter.sendMail({
-        from: `"Ayax Data Xpress" <${process.env.EMAIL_USER}>`,
-        to: user.email,
-        subject: "Password Reset OTP Code",
-        html: `
-          <div style="font-family: Arial; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #e2e8f0; border-radius: 10px;">
-            <h2 style="color: #1e3a8a;">Password Reset Security</h2>
-            <p>Hello ${user.firstName || "User"},</p>
-            <p>You requested a password reset for your Ayax Data Xpress account. Use the OTP code below to proceed:</p>
-            <div style="background: #eff6ff; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; color: #1e3a8a; letter-spacing: 5px; border-radius: 8px; margin: 20px 0;">
-              ${otp}
+        await transporter.sendMail({
+          from: `"Ayax Data Xpress" <${process.env.EMAIL_USER}>`,
+          to: user.email,
+          subject: "Password Reset OTP Code",
+          html: `
+            <div style="font-family: Arial; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #e2e8f0; border-radius: 10px;">
+              <h2 style="color: #1e3a8a;">Password Reset Security</h2>
+              <p>Hello ${user.firstName || "User"},</p>
+              <p>Your OTP code to reset password is:</p>
+              <div style="background: #eff6ff; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; color: #1e3a8a; letter-spacing: 5px; border-radius: 8px; margin: 20px 0;">
+                ${otp}
+              </div>
+              <p>This code expires in 10 minutes.</p>
             </div>
-            <p>This code expires in 10 minutes. If you didn't request this, please ignore this email.</p>
-          </div>
-        `,
-      });
+          `,
+        });
+      }
     } catch (mailErr) {
       console.error("OTP Email Dispatch Error:", mailErr.message);
     }
@@ -396,8 +411,7 @@ exports.forgotPassword = async (req, res) => {
       message: "Verification OTP has been sent to your registered email.",
     });
   } catch (error) {
-    console.error("Forgot Password Error:", error);
-    return res.status(500).json({ success: false, message: "Server error during forgot password processing." });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -425,11 +439,10 @@ exports.resetPassword = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Password reset successful. You can now login with your new password.",
+      message: "Password reset successful. You can now login.",
     });
   } catch (error) {
-    console.error("Reset Password Error:", error);
-    return res.status(500).json({ success: false, message: "Server error during password reset." });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -455,19 +468,13 @@ exports.paystackWebhook = async (req, res) => {
           },
         },
       );
-
       console.log(`✅ Wallet funded: ${customerEmail} - ₦${creditValue}`);
     }
 
-    return res.status(200).json({
-      success: true,
-    });
+    return res.status(200).json({ success: true });
   } catch (error) {
-    console.log("❌ WEBHOOK ERROR:", error);
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    console.error("❌ WEBHOOK ERROR:", error);
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
 
@@ -478,7 +485,7 @@ exports.paystackWebhook = async (req, res) => {
 exports.updatePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    
+
     if (!currentPassword || !newPassword) {
       return res.status(400).json({
         success: false,
@@ -499,25 +506,19 @@ exports.updatePassword = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Security check failed: Current key incorrect.",
+        message: "Security check failed: Current password incorrect.",
       });
     }
 
     user.password = newPassword;
     await user.save();
-    
-    return res.status(200).json({ success: true, message: "Security parameters updated." });
+
+    return res.status(200).json({ success: true, message: "Password updated successfully." });
   } catch (error) {
-    console.error("Update Password Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error while updating password.",
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Create Transaction PIN (First time)
 exports.createPin = async (req, res) => {
   try {
     const pinToUse = req.body.newPin || req.body.pin;
@@ -530,8 +531,8 @@ exports.createPin = async (req, res) => {
     }
 
     const userId = req.user._id || req.user.id;
-    const user = await User.findById(userId).select("+pin +transactionPin");
-    
+    const user = await User.findById(userId);
+
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
     }
@@ -548,16 +549,10 @@ exports.createPin = async (req, res) => {
       message: "Transaction PIN successfully created.",
     });
   } catch (error) {
-    console.error("Create PIN Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error while creating PIN.",
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Update Transaction PIN using Account Password
 exports.updatePin = async (req, res) => {
   try {
     const { password } = req.body;
@@ -578,13 +573,10 @@ exports.updatePin = async (req, res) => {
     }
 
     const userId = req.user._id || req.user.id;
-    const user = await User.findById(userId).select("+password +pin +transactionPin");
+    const user = await User.findById(userId).select("+password");
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User account not found.",
-      });
+      return res.status(404).json({ success: false, message: "User not found." });
     }
 
     let isPasswordMatch = false;
@@ -614,11 +606,6 @@ exports.updatePin = async (req, res) => {
       message: "Transaction PIN successfully updated.",
     });
   } catch (error) {
-    console.error("Update PIN Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error while updating PIN.",
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
