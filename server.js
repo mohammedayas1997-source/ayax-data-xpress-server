@@ -138,6 +138,7 @@ app.use("/api/v1/leader", leaderRoutes);
 app.use("/api/v1/supervisors", supervisorRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
+app.use("/api/v1/super-leader", require("./routes/superLeaderRoutes"));
 
 // --- SECURE USER PROFILE ROUTE ---
 app.get("/api/v1/user/profile", async (req, res) => {

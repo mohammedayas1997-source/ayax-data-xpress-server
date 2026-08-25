@@ -106,19 +106,23 @@ const UserSchema = new mongoose.Schema(
 
     // --- ACCESS HIERARCHY ---
     role: {
-      type: String,
-      enum: [
-        "user",
-        "agent",
-        "supervisor",
-        "leader",
-        "admin",
-        "superadmin",
-        "support",
-      ],
-      default: "user",
-      index: true,
-    },
+  type: String,
+  enum: [
+    "user",
+    "agent",
+    "supervisor",
+    "field_supervisor",
+    "state_manager",
+    "leader",
+    "national_sales_director",
+    "super_leader",
+    "admin",
+    "superadmin",
+    "support",
+  ],
+  default: "user",
+  index: true,
+},
 
     // --- TOPOLOGICAL RELATIONSHIPS ---
     assignedSupervisor: {
