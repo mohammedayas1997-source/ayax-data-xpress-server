@@ -1,6 +1,7 @@
 require("dotenv").config();
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const User = require("./models/User");
 
 const seedStaffAccounts = async () => {
   try {
@@ -15,6 +16,8 @@ const seedStaffAccounts = async () => {
 
     const defaultPassword = "Password123@";
     const defaultPin = "2026";
+    
+    // Hash password daya tak
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(defaultPassword, salt);
 
@@ -61,30 +64,35 @@ const seedStaffAccounts = async () => {
       },
     ];
 
-    const usersCollection = mongoose.connection.db.collection("users");
-
     for (const staff of staffMembers) {
-      await usersCollection.deleteMany({
-        $or: [{ email: staff.email.toLowerCase() }, { phone: staff.phone }],
+      const cleanEmail = staff.email.toLowerCase().trim();
+      const cleanPhone = staff.phone.trim();
+
+      // Goge tsohon asusu idan akwai
+      await User.deleteMany({
+        $or: [{ email: cleanEmail }, { phone: cleanPhone }],
       });
 
-      await usersCollection.insertOne({
+      // Kirkiri sabo da Mongoose model tare da hashed password
+      const newStaff = new User({
         ...staff,
-        email: staff.email.toLowerCase().trim(),
+        email: cleanEmail,
+        phone: cleanPhone,
         password: hashedPassword,
         transactionPin: defaultPin,
         pin: defaultPin,
         status: "active",
         isSuspended: false,
         isVerified: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
       });
+
+      // Ajiye ba tare da pre-save hooks sun sake yi masa double-hash ba
+      await newStaff.save({ validateBeforeSave: false });
     }
 
     console.log(`
 ===================================================
-?? ALL STAFF ACCOUNTS CREATED SUCCESSFULLY!
+?? ALL STAFF ACCOUNTS CREATED & LOGIN FIXED!
 ===================================================
 Default Password for all: ${defaultPassword}
 Default PIN for all:      ${defaultPin}
