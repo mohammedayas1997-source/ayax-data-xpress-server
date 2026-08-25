@@ -1,6 +1,5 @@
 require("dotenv").config();
 const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs");
 const User = require("./models/User");
 
 const seedStaffAccounts = async () => {
@@ -16,16 +15,12 @@ const seedStaffAccounts = async () => {
 
     const defaultPassword = "Password123@";
     const defaultPin = "2026";
-    
-    // Hash password daya tak
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(defaultPassword, salt);
 
     const staffMembers = [
       {
         firstName: "Operations",
         surname: "Admin",
-        name: "Operations Admin",
+        name: "OPERATIONS ADMIN",
         email: "admin@ayaxdata.online",
         phone: "08011112222",
         role: "admin",
@@ -35,7 +30,7 @@ const seedStaffAccounts = async () => {
       {
         firstName: "Team",
         surname: "Leader",
-        name: "National Team Leader",
+        name: "NATIONAL TEAM LEADER",
         email: "leader@ayaxdata.online",
         phone: "08022223333",
         role: "leader",
@@ -45,7 +40,7 @@ const seedStaffAccounts = async () => {
       {
         firstName: "North",
         surname: "Supervisor",
-        name: "North Regional Supervisor",
+        name: "NORTH REGIONAL SUPERVISOR",
         email: "supervisor@ayaxdata.online",
         phone: "08033334444",
         role: "supervisor",
@@ -55,10 +50,10 @@ const seedStaffAccounts = async () => {
       {
         firstName: "Customer",
         surname: "Support",
-        name: "Ayax HelpDesk",
+        name: "AYAX HELPDESK",
         email: "support@ayaxdata.online",
         phone: "08077778888",
-        role: "customer_service",
+        role: "support",
         walletBalance: 10000,
         balance: 10000,
       },
@@ -68,31 +63,28 @@ const seedStaffAccounts = async () => {
       const cleanEmail = staff.email.toLowerCase().trim();
       const cleanPhone = staff.phone.trim();
 
-      // Goge tsohon asusu idan akwai
+      // Goge tsohon asusu
       await User.deleteMany({
         $or: [{ email: cleanEmail }, { phone: cleanPhone }],
       });
 
-      // Kirkiri sabo da Mongoose model tare da hashed password
+      // Zuba danyen password domin pre('save') hook din User.js ya yi hashing da kansa
       const newStaff = new User({
         ...staff,
         email: cleanEmail,
         phone: cleanPhone,
-        password: hashedPassword,
+        password: defaultPassword,
         transactionPin: defaultPin,
         pin: defaultPin,
-        status: "active",
         isSuspended: false,
-        isVerified: true,
       });
 
-      // Ajiye ba tare da pre-save hooks sun sake yi masa double-hash ba
-      await newStaff.save({ validateBeforeSave: false });
+      await newStaff.save();
     }
 
     console.log(`
 ===================================================
-?? ALL STAFF ACCOUNTS CREATED & LOGIN FIXED!
+?? ALL STAFF ACCOUNTS CREATED SUCCESSFULLY!
 ===================================================
 Default Password for all: ${defaultPassword}
 Default PIN for all:      ${defaultPin}
@@ -109,9 +101,9 @@ Default PIN for all:      ${defaultPin}
    Phone: 08033334444 | Email: supervisor@ayaxdata.online
    Role:  supervisor
 
-4. CUSTOMER CARE:
+4. CUSTOMER SUPPORT:
    Phone: 08077778888 | Email: support@ayaxdata.online
-   Role:  customer_service
+   Role:  support
 ===================================================
     `);
 
