@@ -14,29 +14,37 @@ const {
 
 const { protect, authorize } = require("../middleware/authMiddleware");
 
-// Duk routes na ƙasa suna buƙatar ingantaccen login token
+// Authentication middleware
 router.use(protect);
 
-// Bayar da izini ga Leader, Admin, da Superadmin
-// Bayar da izini ga State Managers, NSD, Leaders, da Admins
-router.use(authorize("state_manager", "leader", "national_sales_director", "super_leader", "admin", "superadmin"));
+// Izini ga ma'aikata
+router.use(
+  authorize(
+    "state_manager",
+    "leader",
+    "national_sales_director",
+    "super_leader",
+    "admin",
+    "superadmin"
+  )
+);
 
-// --- DASHBOARD & LIVE TELEMETRY STREAMS ---
+// Telemetry & Data Streams
 router.get("/dashboard", getLeaderDashboard);
 router.get("/agents-stream", getAgentsStream);
 router.get("/live-audit-stream", getLiveAuditStream);
 router.get("/agents", getAllAgents);
 
-// --- FIELD MANAGEMENT & INTERVENTIONS ---
+// Actions
 router.post("/create-supervisor", createNewSupervisor);
 router.post("/assign-target", assignSupervisorTarget);
 router.post("/assign-agent", assignAgentToSupervisor);
 
-// Status Toggles (yana ɗaukar duka salon routes biyu don daidaito)
+// Status Toggles
 router.patch("/toggle-status/:id", toggleSupervisorStatus);
 router.patch("/toggle-supervisor/:supervisorId", toggleSupervisorStatus);
 
-// Reports & Analytics Downloads
+// Reports
 router.get("/download-full-report", downloadSupervisorReport);
 router.get("/report/:supervisorId", downloadSupervisorReport);
 

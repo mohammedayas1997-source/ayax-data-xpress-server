@@ -1,18 +1,23 @@
 const User = require("../models/User");
 const TargetHistory = require("../models/TargetHistory");
 const Activity = require("../models/Activity");
-const Transaction = require("../models/Transaction"); // Idan akwai transaction model don kididdigar sales
 const mongoose = require("mongoose");
 
-// @desc    Get Detailed Stats for Leader Dashboard (Multi-Supervisors per LGA, Agents & Real-Time Performance)
+let Transaction;
+try {
+  Transaction = require("../models/Transaction");
+} catch (e) {
+  Transaction = null;
+}
+
+// 1. Get Leader Dashboard Data
 exports.getLeaderDashboard = async (req, res) => {
   try {
     const leaderId = req.user._id;
     const leaderState = req.user.state || req.query.state || "";
 
-    // Binciko supervisors na wannan Leader din ko na jihar sa
     const supervisorQuery = {
-      role: "supervisor",
+      role: { $in: ["supervisor", "field_supervisor"] },
       $or: [
         { assignedLeader: leaderId },
         ...(leaderState ? [{ state: new RegExp(`^${leaderState}$`, "i") }] : []),
@@ -20,14 +25,11 @@ exports.getLeaderDashboard = async (req, res) => {
     };
 
     const supervisors = await User.find(supervisorQuery).lean();
-
-    // Tara bayanan kowane Supervisor tare da Agents dinsa da Performance
     let totalAgentsCount = 0;
     let totalStateVolumeSold = 0;
 
     const supDetails = await Promise.all(
       supervisors.map(async (sup) => {
-        // Nemo agents din karkashin wannan supervisor din
         const agents = await User.find({
           role: "agent",
           $or: [
@@ -39,7 +41,6 @@ exports.getLeaderDashboard = async (req, res) => {
         const agentIds = agents.map((a) => a._id);
         totalAgentsCount += agents.length;
 
-        // Kididdige adadin cinikin Data (GB) da supervisor da agents dinsa suka yi
         let teamDataSold = 0;
         try {
           if (Transaction) {
@@ -48,7 +49,7 @@ exports.getLeaderDashboard = async (req, res) => {
                 $match: {
                   user: { $in: [sup._id, ...agentIds] },
                   status: { $in: ["successful", "success", "completed"] },
-                  type: { $in: ["data", "DATA", "airtime_to_cash"] },
+                  type: { $in: ["data", "DATA"] },
                 },
               },
               {
@@ -107,12 +108,10 @@ exports.getLeaderDashboard = async (req, res) => {
   }
 };
 
-// @desc    Live Stream na Dukkan Agents karkashin Jihar Leader
+// 2. Get Agents Stream
 exports.getAgentsStream = async (req, res) => {
   try {
-    const leaderId = req.user._id;
     const leaderState = req.user.state || req.query.state || "";
-
     const agentQuery = {
       role: "agent",
       ...(leaderState ? { state: new RegExp(`^${leaderState}$`, "i") } : {}),
@@ -147,7 +146,7 @@ exports.getAgentsStream = async (req, res) => {
   }
 };
 
-// @desc    Live Audit & Activity Logs Stream
+// 3. Live Audit Stream
 exports.getLiveAuditStream = async (req, res) => {
   try {
     const logs = await Activity.find()
@@ -174,67 +173,20 @@ exports.getLiveAuditStream = async (req, res) => {
   }
 };
 
-// @desc    Leader assigns target to a Supervisor (with Territory Info)
-exports.assignSupervisorTarget = async (req, res) => {
+// 4. Get All Agents (Standard)
+exports.getAllAgents = async (req, res) => {
   try {
-    const { supervisorId, dataGoal, agentGoal, month, state, lga } = req.body;
-
-    if (!supervisorId) {
-      return res.status(400).json({ success: false, message: "Please provide supervisorId" });
-    }
-
-    const supervisor = await User.findOne({
-      _id: supervisorId,
-      role: "supervisor",
-    });
-
-    if (!supervisor) {
-      return res.status(404).json({ success: false, message: "Supervisor not found" });
-    }
-
-    const currentTargets = supervisor.targets || {};
-    const targetMonth = month || new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
-
-    supervisor.targets = {
-      dataGoal: Number(dataGoal) || currentTargets.dataGoal || 0,
-      agentGoal: Number(agentGoal) || currentTargets.agentGoal || 0,
-      currentMonth: targetMonth,
-      state: state || supervisor.state,
-      lga: lga || supervisor.lga,
-    };
-
-    supervisor.assignedLeader = req.user._id;
-    supervisor.markModified("targets");
-    await supervisor.save();
-
-    await TargetHistory.create({
-      assignedTo: supervisorId,
-      assignedBy: req.user._id,
-      dataGoal: Number(dataGoal) || 0,
-      agentGoal: Number(agentGoal) || 0,
-      month: targetMonth,
-      state: state || supervisor.state,
-      lga: lga || supervisor.lga,
-    });
-
-    await Activity.create({
-      staffId: req.user._id,
-      action: "SUPERVISOR_TARGET_ASSIGNED",
-      details: `Assigned ${dataGoal}GB & ${agentGoal} Agents target to ${supervisor.name || supervisor.phone} (${supervisor.lga || "LGA"}) for ${targetMonth}`,
-      targetUser: supervisorId,
-    });
-
-    res.status(200).json({
-      success: true,
-      message: "Target assigned and deployed successfully",
-      targets: supervisor.targets,
-    });
+    const agents = await User.find({ role: "agent" })
+      .populate("assignedSupervisor", "name email phone")
+      .select("-password")
+      .lean();
+    res.status(200).json({ success: true, count: agents.length, agents });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// @desc    Create/Appoint New LGA Supervisor (Allows Multiple Supervisors per LGA)
+// 5. Create New Supervisor
 exports.createNewSupervisor = async (req, res) => {
   try {
     const { email, phone, password, firstName, surname, name, state, lga, address } = req.body;
@@ -290,17 +242,13 @@ exports.createNewSupervisor = async (req, res) => {
       targetUser: newSup._id,
     });
 
-    res.status(201).json({
-      success: true,
-      message: "Supervisor appointed successfully",
-      data: newSup,
-    });
+    res.status(201).json({ success: true, message: "Supervisor appointed successfully", data: newSup });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
 };
 
-// @desc    Toggle Supervisor Status (Suspend / Unsuspend)
+// 6. Toggle Supervisor Status
 exports.toggleSupervisorStatus = async (req, res) => {
   try {
     const supervisorId = req.params.supervisorId || req.params.id;
@@ -330,12 +278,79 @@ exports.toggleSupervisorStatus = async (req, res) => {
   }
 };
 
-// @desc    Download Full State/Territory Report as CSV
+// 7. Assign Supervisor Target
+exports.assignSupervisorTarget = async (req, res) => {
+  try {
+    const { supervisorId, dataGoal, agentGoal, month, state, lga } = req.body;
+
+    if (!supervisorId) {
+      return res.status(400).json({ success: false, message: "Please provide supervisorId" });
+    }
+
+    const supervisor = await User.findOne({
+      _id: supervisorId,
+      role: { $in: ["supervisor", "field_supervisor"] },
+    });
+
+    if (!supervisor) {
+      return res.status(404).json({ success: false, message: "Supervisor not found" });
+    }
+
+    const currentTargets = supervisor.targets || {};
+    const targetMonth = month || new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
+
+    supervisor.targets = {
+      dataGoal: Number(dataGoal) || currentTargets.dataGoal || 0,
+      agentGoal: Number(agentGoal) || currentTargets.agentGoal || 0,
+      currentMonth: targetMonth,
+      state: state || supervisor.state,
+      lga: lga || supervisor.lga,
+    };
+
+    supervisor.assignedLeader = req.user._id;
+    supervisor.markModified("targets");
+    await supervisor.save();
+
+    await TargetHistory.create({
+      assignedTo: supervisorId,
+      assignedBy: req.user._id,
+      dataGoal: Number(dataGoal) || 0,
+      agentGoal: Number(agentGoal) || 0,
+      month: targetMonth,
+      state: state || supervisor.state,
+      lga: lga || supervisor.lga,
+    });
+
+    res.status(200).json({ success: true, message: "Target assigned successfully", targets: supervisor.targets });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 8. Assign Agent to Supervisor
+exports.assignAgentToSupervisor = async (req, res) => {
+  try {
+    const { agentId, supervisorId } = req.body;
+    const agent = await User.findOneAndUpdate(
+      { _id: agentId, role: "agent" },
+      { assignedSupervisor: supervisorId },
+      { new: true }
+    );
+    if (!agent) {
+      return res.status(404).json({ success: false, message: "Agent not found" });
+    }
+    res.status(200).json({ success: true, message: "Agent assigned successfully", agent });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 9. Download Supervisor Report (CSV)
 exports.downloadSupervisorReport = async (req, res) => {
   try {
     const leaderState = req.user.state || "";
     const supervisors = await User.find({
-      role: "supervisor",
+      role: { $in: ["supervisor", "field_supervisor"] },
       ...(leaderState ? { state: new RegExp(`^${leaderState}$`, "i") } : {}),
     }).lean();
 
@@ -347,7 +362,7 @@ exports.downloadSupervisorReport = async (req, res) => {
 
     const csvData = csvHeader + csvRows;
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", `attachment; filename=State-Leader-Report-${leaderState || "National"}.csv`);
+    res.setHeader("Content-Disposition", `attachment; filename=Supervisor-Report.csv`);
     return res.status(200).send(csvData);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
