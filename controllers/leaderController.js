@@ -16,7 +16,6 @@ exports.getLeaderDashboard = async (req, res) => {
     const leaderId = req.user._id;
     const leaderState = req.user.state || req.query.state || "Kano";
 
-    // 1. Nemo bayanan State Manager don fitar da target dinsa da NSD ya tura masa
     const leaderUser = await User.findById(leaderId).lean();
     const myTargets = leaderUser?.targets || {
       dataGoal: 5000,
@@ -25,7 +24,6 @@ exports.getLeaderDashboard = async (req, res) => {
       currentMonth: "August 2026",
     };
 
-    // 2. Nemo Supervisors na wannan Jihar
     const supervisorQuery = {
       role: { $in: ["supervisor", "field_supervisor"] },
       $or: [
@@ -203,7 +201,27 @@ exports.getAgentsStream = async (req, res) => {
   }
 };
 
-// 3. Assign / Update / Clear Targets (Single ko Bulk ga Supervisors ko Agents)
+// 3. Get All Agents (Function din da ya bace a baya)
+exports.getAllAgents = async (req, res) => {
+  try {
+    const leaderState = req.user.state || req.query.state || "";
+    const agentQuery = {
+      role: "agent",
+      ...(leaderState ? { state: new RegExp(`^${leaderState}$`, "i") } : {}),
+    };
+
+    const agents = await User.find(agentQuery)
+      .populate("assignedSupervisor", "name email phone lga")
+      .select("-password")
+      .lean();
+
+    res.status(200).json({ success: true, count: agents.length, agents, data: agents });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 4. Assign / Update / Clear Targets (Single ko Bulk ga Supervisors ko Agents)
 exports.assignSupervisorTarget = async (req, res) => {
   try {
     const {
@@ -335,7 +353,7 @@ exports.assignSupervisorTarget = async (req, res) => {
   }
 };
 
-// 4. Assign Agent(s) to Supervisor (Single ko Bulk Reassignment)
+// 5. Assign Agent(s) to Supervisor (Single ko Bulk Reassignment)
 exports.assignAgentToSupervisor = async (req, res) => {
   try {
     const { agentId, agentIds, supervisorId } = req.body;
@@ -408,7 +426,7 @@ exports.assignAgentToSupervisor = async (req, res) => {
   }
 };
 
-// 5. Live Audit Stream
+// 6. Live Audit Stream
 exports.getLiveAuditStream = async (req, res) => {
   try {
     const logs = await Activity.find()
@@ -435,7 +453,7 @@ exports.getLiveAuditStream = async (req, res) => {
   }
 };
 
-// 6. Create New Supervisor
+// 7. Create New Supervisor
 exports.createNewSupervisor = async (req, res) => {
   try {
     const { email, phone, password, firstName, surname, name, state, lga, address } = req.body;
@@ -502,7 +520,7 @@ exports.createNewSupervisor = async (req, res) => {
   }
 };
 
-// 7. Toggle Supervisor Suspension Status
+// 8. Toggle Supervisor Suspension Status
 exports.toggleSupervisorStatus = async (req, res) => {
   try {
     const supervisorId = req.params.supervisorId || req.params.id || req.body.supervisorId;
@@ -532,7 +550,7 @@ exports.toggleSupervisorStatus = async (req, res) => {
   }
 };
 
-// 8. Download Supervisor & Territory Report (CSV)
+// 9. Download Supervisor & Territory Report (CSV)
 exports.downloadSupervisorReport = async (req, res) => {
   try {
     const leaderState = req.user.state || "";
