@@ -1,10 +1,15 @@
 const User = require("../models/User");
 const TargetHistory = require("../models/TargetHistory");
 const Activity = require("../models/Activity");
-const Transaction = require("../models/Transaction");
+let Transaction;
+try {
+  Transaction = require("../models/Transaction");
+} catch (e) {
+  Transaction = null;
+}
 const { NIGERIA_STATES_LGAS, ALL_NIGERIAN_STATES } = require("../utils/nigeriaGeoData");
 
-// @desc    National Field Overview (Dukkan Jihohi 36 + FCT, Managers, Supervisors, Agents, da Sales Volume)
+// @desc    National Field Overview (36 Jihohi + FCT, Managers, Supervisors, Agents, Data & Airtime Volumes)
 exports.getSuperLeaderDashboard = async (req, res) => {
   try {
     // 1. Nemo dukkan State Managers (SM)
@@ -18,7 +23,7 @@ exports.getSuperLeaderDashboard = async (req, res) => {
       User.countDocuments({ role: "agent" }),
     ]);
 
-    // 3. Kididdige kowace Jiha a Matrix
+    // 3. Kididdige kowace Jiha a Matrix (Data + Airtime Sales)
     const statesMatrix = await Promise.all(
       ALL_NIGERIAN_STATES.map(async (stateName) => {
         const manager = stateManagers.find(
@@ -37,14 +42,16 @@ exports.getSuperLeaderDashboard = async (req, res) => {
 
         const lgasCount = NIGERIA_STATES_LGAS[stateName]?.length || 0;
 
-        // Binciko jimillar cinikin Data na wannan Jihar
-        let stateVolume = 0;
+        let stateDataVolume = 0;
+        let stateAirtimeVolume = 0;
+
         try {
           if (Transaction) {
             const stateUsers = await User.find({ state: stateName }).select("_id").lean();
             const userIds = stateUsers.map((u) => u._id);
 
-            const salesAgg = await Transaction.aggregate([
+            // Binciko Data Sales
+            const dataAgg = await Transaction.aggregate([
               {
                 $match: {
                   user: { $in: userIds },
@@ -59,11 +66,32 @@ exports.getSuperLeaderDashboard = async (req, res) => {
                 },
               },
             ]);
-            stateVolume = salesAgg[0]?.totalVolume || 0;
+            stateDataVolume = dataAgg[0]?.totalVolume || 0;
+
+            // Binciko Airtime Sales
+            const airtimeAgg = await Transaction.aggregate([
+              {
+                $match: {
+                  user: { $in: userIds },
+                  status: { $in: ["successful", "success", "completed"] },
+                  type: { $in: ["airtime", "AIRTIME", "vtu", "VTU"] },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalAmount: { $sum: "$amount" },
+                },
+              },
+            ]);
+            stateAirtimeVolume = airtimeAgg[0]?.totalAmount || 0;
           }
         } catch (e) {
-          stateVolume = manager?.walletBalance || 0;
+          stateDataVolume = manager?.walletBalance || 0;
+          stateAirtimeVolume = 0;
         }
+
+        const tg = manager?.targets || {};
 
         return {
           state: stateName,
@@ -76,15 +104,18 @@ exports.getSuperLeaderDashboard = async (req, res) => {
           isSuspended: manager?.isSuspended || false,
           supervisorsCount: supsCount,
           agentsCount: agsCount,
-          targetMonth: manager?.targets?.currentMonth || "August 2026",
-          stateDataGoal: manager?.targets?.dataGoal || 5000,
-          stateSupervisorGoal: manager?.targets?.supervisorGoal || lgasCount,
-          stateVolumeSold: stateVolume,
+          targetMonth: tg.currentMonth || "August 2026",
+          stateDataGoal: tg.dataGoal || 0,
+          stateAirtimeGoal: tg.airtimeGoal || 0,
+          stateSupervisorGoal: tg.supervisorGoal || lgasCount,
+          stateVolumeSold: stateDataVolume,
+          stateAirtimeSold: stateAirtimeVolume,
         };
       })
     );
 
     const nationalVolumeSold = statesMatrix.reduce((acc, curr) => acc + (curr.stateVolumeSold || 0), 0);
+    const nationalAirtimeSold = statesMatrix.reduce((acc, curr) => acc + (curr.stateAirtimeSold || 0), 0);
 
     res.status(200).json({
       success: true,
@@ -95,6 +126,7 @@ exports.getSuperLeaderDashboard = async (req, res) => {
           totalSupervisors,
           totalAgents,
           nationalVolumeSold,
+          nationalAirtimeSold,
         },
         statesMatrix,
       },
@@ -104,7 +136,80 @@ exports.getSuperLeaderDashboard = async (req, res) => {
   }
 };
 
-// @desc    NSD Toggles Suspension for State Managers ko Supervisors (Suspend / Unsuspend)
+// @desc    NSD Assigns / Edits / Clears State Targets (Single ko Bulk ga Jihohi da dama)
+exports.assignStateLeaderTarget = async (req, res) => {
+  try {
+    const { mode, leaderId, state, states, dataGoal, airtimeGoal, supervisorGoal, month } = req.body;
+    const targetMonth = month || new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
+
+    const targetPayload = {
+      dataGoal: Number(dataGoal) || 0,
+      airtimeGoal: Number(airtimeGoal) || 0,
+      supervisorGoal: Number(supervisorGoal) || 0,
+      currentMonth: targetMonth,
+      assignedByNsd: req.user._id,
+    };
+
+    // 1. Bulk State Target Allocation
+    if (mode === "bulk" && Array.isArray(states) && states.length > 0) {
+      await User.updateMany(
+        { role: { $in: ["state_manager", "leader"] }, state: { $in: states } },
+        { $set: { targets: targetPayload } }
+      );
+
+      await Activity.create({
+        staffId: req.user._id,
+        action: "BULK_STATE_TARGETS_DEPLOYED",
+        details: `NSD deployed identical quota (${dataGoal} GB & ₦${airtimeGoal}) across ${states.length} states for ${targetMonth}`,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Targets deployed across ${states.length} selected States`,
+      });
+    }
+
+    // 2. Single State Target Allocation (ko Reset/Clear)
+    const manager = leaderId
+      ? await User.findById(leaderId)
+      : await User.findOne({ role: { $in: ["state_manager", "leader"] }, state });
+
+    if (!manager) {
+      return res.status(404).json({ success: false, message: "State Manager not found" });
+    }
+
+    manager.targets = { ...targetPayload, state: manager.state };
+    manager.markModified("targets");
+    await manager.save();
+
+    await TargetHistory.create({
+      assignedTo: manager._id,
+      assignedBy: req.user._id,
+      dataGoal: Number(dataGoal) || 0,
+      airtimeGoal: Number(airtimeGoal) || 0,
+      supervisorGoal: Number(supervisorGoal) || 0,
+      month: targetMonth,
+      state: manager.state,
+    });
+
+    await Activity.create({
+      staffId: req.user._id,
+      action: dataGoal === 0 && airtimeGoal === 0 ? "STATE_TARGET_CLEARED" : "STATE_TARGET_DEPLOYED",
+      details: `NSD ${dataGoal === 0 && airtimeGoal === 0 ? "cleared" : "allocated"} target quota (${dataGoal} GB & ₦${airtimeGoal}) for ${manager.name} (${manager.state} State)`,
+      targetUser: manager._id,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Targets successfully updated for ${manager.state} State`,
+      targets: manager.targets,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// @desc    NSD Toggles Suspension for State Managers ko Staff (Suspend / Reactivate)
 exports.toggleStaffSuspension = async (req, res) => {
   try {
     const staffId = req.params.staffId || req.params.id || req.body.staffId;
@@ -118,11 +223,10 @@ exports.toggleStaffSuspension = async (req, res) => {
       return res.status(404).json({ success: false, message: "Staff account not found" });
     }
 
-    // Kada NSD ya dakatar da kansa ko babban SuperAdmin
     if (staff.role === "superadmin" || staff._id.toString() === req.user._id.toString()) {
       return res.status(403).json({
         success: false,
-        message: "You cannot change suspension status for this executive account",
+        message: "You cannot suspend this executive account",
       });
     }
 
@@ -132,11 +236,10 @@ exports.toggleStaffSuspension = async (req, res) => {
     const actionType = staff.isSuspended ? "STAFF_SUSPENDED" : "STAFF_UNSUSPENDED";
     const statusText = staff.isSuspended ? "SUSPENDED" : "ACTIVATED";
 
-    // Rubuta Activity Log
     await Activity.create({
       staffId: req.user._id,
       action: actionType,
-      details: `NSD changed operational status for ${staff.name} (${staff.role.toUpperCase()} - ${staff.state || "National"}) to ${statusText}`,
+      details: `NSD changed operational access for ${staff.name} (${staff.role.toUpperCase()} - ${staff.state || "National"}) to ${statusText}`,
       targetUser: staff._id,
     });
 
@@ -145,63 +248,6 @@ exports.toggleStaffSuspension = async (req, res) => {
       message: `${staff.name} is now ${statusText}`,
       isSuspended: staff.isSuspended,
       data: staff,
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-// @desc    NSD Assigns State Target ga State Manager (SM)
-exports.assignStateLeaderTarget = async (req, res) => {
-  try {
-    const { leaderId, dataGoal, supervisorGoal, month, state } = req.body;
-
-    if (!leaderId) {
-      return res.status(400).json({ success: false, message: "Please provide leaderId / manager ID" });
-    }
-
-    const manager = await User.findOne({
-      _id: leaderId,
-      role: { $in: ["state_manager", "leader"] },
-    });
-
-    if (!manager) {
-      return res.status(404).json({ success: false, message: "State Manager not found" });
-    }
-
-    const targetMonth = month || new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
-
-    manager.targets = {
-      dataGoal: Number(dataGoal) || 5000,
-      supervisorGoal: Number(supervisorGoal) || 10,
-      currentMonth: targetMonth,
-      state: state || manager.state,
-      assignedByNsd: req.user._id,
-    };
-
-    manager.markModified("targets");
-    await manager.save();
-
-    await TargetHistory.create({
-      assignedTo: leaderId,
-      assignedBy: req.user._id,
-      dataGoal: Number(dataGoal) || 0,
-      supervisorGoal: Number(supervisorGoal) || 0,
-      month: targetMonth,
-      state: state || manager.state,
-    });
-
-    await Activity.create({
-      staffId: req.user._id,
-      action: "STATE_TARGET_DEPLOYED",
-      details: `NSD allocated ${dataGoal} GB & ${supervisorGoal} Supervisors quota to ${manager.name} (${manager.state} State) for ${targetMonth}`,
-      targetUser: leaderId,
-    });
-
-    res.status(200).json({
-      success: true,
-      message: `State Target successfully deployed to ${manager.state} State Manager`,
-      targets: manager.targets,
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -233,7 +279,7 @@ exports.appointStateLeader = async (req, res) => {
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: "A staff account with this phone number or email already exists",
+        message: "A user with this phone number or email already exists",
       });
     }
 
@@ -263,7 +309,7 @@ exports.appointStateLeader = async (req, res) => {
     await Activity.create({
       staffId: req.user._id,
       action: "STATE_MANAGER_APPOINTED",
-      details: `NSD officially appointed ${newManager.name} as State Manager (SM) for ${cleanState} State`,
+      details: `NSD officially appointed ${newManager.name} as State Manager for ${cleanState} State`,
       targetUser: newManager._id,
     });
 
@@ -277,24 +323,24 @@ exports.appointStateLeader = async (req, res) => {
   }
 };
 
-// @desc    Download 36 States Executive Report as CSV
+// @desc    Download 36 States Executive Audit Report as CSV
 exports.downloadNationalReport = async (req, res) => {
   try {
     const managers = await User.find({
       role: { $in: ["state_manager", "leader"] },
     }).lean();
 
-    let csvHeader = "State,Manager Name,Phone,Email,Data Goal (GB),Supervisor Goal,Status\n";
+    let csvHeader = "State,Manager Name,Phone,Email,Data Goal (GB),Airtime Goal (NGN),Supervisor Goal,Status\n";
     let csvRows = managers
       .map((m) => {
         const tg = m.targets || {};
-        return `"${m.state || "N/A"}","${m.name || m.phone}","${m.phone}","${m.email}",${tg.dataGoal || 0},${tg.supervisorGoal || 0},"${m.isSuspended ? "Suspended" : "Active"}"`;
+        return `"${m.state || "N/A"}","${m.name || m.phone}","${m.phone}","${m.email}",${tg.dataGoal || 0},${tg.airtimeGoal || 0},${tg.supervisorGoal || 0},"${m.isSuspended ? "Suspended" : "Active"}"`;
       })
       .join("\n");
 
     const csvData = csvHeader + csvRows;
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", `attachment; filename=National-Sales-Director-36States-Report.csv`);
+    res.setHeader("Content-Disposition", `attachment; filename=NSD-36States-Performance-Report.csv`);
     return res.status(200).send(csvData);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

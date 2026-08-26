@@ -6,20 +6,64 @@ const {
   getMySupervisor,
   createAgent,
   getAgents,
+  recordSale,
 } = require("../controllers/agentController");
 
 const { protect, authorize } = require("../middleware/authMiddleware");
 
-// Duk route dake kasa yana bukatar authentication
+// 1. KARE HANYOYI DA AUTHENTICATION
 router.use(protect);
 
-// Routes na musamman ga Agents
-router.get("/my-performance", authorize("agent"), getAgentPerformance);
-router.get("/sales-history", authorize("agent"), getAgentSalesHistory);
-router.get("/my-supervisor", authorize("agent"), getMySupervisor);
+// 2. AGENT PERFORMANCE & QUOTA TELEMETRY (Endpoints guda biyu don tallafawa kowanne kira)
+router.get(
+  "/performance",
+  authorize("agent", "supervisor", "field_supervisor", "state_manager", "leader", "national_sales_director", "admin", "superadmin"),
+  getAgentPerformance
+);
+router.get(
+  "/my-performance",
+  authorize("agent", "supervisor", "field_supervisor", "state_manager", "leader", "national_sales_director", "admin", "superadmin"),
+  getAgentPerformance
+);
 
-// Routes na kirkiro ko duba agents (yawanci Supervisors ko Admins ne ke yin su, ko kuma Agent din da yake da izini)
-router.post("/create", authorize("agent", "supervisor", "admin", "superadmin"), createAgent);
-router.get("/all", authorize("agent", "supervisor", "admin", "superadmin"), getAgents);
+// 3. SALES & TRANSACTIONS HISTORY
+router.get(
+  "/sales-history",
+  authorize("agent", "supervisor", "field_supervisor", "state_manager", "leader", "admin", "superadmin"),
+  getAgentSalesHistory
+);
+
+// 4. ASSIGNED SUPERVISOR INFO
+router.get(
+  "/my-supervisor",
+  authorize("agent", "supervisor", "field_supervisor", "admin", "superadmin"),
+  getMySupervisor
+);
+
+// 5. RECORD NEW SALE
+router.post(
+  "/record-sale",
+  authorize("agent", "supervisor", "admin", "superadmin"),
+  recordSale
+);
+
+// 6. CREATE / REGISTER AGENT (Field Supervisors, State Managers, da Admins)
+router.post(
+  "/create",
+  authorize("agent", "supervisor", "field_supervisor", "state_manager", "leader", "national_sales_director", "admin", "superadmin"),
+  createAgent
+);
+
+// 7. GET AGENTS DIRECTORY
+router.get(
+  "/all",
+  authorize("supervisor", "field_supervisor", "state_manager", "leader", "national_sales_director", "admin", "superadmin"),
+  getAgents
+);
+router.get(
+  "/",
+  authorize("supervisor", "field_supervisor", "state_manager", "leader", "national_sales_director", "admin", "superadmin"),
+  getAgents
+);
 
 module.exports = router;

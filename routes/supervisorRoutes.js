@@ -1,27 +1,43 @@
 const express = require("express");
 const router = express.Router();
 const {
+  getSupervisorProfile,
   getMyAgents,
   getAgentSalesSummary,
   assignTargetToAgent,
 } = require("../controllers/supervisorController");
 
-// Mun yi amfani da daidaitaccen middleware dinmu
 const { protect, authorize } = require("../middleware/authMiddleware");
 
-// --- SUPERVISOR ROUTES ---
-
-// Duk wani route a nan, sai Supervisor, Admin, ko Superadmin kawai
+// 1. KARE HANYOYI DA AUTHENTICATION & ROLE-BASED ACCESS CONTROL (RBAC)
 router.use(protect);
-router.use(authorize("supervisor", "admin", "superadmin"));
+router.use(
+  authorize(
+    "supervisor",
+    "field_supervisor",
+    "state_manager",
+    "leader",
+    "national_sales_director",
+    "super_leader",
+    "admin",
+    "superadmin"
+  )
+);
 
-// 1. Ganin jerin dukkan Agents da ke karkashinsa
+// 2. PROFILE & TARGETS TELEMETRY
+router.get("/profile", getSupervisorProfile);
+
+// 3. LGA AGENTS DIRECTORY
 router.get("/my-agents", getMyAgents);
+router.get("/agents", getMyAgents); // Fallback
 
-// 2. Ganin yadda kowane Agent yake kokari (Sales summary)
+// 4. AGENT REAL-TIME SALES & PERFORMANCE
 router.get("/agent-performance/:agentId", getAgentSalesSummary);
+router.get("/agent-sales/:agentId", getAgentSalesSummary);
 
-// 3. Ba Agent takamaiman buri (Target) na wata
+// 5. AGENT TARGET ASSIGNMENT (DATA & AIRTIME)
+router.patch("/assign-target/:agentId", assignTargetToAgent);
 router.put("/assign-target/:agentId", assignTargetToAgent);
+router.post("/assign-target/:agentId", assignTargetToAgent);
 
 module.exports = router;

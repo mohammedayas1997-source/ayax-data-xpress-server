@@ -10,12 +10,22 @@ try {
   Transaction = null;
 }
 
-// 1. Get Leader Dashboard Data
+// 1. Get State Manager (Leader) Dashboard Data
 exports.getLeaderDashboard = async (req, res) => {
   try {
     const leaderId = req.user._id;
-    const leaderState = req.user.state || req.query.state || "";
+    const leaderState = req.user.state || req.query.state || "Kano";
 
+    // 1. Nemo bayanan State Manager don fitar da target dinsa da NSD ya tura masa
+    const leaderUser = await User.findById(leaderId).lean();
+    const myTargets = leaderUser?.targets || {
+      dataGoal: 5000,
+      airtimeGoal: 500000,
+      supervisorGoal: 10,
+      currentMonth: "August 2026",
+    };
+
+    // 2. Nemo Supervisors na wannan Jihar
     const supervisorQuery = {
       role: { $in: ["supervisor", "field_supervisor"] },
       $or: [
@@ -26,7 +36,8 @@ exports.getLeaderDashboard = async (req, res) => {
 
     const supervisors = await User.find(supervisorQuery).lean();
     let totalAgentsCount = 0;
-    let totalStateVolumeSold = 0;
+    let totalStateDataSold = 0;
+    let totalStateAirtimeSold = 0;
 
     const supDetails = await Promise.all(
       supervisors.map(async (sup) => {
@@ -34,20 +45,27 @@ exports.getLeaderDashboard = async (req, res) => {
           role: "agent",
           $or: [
             { assignedSupervisor: sup._id },
-            { lga: sup.lga, state: sup.state }
+            { lga: sup.lga, state: sup.state },
           ],
-        }).select("_id name phone walletBalance balance state lga").lean();
+        })
+          .select("_id name firstName surname phone walletBalance balance state lga targets")
+          .lean();
 
         const agentIds = agents.map((a) => a._id);
         totalAgentsCount += agents.length;
 
         let teamDataSold = 0;
+        let teamAirtimeSold = 0;
+
         try {
           if (Transaction) {
-            const salesAgg = await Transaction.aggregate([
+            const allTeamIds = [sup._id, ...agentIds];
+
+            // A. Data Sales Volume
+            const dataAgg = await Transaction.aggregate([
               {
                 $match: {
-                  user: { $in: [sup._id, ...agentIds] },
+                  user: { $in: allTeamIds },
                   status: { $in: ["successful", "success", "completed"] },
                   type: { $in: ["data", "DATA"] },
                 },
@@ -59,18 +77,40 @@ exports.getLeaderDashboard = async (req, res) => {
                 },
               },
             ]);
-            teamDataSold = salesAgg[0]?.totalVolume || 0;
+            teamDataSold = dataAgg[0]?.totalVolume || 0;
+
+            // B. Airtime Sales Amount
+            const airtimeAgg = await Transaction.aggregate([
+              {
+                $match: {
+                  user: { $in: allTeamIds },
+                  status: { $in: ["successful", "success", "completed"] },
+                  type: { $in: ["airtime", "AIRTIME", "vtu", "VTU"] },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalAmount: { $sum: "$amount" },
+                },
+              },
+            ]);
+            teamAirtimeSold = airtimeAgg[0]?.totalAmount || 0;
           }
         } catch (err) {
           teamDataSold = sup.balance || 0;
+          teamAirtimeSold = 0;
         }
 
-        totalStateVolumeSold += teamDataSold;
+        totalStateDataSold += teamDataSold;
+        totalStateAirtimeSold += teamAirtimeSold;
+
+        const tg = sup.targets || {};
 
         return {
           id: sup._id,
           _id: sup._id,
-          name: sup.name || `${sup.firstName || ""} ${sup.surname || ""}`.trim(),
+          name: sup.name || `${sup.firstName || ""} ${sup.surname || ""}`.trim() || "Field Supervisor",
           firstName: sup.firstName,
           surname: sup.surname,
           email: sup.email,
@@ -82,10 +122,12 @@ exports.getLeaderDashboard = async (req, res) => {
           agentsCount: agents.length,
           teamPerformance: teamDataSold,
           dataSold: teamDataSold,
-          dataGoal: sup.targets?.dataGoal || 500,
-          agentGoal: sup.targets?.agentGoal || 10,
-          targetAssigned: Boolean(sup.targets?.dataGoal),
-          targets: sup.targets || { dataGoal: 0, agentGoal: 0, currentMonth: "" },
+          airtimeSold: teamAirtimeSold,
+          dataGoal: tg.dataGoal || 0,
+          airtimeGoal: tg.airtimeGoal || 0,
+          agentGoal: tg.agentGoal || 0,
+          targetAssigned: Boolean(tg.dataGoal || tg.airtimeGoal),
+          targets: tg,
         };
       })
     );
@@ -94,10 +136,16 @@ exports.getLeaderDashboard = async (req, res) => {
       success: true,
       data: {
         leaderState: leaderState || "National",
+        myTargets: {
+          ...myTargets,
+          dataSold: totalStateDataSold,
+          airtimeSold: totalStateAirtimeSold,
+        },
         networkStats: {
           totalSupervisors: supervisors.length,
           totalAgents: totalAgentsCount,
-          overallDataSold: totalStateVolumeSold,
+          overallDataSold: totalStateDataSold,
+          overallAirtimeSold: totalStateAirtimeSold,
           activeQuotas: supDetails.filter((s) => s.targetAssigned).length,
         },
         supervisors: supDetails,
@@ -108,7 +156,7 @@ exports.getLeaderDashboard = async (req, res) => {
   }
 };
 
-// 2. Get Agents Stream
+// 2. Get Agents Stream with Targets & Supervisor Details
 exports.getAgentsStream = async (req, res) => {
   try {
     const leaderState = req.user.state || req.query.state || "";
@@ -122,23 +170,32 @@ exports.getAgentsStream = async (req, res) => {
       .select("-password")
       .lean();
 
-    const formattedAgents = agents.map((ag) => ({
-      id: ag._id,
-      _id: ag._id,
-      name: ag.name || `${ag.firstName || ""} ${ag.surname || ""}`.trim(),
-      phone: ag.phone,
-      email: ag.email,
-      state: ag.state || leaderState,
-      lga: ag.lga || "Hub",
-      walletBalance: ag.walletBalance || ag.balance || 0,
-      balance: ag.balance || 0,
-      assignedSupervisorName:
-        ag.assignedSupervisor?.name ||
-        `${ag.assignedSupervisor?.firstName || ""} ${ag.assignedSupervisor?.surname || ""}`.trim() ||
-        "LGA Coordinator",
-      totalSalesCount: ag.salesCount || 0,
-      dataVolumeSold: ag.dataSold || 0,
-    }));
+    const formattedAgents = agents.map((ag) => {
+      const tg = ag.targets || {};
+      return {
+        id: ag._id,
+        _id: ag._id,
+        name: ag.name || `${ag.firstName || ""} ${ag.surname || ""}`.trim() || "Retail Agent",
+        phone: ag.phone,
+        email: ag.email,
+        state: ag.state || leaderState,
+        lga: ag.lga || "Hub",
+        walletBalance: ag.walletBalance || ag.balance || 0,
+        balance: ag.balance || 0,
+        assignedSupervisor: ag.assignedSupervisor || null,
+        assignedSupervisorName:
+          ag.assignedSupervisor?.name ||
+          `${ag.assignedSupervisor?.firstName || ""} ${ag.assignedSupervisor?.surname || ""}`.trim() ||
+          "Unassigned",
+        totalSalesCount: ag.salesCount || 0,
+        dataVolumeSold: ag.dataSold || 0,
+        dataSold: ag.dataSold || 0,
+        airtimeSold: ag.airtimeSold || 0,
+        dataGoal: tg.dataGoal || 0,
+        airtimeGoal: tg.airtimeGoal || 0,
+        targets: tg,
+      };
+    });
 
     res.status(200).json({ success: true, count: formattedAgents.length, agents: formattedAgents });
   } catch (error) {
@@ -146,7 +203,212 @@ exports.getAgentsStream = async (req, res) => {
   }
 };
 
-// 3. Live Audit Stream
+// 3. Assign / Update / Clear Targets (Single ko Bulk ga Supervisors ko Agents)
+exports.assignSupervisorTarget = async (req, res) => {
+  try {
+    const {
+      mode,
+      supervisorId,
+      supervisorIds,
+      agentId,
+      agentIds,
+      dataGoal,
+      airtimeGoal,
+      agentGoal,
+      month,
+      state,
+      lga,
+    } = req.body;
+
+    const targetMonth = month || new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
+    const targetPayload = {
+      dataGoal: Number(dataGoal) || 0,
+      airtimeGoal: Number(airtimeGoal) || 0,
+      agentGoal: Number(agentGoal) || 0,
+      currentMonth: targetMonth,
+      state: state || req.user.state,
+      lga: lga || undefined,
+      assignedByLeader: req.user._id,
+    };
+
+    // 1. Bulk Supervisors
+    if (mode === "bulk_sup" && Array.isArray(supervisorIds) && supervisorIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: supervisorIds } },
+        { $set: { targets: targetPayload, assignedLeader: req.user._id } }
+      );
+
+      await Activity.create({
+        staffId: req.user._id,
+        action: "BULK_SUPERVISOR_TARGETS_DEPLOYED",
+        details: `State Manager deployed identical target (${dataGoal} GB & ₦${airtimeGoal}) across ${supervisorIds.length} Field Supervisors`,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Targets deployed across ${supervisorIds.length} Supervisors`,
+      });
+    }
+
+    // 2. Bulk Agents
+    if (mode === "bulk_agent" && Array.isArray(agentIds) && agentIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: agentIds } },
+        { $set: { targets: targetPayload } }
+      );
+
+      await Activity.create({
+        staffId: req.user._id,
+        action: "BULK_AGENT_TARGETS_DEPLOYED",
+        details: `State Manager deployed identical target (${dataGoal} GB & ₦${airtimeGoal}) across ${agentIds.length} Retail Agents`,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Targets deployed across ${agentIds.length} Agents`,
+      });
+    }
+
+    // 3. Single Agent
+    if ((mode === "single_agent" || agentId) && !supervisorId) {
+      const targetAgentId = agentId || req.body.agentId;
+      const agent = await User.findById(targetAgentId);
+      if (!agent) return res.status(404).json({ success: false, message: "Agent not found" });
+
+      agent.targets = targetPayload;
+      agent.markModified("targets");
+      await agent.save();
+
+      await Activity.create({
+        staffId: req.user._id,
+        action: dataGoal === 0 && airtimeGoal === 0 ? "AGENT_TARGET_CLEARED" : "AGENT_TARGET_DEPLOYED",
+        details: `Updated target (${dataGoal} GB & ₦${airtimeGoal}) for Agent ${agent.name} (${agent.phone})`,
+        targetUser: agent._id,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Agent target quota updated successfully",
+        targets: agent.targets,
+      });
+    }
+
+    // 4. Single Supervisor (Default)
+    const targetSupId = supervisorId || req.body.supervisorId;
+    if (!targetSupId) {
+      return res.status(400).json({ success: false, message: "Supervisor ID or recipient list required" });
+    }
+
+    const supervisor = await User.findById(targetSupId);
+    if (!supervisor) return res.status(404).json({ success: false, message: "Supervisor not found" });
+
+    supervisor.targets = { ...targetPayload, lga: supervisor.lga || lga };
+    supervisor.assignedLeader = req.user._id;
+    supervisor.markModified("targets");
+    await supervisor.save();
+
+    await TargetHistory.create({
+      assignedTo: supervisor._id,
+      assignedBy: req.user._id,
+      dataGoal: Number(dataGoal) || 0,
+      airtimeGoal: Number(airtimeGoal) || 0,
+      agentGoal: Number(agentGoal) || 0,
+      month: targetMonth,
+      state: supervisor.state,
+      lga: supervisor.lga,
+    });
+
+    await Activity.create({
+      staffId: req.user._id,
+      action: dataGoal === 0 && airtimeGoal === 0 ? "SUPERVISOR_TARGET_CLEARED" : "SUPERVISOR_TARGET_DEPLOYED",
+      details: `Updated quota (${dataGoal} GB & ₦${airtimeGoal}) for Supervisor ${supervisor.name} (${supervisor.lga || "LGA"})`,
+      targetUser: supervisor._id,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Target quota successfully assigned",
+      targets: supervisor.targets,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 4. Assign Agent(s) to Supervisor (Single ko Bulk Reassignment)
+exports.assignAgentToSupervisor = async (req, res) => {
+  try {
+    const { agentId, agentIds, supervisorId } = req.body;
+
+    if (!supervisorId) {
+      return res.status(400).json({ success: false, message: "Supervisor ID is required" });
+    }
+
+    const supervisor = await User.findById(supervisorId);
+    if (!supervisor) {
+      return res.status(404).json({ success: false, message: "Target Field Supervisor not found" });
+    }
+
+    // Bulk Reassign
+    if (Array.isArray(agentIds) && agentIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: agentIds }, role: "agent" },
+        {
+          $set: {
+            assignedSupervisor: supervisor._id,
+            lga: supervisor.lga || undefined,
+          },
+        }
+      );
+
+      await Activity.create({
+        staffId: req.user._id,
+        action: "BULK_AGENTS_REASSIGNED",
+        details: `Reassigned ${agentIds.length} agents to Supervisor ${supervisor.name} (${supervisor.lga || "LGA"})`,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `Successfully reassigned ${agentIds.length} agents to ${supervisor.name}`,
+      });
+    }
+
+    // Single Reassign
+    if (!agentId) {
+      return res.status(400).json({ success: false, message: "Agent ID or agentIds list required" });
+    }
+
+    const agent = await User.findOneAndUpdate(
+      { _id: agentId, role: "agent" },
+      {
+        assignedSupervisor: supervisor._id,
+        lga: supervisor.lga || undefined,
+      },
+      { new: true }
+    );
+
+    if (!agent) {
+      return res.status(404).json({ success: false, message: "Agent not found" });
+    }
+
+    await Activity.create({
+      staffId: req.user._id,
+      action: "AGENT_REASSIGNED",
+      details: `Reassigned Agent ${agent.name} to Supervisor ${supervisor.name} (${supervisor.lga || "LGA"})`,
+      targetUser: agent._id,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Agent assigned to ${supervisor.name} successfully`,
+      agent,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// 5. Live Audit Stream
 exports.getLiveAuditStream = async (req, res) => {
   try {
     const logs = await Activity.find()
@@ -173,20 +435,7 @@ exports.getLiveAuditStream = async (req, res) => {
   }
 };
 
-// 4. Get All Agents (Standard)
-exports.getAllAgents = async (req, res) => {
-  try {
-    const agents = await User.find({ role: "agent" })
-      .populate("assignedSupervisor", "name email phone")
-      .select("-password")
-      .lean();
-    res.status(200).json({ success: true, count: agents.length, agents });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-// 5. Create New Supervisor
+// 6. Create New Supervisor
 exports.createNewSupervisor = async (req, res) => {
   try {
     const { email, phone, password, firstName, surname, name, state, lga, address } = req.body;
@@ -218,7 +467,7 @@ exports.createNewSupervisor = async (req, res) => {
     const newSup = await User.create({
       firstName: finalFirstName,
       surname: finalSurname,
-      name: name || `${finalFirstName} ${finalSurname}`.toUpperCase(),
+      name: (name || `${finalFirstName} ${finalSurname}`).toUpperCase().trim(),
       email: cleanEmail,
       phone: cleanPhone,
       password: password || "Password123@",
@@ -233,6 +482,7 @@ exports.createNewSupervisor = async (req, res) => {
       balance: 50000,
       isSuspended: false,
       isVerified: true,
+      status: "active",
     });
 
     await Activity.create({
@@ -242,16 +492,20 @@ exports.createNewSupervisor = async (req, res) => {
       targetUser: newSup._id,
     });
 
-    res.status(201).json({ success: true, message: "Supervisor appointed successfully", data: newSup });
+    res.status(201).json({
+      success: true,
+      message: "Supervisor appointed successfully",
+      data: newSup,
+    });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
 };
 
-// 6. Toggle Supervisor Status
+// 7. Toggle Supervisor Suspension Status
 exports.toggleSupervisorStatus = async (req, res) => {
   try {
-    const supervisorId = req.params.supervisorId || req.params.id;
+    const supervisorId = req.params.supervisorId || req.params.id || req.body.supervisorId;
     const user = await User.findById(supervisorId);
 
     if (!user) {
@@ -278,74 +532,7 @@ exports.toggleSupervisorStatus = async (req, res) => {
   }
 };
 
-// 7. Assign Supervisor Target
-exports.assignSupervisorTarget = async (req, res) => {
-  try {
-    const { supervisorId, dataGoal, agentGoal, month, state, lga } = req.body;
-
-    if (!supervisorId) {
-      return res.status(400).json({ success: false, message: "Please provide supervisorId" });
-    }
-
-    const supervisor = await User.findOne({
-      _id: supervisorId,
-      role: { $in: ["supervisor", "field_supervisor"] },
-    });
-
-    if (!supervisor) {
-      return res.status(404).json({ success: false, message: "Supervisor not found" });
-    }
-
-    const currentTargets = supervisor.targets || {};
-    const targetMonth = month || new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
-
-    supervisor.targets = {
-      dataGoal: Number(dataGoal) || currentTargets.dataGoal || 0,
-      agentGoal: Number(agentGoal) || currentTargets.agentGoal || 0,
-      currentMonth: targetMonth,
-      state: state || supervisor.state,
-      lga: lga || supervisor.lga,
-    };
-
-    supervisor.assignedLeader = req.user._id;
-    supervisor.markModified("targets");
-    await supervisor.save();
-
-    await TargetHistory.create({
-      assignedTo: supervisorId,
-      assignedBy: req.user._id,
-      dataGoal: Number(dataGoal) || 0,
-      agentGoal: Number(agentGoal) || 0,
-      month: targetMonth,
-      state: state || supervisor.state,
-      lga: lga || supervisor.lga,
-    });
-
-    res.status(200).json({ success: true, message: "Target assigned successfully", targets: supervisor.targets });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-// 8. Assign Agent to Supervisor
-exports.assignAgentToSupervisor = async (req, res) => {
-  try {
-    const { agentId, supervisorId } = req.body;
-    const agent = await User.findOneAndUpdate(
-      { _id: agentId, role: "agent" },
-      { assignedSupervisor: supervisorId },
-      { new: true }
-    );
-    if (!agent) {
-      return res.status(404).json({ success: false, message: "Agent not found" });
-    }
-    res.status(200).json({ success: true, message: "Agent assigned successfully", agent });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-// 9. Download Supervisor Report (CSV)
+// 8. Download Supervisor & Territory Report (CSV)
 exports.downloadSupervisorReport = async (req, res) => {
   try {
     const leaderState = req.user.state || "";
@@ -354,15 +541,17 @@ exports.downloadSupervisorReport = async (req, res) => {
       ...(leaderState ? { state: new RegExp(`^${leaderState}$`, "i") } : {}),
     }).lean();
 
-    let csvHeader = "Supervisor Name,Phone,Email,State,LGA,Target Month,Data Goal (GB),Agent Goal,Status\n";
-    let csvRows = supervisors.map((s) => {
-      const tg = s.targets || {};
-      return `"${s.name || s.phone}","${s.phone}","${s.email}","${s.state || ""}","${s.lga || ""}","${tg.currentMonth || "N/A"}",${tg.dataGoal || 0},${tg.agentGoal || 0},"${s.isSuspended ? "Suspended" : "Active"}"`;
-    }).join("\n");
+    let csvHeader = "Supervisor Name,Phone,Email,State,LGA,Target Month,Data Goal (GB),Airtime Goal (NGN),Agent Goal,Status\n";
+    let csvRows = supervisors
+      .map((s) => {
+        const tg = s.targets || {};
+        return `"${s.name || s.phone}","${s.phone}","${s.email}","${s.state || ""}","${s.lga || ""}","${tg.currentMonth || "N/A"}",${tg.dataGoal || 0},${tg.airtimeGoal || 0},${tg.agentGoal || 0},"${s.isSuspended ? "Suspended" : "Active"}"`;
+      })
+      .join("\n");
 
     const csvData = csvHeader + csvRows;
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", `attachment; filename=Supervisor-Report.csv`);
+    res.setHeader("Content-Disposition", `attachment; filename=State-Supervisor-Report.csv`);
     return res.status(200).send(csvData);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
