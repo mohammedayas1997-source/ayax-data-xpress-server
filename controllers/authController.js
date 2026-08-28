@@ -57,7 +57,6 @@ const sendWelcomeEmail = async (user) => {
 
 // --- Helper: Generate and Send JWT Token (DAIDAI DA SUPERADMIN ENFORCEMENT) ---
 const sendToken = (user, statusCode, res) => {
-  // Tabbatar da cewa asusunka yana samun role din superadmin a cikin JWT Token
   const isOwner =
     user.phone === "09033738409" ||
     String(user.email).toLowerCase() === "mohammed.ayas@ayaxdata.online";
@@ -72,7 +71,7 @@ const sendToken = (user, statusCode, res) => {
       state: user.state,
       lga: user.lga,
     },
-    process.env.JWT_SECRET || "ayax_secure_jwt_secret_2026",
+    process.env.JWT_SECRET || "d5a8161f29822be327aedda003ae85cfbefd1506d280761cd0b068108d678c7d24554eecd936e61855947d34b0947402b9fedd098c8b1bd2247928449eb6b8e6",
     {
       expiresIn: "30d",
     }

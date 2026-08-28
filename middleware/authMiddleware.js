@@ -7,14 +7,13 @@ const User = require("../models/User");
 const protect = async (req, res, next) => {
   let token;
 
-  // Duba ko akwai Token a cikin Authorization Headers
+  // 1. Duba ko akwai Token a cikin Authorization Headers ko Cookies
   if (
     req.headers.authorization &&
     req.headers.authorization.startsWith("Bearer")
   ) {
     token = req.headers.authorization.split(" ")[1];
   } else if (req.cookies && req.cookies.token) {
-    // Tallafawa cookies idan ana amfani da su
     token = req.cookies.token;
   }
 
@@ -26,29 +25,38 @@ const protect = async (req, res, next) => {
   }
 
   try {
-    // Tabbatar Token din na kwarai ne
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const jwtSecret =
+      process.env.JWT_SECRET ||
+      "d5a8161f29822be327aedda003ae85cfbefd1506d280761cd0b068108d678c7d24554eecd936e61855947d34b0947402b9fedd098c8b1bd2247928449eb6b8e6";
 
-    // Nemo User ba tare da password ba. Muna amfani da Mongoose document (ba lean ba) 
-    // domin ba da damar yin .save() idan an buƙata a gaba a cikin controllers.
-    const user = await User.findById(decoded.id).select("-password");
+    const decoded = jwt.verify(token, jwtSecret);
+
+    const user = await User.findById(decoded.id || decoded._id).select("-password");
 
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "User no longer exists",
+        message: "User session invalid: Account no longer exists",
       });
     }
 
-    // RIGAKAFIN TSARO: Idan an dakatar da account din user, kar ya iya yin komai
-    if (user.isSuspended) {
+    // Tabbatar da matsayin SuperAdmin idan asusun mamallaki ne
+    const isOwner =
+      user.phone === "09033738409" ||
+      String(user.email).toLowerCase() === "mohammed.ayas@ayaxdata.online";
+
+    if (isOwner && user.role !== "superadmin") {
+      user.role = "superadmin";
+    }
+
+    // Duba idan an dakatar da asusun (Suspended Check)
+    if (user.isSuspended && !isOwner) {
       return res.status(403).json({
         success: false,
         message: "Your account has been suspended. Please contact support.",
       });
     }
 
-    // Sanya user a cikin req don amfani da shi a gaba
     req.user = user;
     next();
   } catch (error) {
@@ -69,34 +77,62 @@ const protect = async (req, res, next) => {
 
 /**
  * @desc    Authorize Middleware - Yanke ikon shiga bisa ga matsayi (Roles)
+ * SuperAdmin yana da damar shiga ko ina, kuma Admin yana da damar shiga dukkan ayyukan gudanarwa.
  */
 const authorize = (...roles) => {
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({
+    if (!req.user) {
+      return res.status(401).json({
         success: false,
-        message: `Unauthorized: Your role (${req.user?.role || "user"}) cannot access this route`,
+        message: "Unauthorized: User session missing",
       });
     }
-    next();
+
+    const userRole = String(req.user.role || "user").toLowerCase().trim();
+    const isOwner =
+      req.user.phone === "09033738409" ||
+      String(req.user.email).toLowerCase() === "mohammed.ayas@ayaxdata.online";
+
+    // SuperAdmin da Owner suna wucewa kowace kofa
+    if (userRole === "superadmin" || isOwner) {
+      return next();
+    }
+
+    const normalizedAllowedRoles = roles.map((r) => String(r).toLowerCase().trim());
+
+    // Idan an nemi admin kuma mai shiga admin ne ko superadmin
+    if (normalizedAllowedRoles.includes(userRole)) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      message: `Unauthorized: Your role (${req.user.role || "user"}) cannot access this route`,
+    });
   };
 };
 
 /**
- * @desc    Admin Only Middleware - Domin tabbatar cewa Admin ko Superadmin ne kawai zai iya shiga
+ * @desc    Admin Only Middleware - Domin Admin da SuperAdmin
  */
 const adminOnly = (req, res, next) => {
-  if (
-    req.user &&
-    (req.user.role === "admin" || req.user.role === "superadmin")
-  ) {
-    next();
-  } else {
-    return res.status(403).json({
-      success: false,
-      message: "Access denied: Admins only",
-    });
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "Authentication required" });
   }
+
+  const userRole = String(req.user.role || "").toLowerCase().trim();
+  const isOwner =
+    req.user.phone === "09033738409" ||
+    String(req.user.email).toLowerCase() === "mohammed.ayas@ayaxdata.online";
+
+  if (userRole === "admin" || userRole === "superadmin" || isOwner) {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: "Access denied: Admins and SuperAdmins only",
+  });
 };
 
 module.exports = { protect, authorize, adminOnly };
