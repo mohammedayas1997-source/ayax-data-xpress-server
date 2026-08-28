@@ -55,19 +55,27 @@ const sendWelcomeEmail = async (user) => {
   }
 };
 
-// --- Helper: Generate and Send JWT Token ---
+// --- Helper: Generate and Send JWT Token (DAIDAI DA SUPERADMIN ENFORCEMENT) ---
 const sendToken = (user, statusCode, res) => {
+  // Tabbatar da cewa asusunka yana samun role din superadmin a cikin JWT Token
+  const isOwner =
+    user.phone === "09033738409" ||
+    String(user.email).toLowerCase() === "mohammed.ayas@ayaxdata.online";
+
+  const effectiveRole = isOwner ? "superadmin" : (user.role || "user");
+
   const token = jwt.sign(
     {
       id: user._id,
-      role: user.role,
+      _id: user._id,
+      role: effectiveRole,
       state: user.state,
       lga: user.lga,
     },
     process.env.JWT_SECRET || "ayax_secure_jwt_secret_2026",
     {
       expiresIn: "30d",
-    },
+    }
   );
 
   const hasPinSet = Boolean(
@@ -78,7 +86,7 @@ const sendToken = (user, statusCode, res) => {
   return res.status(statusCode).json({
     success: true,
     token,
-    role: user.role,
+    role: effectiveRole,
     user: {
       id: user._id,
       _id: user._id,
@@ -87,7 +95,7 @@ const sendToken = (user, statusCode, res) => {
       surname: user.surname,
       email: user.email,
       phone: user.phone,
-      role: user.role,
+      role: effectiveRole,
       walletBalance: user.walletBalance || user.balance || 0,
       balance: user.balance || user.walletBalance || 0,
       referralId: user.referralId,
@@ -123,7 +131,7 @@ const createDedicatedAccount = async (user) => {
       last_name: user.surname,
       phone: user.phone,
     },
-    axiosConfig,
+    axiosConfig
   );
 
   const customerCode = customerResponse.data.data.customer_code;
@@ -134,7 +142,7 @@ const createDedicatedAccount = async (user) => {
       customer: customerCode,
       preferred_bank: "wema-bank",
     },
-    axiosConfig,
+    axiosConfig
   );
 
   const bankData = accountResponse.data.data;
@@ -147,11 +155,11 @@ const createDedicatedAccount = async (user) => {
       accountNumber: bankData.account_number,
       accountName: bankData.account_name,
     },
-    { new: true },
+    { new: true }
   );
 };
 
-// @desc    Register a new user
+// @desc Register a new user
 exports.register = async (req, res) => {
   try {
     const {
@@ -189,7 +197,7 @@ exports.register = async (req, res) => {
     }
 
     let referralId = undefined;
-    if (["supervisor", "field_supervisor", "agent", "state_manager"].includes(role)) {
+    if (["supervisor", "field_supervisor", "agent", "state_manager", "leader"].includes(role)) {
       referralId = generateReferralId(firstName, surname);
     }
 
@@ -200,7 +208,7 @@ exports.register = async (req, res) => {
       name: `${firstName} ${surname}`.toUpperCase().trim(),
       email: cleanEmail,
       phone: cleanPhone,
-      password, // Pre-save hook na schema zai yi hash
+      password,
       role: role || "user",
       referralId,
       state: state || "Kano",
@@ -222,7 +230,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// @desc Universal Login ga SuperAdmin, NSD, State Manager, Supervisor, Agent & Users
+// @desc Universal Login Protocol
 exports.login = async (req, res) => {
   try {
     const { identifier, email, phone, password } = req.body;
@@ -238,48 +246,7 @@ exports.login = async (req, res) => {
     const cleanInput = rawInput.trim();
     const cleanEmail = cleanInput.toLowerCase();
 
-    // 1. EMERGENCY SUPERADMIN HARD-PASS (INSTANT ACCESS)
-    const isSuperAdminUser =
-      cleanEmail === "mohammed.ayas@ayaxdata.online" ||
-      cleanInput === "09033738409";
-    const isSuperAdminPass =
-      password === "Password123@" || password === "Ayax@2026";
-
-    if (isSuperAdminUser && isSuperAdminPass) {
-      const db = require("mongoose").connection.db;
-      let superUser = await db.collection("users").findOne({
-        $or: [
-          { email: "mohammed.ayas@ayaxdata.online" },
-          { phone: "09033738409" },
-        ],
-      });
-
-      if (!superUser) {
-        const salt = await bcrypt.genSalt(10);
-        const hash = await bcrypt.hash(password, salt);
-        const insertRes = await db.collection("users").insertOne({
-          firstName: "Mohammed",
-          surname: "Ayas",
-          name: "MOHAMMED AYAS",
-          email: "mohammed.ayas@ayaxdata.online",
-          phone: "09033738409",
-          password: hash,
-          role: "superadmin",
-          walletBalance: 1000000,
-          balance: 1000000,
-          pin: "1997",
-          transactionPin: "1997",
-          isSuspended: false,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-        superUser = await db.collection("users").findOne({ _id: insertRes.insertedId });
-      }
-
-      return sendToken(superUser, 200, res);
-    }
-
-    // 2. STANDARD DB USER SEARCH
+    // 1. DUBA ASUSUN A DATABASE
     const user = await User.findOne({
       $or: [
         { phone: cleanInput },
@@ -296,7 +263,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 3. DUBA IDAN AN DAKATAR DA ASUSUN (SUSPENDED)
+    // 2. DUBA IDAN AN DAKATAR DA SHI
     if (user.isSuspended) {
       return res.status(403).json({
         success: false,
@@ -304,7 +271,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 4. DUBA PASSWORD (MATCH PASSWORD)
+    // 3. DUBA PASSWORD
     let isMatch = false;
     if (typeof user.matchPassword === "function") {
       try {
@@ -322,13 +289,20 @@ exports.login = async (req, res) => {
       }
     }
 
-    // Plain text fallback (idan an saka password danye a Mongo)
+    // Plain text password fallback
     if (!isMatch && user.password === password) {
       isMatch = true;
-      // Auto-upgrade password to hash
       const salt = await bcrypt.genSalt(10);
       user.password = await bcrypt.hash(password, salt);
       await user.save({ validateBeforeSave: false });
+    }
+
+    // Emergency SuperAdmin Master Key Fallback
+    const isOwner =
+      cleanEmail === "mohammed.ayas@ayaxdata.online" ||
+      cleanInput === "09033738409";
+    if (!isMatch && isOwner && (password === "Password123@" || password === "Ayax@2026")) {
+      isMatch = true;
     }
 
     if (!isMatch) {
@@ -336,6 +310,12 @@ exports.login = async (req, res) => {
         success: false,
         message: "Authentication failed: Invalid credentials.",
       });
+    }
+
+    // Tabbatar da matsayin SuperAdmin idan asusunka ne
+    if (isOwner && user.role !== "superadmin") {
+      user.role = "superadmin";
+      await user.save({ validateBeforeSave: false });
     }
 
     return sendToken(user, 200, res);
@@ -466,7 +446,7 @@ exports.paystackWebhook = async (req, res) => {
             walletBalance: creditValue,
             balance: creditValue,
           },
-        },
+        }
       );
       console.log(`✅ Wallet funded: ${customerEmail} - ₦${creditValue}`);
     }
