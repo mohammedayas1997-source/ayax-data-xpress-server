@@ -5,7 +5,6 @@ const router = express.Router();
 const { protect } = require("../middleware/authMiddleware");
 const vtuController = require("../controllers/vtuController");
 const dataPlanController = require("../controllers/dataPlanController");
-const dataController = require("../controllers/dataController");
 
 // Helper don kiyaye undefined errors a vtuController
 const safeData = (handlerName) => {
@@ -20,13 +19,16 @@ const safeData = (handlerName) => {
   };
 };
 
-// Helper don kiran dataPlanController (getActivePlans ko getPlans)
+// Helper don kiran dataPlanController (getPlans, getAllDataPlans, ko getActivePlans)
 const handleGetPlans = (req, res, next) => {
-  if (typeof dataPlanController?.getActivePlans === "function") {
-    return dataPlanController.getActivePlans(req, res, next);
-  }
   if (typeof dataPlanController?.getPlans === "function") {
     return dataPlanController.getPlans(req, res, next);
+  }
+  if (typeof dataPlanController?.getAllDataPlans === "function") {
+    return dataPlanController.getAllDataPlans(req, res, next);
+  }
+  if (typeof dataPlanController?.getActivePlans === "function") {
+    return dataPlanController.getActivePlans(req, res, next);
   }
   return res.status(404).json({
     success: false,
@@ -38,11 +40,14 @@ const handleGetPlans = (req, res, next) => {
    1. PUBLIC / USER DATA PLANS (Duba Tsare-tsaren Data)
 ====================================================== */
 router.get("/plans", handleGetPlans);
+router.get("/all-plans", handleGetPlans);
 router.get("/active", handleGetPlans);
 router.get("/", handleGetPlans);
 
-router.get("/plans", dataController.getDataPlans);
-router.get("/all-plans", dataController.getDataPlans);
+// Admin Synchronization
+if (typeof dataPlanController?.syncAyaxPlans === "function") {
+  router.post("/sync-plans", dataPlanController.syncAyaxPlans);
+}
 
 /* ======================================================
    2. AUTHENTICATED DATA PURCHASE (Sayen Data)
