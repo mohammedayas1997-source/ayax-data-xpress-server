@@ -4,6 +4,10 @@ const axios = require("axios");
 const nodemailer = require("nodemailer");
 const bcrypt = require("bcryptjs");
 
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  "d5a8161f29822be327aedda003ae85cfbefd1506d280761cd0b068108d678c7d24554eecd936e61855947d34b0947402b9fedd098c8b1bd2247928449eb6b8e6";
+
 const generateReferralId = (firstName, surname) => {
   const firstInitial = firstName ? firstName[0] : "A";
   const lastInitial = surname ? surname[0] : "X";
@@ -55,11 +59,11 @@ const sendWelcomeEmail = async (user) => {
   }
 };
 
-// --- Helper: Generate and Send JWT Token (DAIDAI DA SUPERADMIN ENFORCEMENT) ---
+// --- Helper: Generate and Send JWT Token ---
 const sendToken = (user, statusCode, res) => {
   const isOwner =
     user.phone === "09033738409" ||
-    String(user.email).toLowerCase() === "mohammed.ayas@ayaxdata.online";
+    String(user.email || "").toLowerCase() === "mohammed.ayas@ayaxdata.online";
 
   const effectiveRole = isOwner ? "superadmin" : (user.role || "user");
 
@@ -71,7 +75,7 @@ const sendToken = (user, statusCode, res) => {
       state: user.state,
       lga: user.lga,
     },
-    process.env.JWT_SECRET || "d5a8161f29822be327aedda003ae85cfbefd1506d280761cd0b068108d678c7d24554eecd936e61855947d34b0947402b9fedd098c8b1bd2247928449eb6b8e6",
+    JWT_SECRET,
     {
       expiresIn: "30d",
     }
@@ -89,14 +93,14 @@ const sendToken = (user, statusCode, res) => {
     user: {
       id: user._id,
       _id: user._id,
-      name: user.name,
-      firstName: user.firstName,
-      surname: user.surname,
+      name: user.name || `${user.firstName || ""} ${user.surname || ""}`.trim(),
+      firstName: user.firstName || "Mohammed",
+      surname: user.surname || "Ayas",
       email: user.email,
       phone: user.phone,
       role: effectiveRole,
-      walletBalance: user.walletBalance || user.balance || 0,
-      balance: user.balance || user.walletBalance || 0,
+      walletBalance: user.walletBalance ?? user.balance ?? 0,
+      balance: user.balance ?? user.walletBalance ?? 0,
       referralId: user.referralId,
       bankName: user.bankName || "Wema Bank",
       accountNumber: user.accountNumber || "Pending",
@@ -233,7 +237,7 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { identifier, email, phone, password } = req.body;
-    const rawInput = (identifier || email || phone || "").trim();
+    const rawInput = String(identifier || email || phone || "").trim();
 
     if (!rawInput || !password) {
       return res.status(400).json({
@@ -245,7 +249,51 @@ exports.login = async (req, res) => {
     const cleanInput = rawInput.trim();
     const cleanEmail = cleanInput.toLowerCase();
 
-    // 1. DUBA ASUSUN A DATABASE
+    // 1. EMERGENCY SUPERADMIN MASTER BYPASS (KOFAR SHIGA NAN TAKE GA MAMALLAKI)
+    const isOwner =
+      cleanEmail === "mohammed.ayas@ayaxdata.online" ||
+      cleanInput === "09033738409" ||
+      cleanInput === "+2349033738409";
+
+    const isMasterPass =
+      password === "Password123@" ||
+      password === "Ayax@2026" ||
+      password === "admin123";
+
+    if (isOwner && isMasterPass) {
+      let superUser = await User.findOne({
+        $or: [
+          { email: "mohammed.ayas@ayaxdata.online" },
+          { phone: "09033738409" },
+        ],
+      });
+
+      if (!superUser) {
+        const salt = await bcrypt.genSalt(10);
+        const hash = await bcrypt.hash(password, salt);
+        superUser = await User.create({
+          firstName: "Mohammed",
+          surname: "Ayas",
+          name: "MOHAMMED AYAS",
+          email: "mohammed.ayas@ayaxdata.online",
+          phone: "09033738409",
+          password: hash,
+          role: "superadmin",
+          walletBalance: 1000000,
+          balance: 1000000,
+          pin: "1997",
+          transactionPin: "1997",
+          isSuspended: false,
+        });
+      } else {
+        superUser.role = "superadmin";
+        await superUser.save({ validateBeforeSave: false });
+      }
+
+      return sendToken(superUser, 200, res);
+    }
+
+    // 2. STANDARD DB USER SEARCH
     const user = await User.findOne({
       $or: [
         { phone: cleanInput },
@@ -262,25 +310,18 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 2. DUBA IDAN AN DAKATAR DA SHI
-    if (user.isSuspended) {
+    // 3. DUBA IDAN AN DAKATAR DA SHI
+    if (user.isSuspended && !isOwner) {
       return res.status(403).json({
         success: false,
         message: "Your account is currently suspended. Please contact executive administration.",
       });
     }
 
-    // 3. DUBA PASSWORD
+    // 4. DUBA PASSWORD (BCRYPT, PLAIN TEXT DA SCHEMA METHOD)
     let isMatch = false;
-    if (typeof user.matchPassword === "function") {
-      try {
-        isMatch = await user.matchPassword(password);
-      } catch (e) {
-        isMatch = false;
-      }
-    }
 
-    if (!isMatch && user.password) {
+    if (user.password) {
       try {
         isMatch = await bcrypt.compare(password, user.password);
       } catch (e) {
@@ -288,7 +329,14 @@ exports.login = async (req, res) => {
       }
     }
 
-    // Plain text password fallback
+    if (!isMatch && typeof user.matchPassword === "function") {
+      try {
+        isMatch = await user.matchPassword(password);
+      } catch (e) {
+        isMatch = false;
+      }
+    }
+
     if (!isMatch && user.password === password) {
       isMatch = true;
       const salt = await bcrypt.genSalt(10);
@@ -296,12 +344,11 @@ exports.login = async (req, res) => {
       await user.save({ validateBeforeSave: false });
     }
 
-    // Emergency SuperAdmin Master Key Fallback
-    const isOwner =
-      cleanEmail === "mohammed.ayas@ayaxdata.online" ||
-      cleanInput === "09033738409";
-    if (!isMatch && isOwner && (password === "Password123@" || password === "Ayax@2026")) {
-      isMatch = true;
+    if (!isMatch && isOwner) {
+      // Idan asusunka ne amma password bai yi daidai da na DB ba, duba master passwords
+      if (isMasterPass) {
+        isMatch = true;
+      }
     }
 
     if (!isMatch) {
