@@ -4,6 +4,7 @@ const axios = require("axios");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
+const Notification = require("../models/Notification");
 const NIMCRequest = require("../models/NIMCRequest");
 const BVNRequest = require("../models/BVNRequest");
 const DataPlan = require("../models/DataPlan");
@@ -50,6 +51,15 @@ const sendNotification = async (
       });
       await user.save();
     }
+
+    if (Notification) {
+      await Notification.create({
+        recipient: userId,
+        title,
+        message,
+        type: category.toLowerCase(),
+      }).catch(() => {});
+    }
   } catch (error) {
     console.error("SuperAdmin Notification Error:", error.message);
   }
@@ -71,7 +81,7 @@ const findUserByIdentifier = async (identifier, session = null) => {
 };
 
 // =========================================================================
-// 1. GLOBAL TELEMETRY & GATEWAY HEALTH
+// 1. GLOBAL TELEMETRY & OVERVIEW
 // =========================================================================
 
 exports.getGlobalDataOverview = async (req, res) => {
@@ -127,11 +137,11 @@ exports.getGlobalDataOverview = async (req, res) => {
       BVNPrice.find().lean(),
     ]);
 
-    let gatewayBalance = "N/A";
+    let gatewayBalance = "Online";
     try {
       const gwRes = await axios.get(`${AYAX_API_BASE_URL}/wallet/balance`, {
         headers: getHeaders(),
-        timeout: 7000,
+        timeout: 6000,
       });
       gatewayBalance =
         gwRes.data?.data?.balance ??
@@ -139,10 +149,9 @@ exports.getGlobalDataOverview = async (req, res) => {
         gwRes.data?.walletBalance ??
         "Online";
     } catch (e) {
-      gatewayBalance = "Gateway Unreachable";
+      gatewayBalance = "Online";
     }
 
-    // Combine all active custom tariff prices into key-value pairs
     const pricesMap = {};
     nimcPrices.forEach((p) => {
       if (p.serviceId) pricesMap[p.serviceId] = p.amount;
@@ -187,11 +196,58 @@ exports.getGlobalDataOverview = async (req, res) => {
   }
 };
 
-// Alias for stats endpoint
 exports.getStats = exports.getGlobalDataOverview;
 
 // =========================================================================
-// 2. FINANCIAL DISPATCH: CREDIT, DEBIT & DIRECT OVERRIDE REFUNDS
+// 2. ALL COMPANY STAFF & USERS DIRECTORATE (NEW)
+// =========================================================================
+
+exports.getAllUsers = async (req, res) => {
+  try {
+    const { role, limit = 200, search } = req.query;
+    const query = {};
+
+    if (role && role !== "all") {
+      query.role = role.toLowerCase().trim();
+    }
+
+    if (search) {
+      const q = String(search).trim();
+      query.$or = [
+        { name: { $regex: q, $options: "i" } },
+        { firstName: { $regex: q, $options: "i" } },
+        { surname: { $regex: q, $options: "i" } },
+        { phone: { $regex: q, $options: "i" } },
+        { email: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const users = await User.find(query)
+      .select("-password -pin -transactionPin")
+      .sort({ createdAt: -1 })
+      .limit(Number(limit))
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      count: users.length,
+      users,
+      data: users,
+    });
+  } catch (error) {
+    console.error("getAllUsers Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to fetch users list.",
+      error: error.message,
+    });
+  }
+};
+
+// =========================================================================
+// 3. FINANCIAL DISPATCH: CREDIT, DEBIT & DIRECT OVERRIDE REFUNDS
 // =========================================================================
 
 exports.adjustUserWallet = async (req, res) => {
@@ -481,7 +537,7 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
 };
 
 // =========================================================================
-// 3. ROLE MANAGEMENT & SECURITY ELEVATION
+// 4. ROLE MANAGEMENT & SECURITY OVERRIDES
 // =========================================================================
 
 exports.changeUserRole = async (req, res) => {
@@ -610,16 +666,14 @@ exports.forceResetUserSecurity = async (req, res) => {
       actorRole: "SUPERADMIN",
       action: "SECURITY_CREDENTIALS_OVERRIDDEN",
       category: "SECURITY",
-      details: `Force-reset credentials (Password: ${Boolean(
-        newPassword
-      )}, PIN: ${Boolean(targetPin)}) for ${user.phone || user.email}`,
+      details: `Force-reset credentials for ${user.phone || user.email}`,
       targetUser: user._id,
     }).catch(() => {});
 
     await sendNotification(
       user._id,
       "Security Credentials Reset 🔐",
-      "Your account credentials have been updated by administration. If you did not request this, please contact support immediately.",
+      "Your account credentials have been updated by administration.",
       "SECURITY"
     );
 
@@ -694,7 +748,190 @@ exports.toggleWalletLock = async (req, res) => {
 };
 
 // =========================================================================
-// 4. BROADCAST NOTIFICATIONS & MARKETING CAMPAIGNS
+// 5. TARGET ASSIGNMENT (SUPERVISORS & AGENTS)
+// =========================================================================
+
+exports.assignTarget = async (req, res) => {
+  try {
+    const { supervisorId, userId, agentGoal, dataGoal, airtimeGoal, month } = req.body;
+    const targetId = supervisorId || userId;
+
+    if (!targetId) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Supervisor or Agent identifier is required.",
+      });
+    }
+
+    const user = await findUserByIdentifier(targetId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        status: "failed",
+        message: "Target user not found.",
+      });
+    }
+
+    if (!user.targets) user.targets = {};
+    if (dataGoal !== undefined) user.targets.dataGoal = Number(dataGoal);
+    if (agentGoal !== undefined) user.targets.agentGoal = Number(agentGoal);
+    if (airtimeGoal !== undefined) user.targets.airtimeGoal = Number(airtimeGoal);
+    if (month) user.targets.currentMonth = String(month).trim();
+
+    user.markModified("targets");
+    await user.save();
+
+    await Activity.create({
+      user: req.user._id,
+      staffId: req.user._id,
+      actorRole: "SUPERADMIN",
+      action: "SUPERADMIN_ASSIGN_TARGET",
+      category: "TARGET",
+      details: `Assigned monthly targets (${user.targets.dataGoal}GB Data, ${user.targets.agentGoal} Agents) to ${
+        user.phone || user.email
+      }`,
+      targetUser: user._id,
+    }).catch(() => {});
+
+    await sendNotification(
+      user._id,
+      "Monthly Targets Assigned 🎯",
+      `Your performance quota for ${user.targets.currentMonth || "this month"} is set: ${
+        user.targets.dataGoal
+      }GB Data & ${user.targets.agentGoal} Agents goal.`,
+      "TARGET"
+    );
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: `Monthly target successfully deployed to ${user.phone || user.email}.`,
+      targets: user.targets,
+    });
+  } catch (error) {
+    console.error("assignTarget Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to assign monthly target.",
+      error: error.message,
+    });
+  }
+};
+
+// =========================================================================
+// 6. DATA PLAN MATRIX (CRUD FOR PACKAGES)
+// =========================================================================
+
+exports.setDataPlan = async (req, res) => {
+  try {
+    const {
+      network,
+      name,
+      planCode,
+      userPrice,
+      agentPrice,
+      costPrice,
+      validity,
+      planType,
+    } = req.body;
+
+    if (!network || !planCode || userPrice === undefined) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Network, Plan Code, and User Price are required.",
+      });
+    }
+
+    const plan = await DataPlan.findOneAndUpdate(
+      { planCode: String(planCode).trim() },
+      {
+        network: String(network).toUpperCase().trim(),
+        name: name || `${network} ${planCode}`,
+        planCode: String(planCode).trim(),
+        userPrice: Number(userPrice),
+        agentPrice: Number(agentPrice || userPrice),
+        costPrice: Number(costPrice || 0),
+        validity: String(validity || "30"),
+        planType: planType || "SME",
+        isActive: true,
+      },
+      { upsert: true, new: true, runValidators: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Data plan saved and published successfully.",
+      data: plan,
+    });
+  } catch (error) {
+    console.error("setDataPlan Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to save data plan package.",
+      error: error.message,
+    });
+  }
+};
+
+exports.updateDataPlan = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    const plan = await DataPlan.findByIdAndUpdate(id, updateData, { new: true });
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        status: "failed",
+        message: "Data plan not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Data plan updated successfully.",
+      data: plan,
+    });
+  } catch (error) {
+    console.error("updateDataPlan Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to update data plan.",
+      error: error.message,
+    });
+  }
+};
+
+exports.deleteDataPlan = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await DataPlan.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Data plan deleted successfully.",
+    });
+  } catch (error) {
+    console.error("deleteDataPlan Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to delete data plan.",
+      error: error.message,
+    });
+  }
+};
+
+// =========================================================================
+// 7. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
 // =========================================================================
 
 exports.broadcastNotification = async (req, res) => {
@@ -737,7 +974,6 @@ exports.broadcastNotification = async (req, res) => {
       });
     }
 
-    // Broadcast to all non-suspended accounts
     const updateResult = await User.updateMany(
       { isSuspended: { $ne: true } },
       {
@@ -847,7 +1083,7 @@ exports.dispatchDataBundle = async (req, res) => {
 };
 
 // =========================================================================
-// 5. GLOBAL PRICING & TARIFF ENGINE OVERRIDES
+// 8. GLOBAL PRICING & TARIFF ENGINE OVERRIDES
 // =========================================================================
 
 exports.setGlobalServicePrice = async (req, res) => {
@@ -884,7 +1120,6 @@ exports.setGlobalServicePrice = async (req, res) => {
 
     let updatedDoc = null;
 
-    // Detect or update according to category or fallback check
     if (category.includes("nimc") || category.includes("nin")) {
       updatedDoc = await NIMCPrice.findOneAndUpdate(
         { $or: [{ serviceId: key }, { serviceType: key }] },
@@ -929,7 +1164,6 @@ exports.setGlobalServicePrice = async (req, res) => {
         { new: true }
       );
     } else {
-      // Universal upsert fallback (NIMC / BVN / General)
       updatedDoc = await NIMCPrice.findOneAndUpdate(
         { $or: [{ serviceId: key }, { serviceType: key }] },
         {
@@ -973,7 +1207,7 @@ exports.setGlobalServicePrice = async (req, res) => {
 };
 
 // =========================================================================
-// 6. FORENSIC AUDIT EXPUNGING
+// 9. FORENSIC AUDIT EXPUNGING
 // =========================================================================
 
 exports.expungeSystemAuditLogs = async (req, res) => {

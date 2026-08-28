@@ -57,7 +57,20 @@ router.get(
 );
 
 // ==========================================
-// 2. FINANCIAL DISPATCH & EXECUTIVE REFUNDS
+// 2. ALL COMPANY STAFF & USERS DIRECTORATE
+// ==========================================
+router.get(
+  "/users",
+  safe(superAdminController.getAllUsers, "getAllUsers")
+);
+
+router.get(
+  "/all-users",
+  safe(superAdminController.getAllUsers, "getAllUsers")
+);
+
+// ==========================================
+// 3. FINANCIAL DISPATCH & EXECUTIVE REFUNDS
 // ==========================================
 // Direct Wallet Credit / Debit
 router.post(
@@ -88,7 +101,33 @@ router.post(
 );
 
 // ==========================================
-// 3. ROLE ELEVATION & SECURITY CONTROLS
+// 4. DATA PACKAGES MATRIX (CRUD)
+// ==========================================
+router.post(
+  "/set-plan",
+  safe(superAdminController.setDataPlan, "setDataPlan")
+);
+
+router.put(
+  "/plans/:id",
+  safe(superAdminController.updateDataPlan, "updateDataPlan")
+);
+
+router.delete(
+  "/plans/:id",
+  safe(superAdminController.deleteDataPlan, "deleteDataPlan")
+);
+
+// ==========================================
+// 5. TARGET MANAGEMENT (SUPERVISORS & AGENTS)
+// ==========================================
+router.post(
+  "/assign-target",
+  safe(superAdminController.assignTarget, "assignTarget")
+);
+
+// ==========================================
+// 6. ROLE ELEVATION & SECURITY CONTROLS
 // ==========================================
 // Promote / Demote User Role
 router.patch(
@@ -130,7 +169,7 @@ router.post(
 );
 
 // ==========================================
-// 4. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
+// 7. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
 // ==========================================
 router.post(
   "/broadcast-notification",
@@ -151,7 +190,7 @@ router.post(
 );
 
 // ==========================================
-// 5. GLOBAL PRICING & TARIFF MATRIX OVERRIDE
+// 8. GLOBAL PRICING & TARIFF MATRIX OVERRIDE
 // ==========================================
 router.post(
   "/pricing/set-global",
@@ -170,7 +209,7 @@ router.post(
 );
 
 // ==========================================
-// 6. FORENSIC AUDIT EXPUNGING
+// 9. FORENSIC AUDIT EXPUNGING
 // ==========================================
 router.delete(
   "/logs/expunge",
