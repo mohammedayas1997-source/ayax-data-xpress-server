@@ -5,6 +5,7 @@ const router = express.Router();
 const { protect } = require("../middleware/authMiddleware");
 const vtuController = require("../controllers/vtuController");
 const dataPlanController = require("../controllers/dataPlanController");
+const dataController = require("../controllers/dataController");
 
 // Helper don kiyaye undefined errors a vtuController
 const safeData = (handlerName) => {
@@ -39,6 +40,9 @@ const handleGetPlans = (req, res, next) => {
 router.get("/plans", handleGetPlans);
 router.get("/active", handleGetPlans);
 router.get("/", handleGetPlans);
+
+router.get("/plans", dataController.getDataPlans);
+router.get("/all-plans", dataController.getDataPlans);
 
 /* ======================================================
    2. AUTHENTICATED DATA PURCHASE (Sayen Data)

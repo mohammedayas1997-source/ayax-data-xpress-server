@@ -3,6 +3,7 @@ const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const bcrypt = require("bcryptjs");
+const DataPlan = require("../models/DataPlan");
 
 // Live API Key Backup
 const FALLBACK_API_KEY =
@@ -302,6 +303,37 @@ exports.buyData = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Data processing error",
+      error: error.message,
+    });
+  }
+};
+// @desc    Get All Active Data Plans for Users & Agents
+// @route   GET /api/v1/data/plans OR GET /api/v1/plans
+// @access  Public / Protected
+exports.getDataPlans = async (req, res) => {
+  try {
+    const { network } = req.query;
+    let query = { isActive: { $ne: false } };
+
+    if (network) {
+      query.network = String(network).toUpperCase().trim();
+    }
+
+    const plans = await DataPlan.find(query)
+      .sort({ network: 1, userPrice: 1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: plans.length,
+      data: plans,
+      plans: plans,
+    });
+  } catch (error) {
+    console.error("getDataPlans Error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch data plans",
       error: error.message,
     });
   }
