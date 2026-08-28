@@ -16,8 +16,8 @@ const authorize =
   authMiddleware.restrictTo ||
   ((...roles) => (req, res, next) => next());
 
-// Strict SuperAdmin Role Check Middleware
-const superAdminOnly = authorize("superadmin");
+// Ikon Admin da SuperAdmin gaba daya
+const adminAndSuperAdmin = authorize("superadmin", "admin");
 
 // 2. Controller Imports
 const superAdminController = require("../controllers/superAdminController");
@@ -29,14 +29,14 @@ const safe = (fn, name) => {
     return res.status(501).json({
       success: false,
       status: "failed",
-      message: `SuperAdmin controller handler '${name}' is not implemented yet.`,
+      message: `Admin controller handler '${name}' is not implemented yet.`,
     });
   };
 };
 
-// Apply Global SuperAdmin Protection
+// Sanya Tsaro ga Dukkan Kofofin SuperAdmin/Admin
 router.use(protect);
-router.use(superAdminOnly);
+router.use(adminAndSuperAdmin);
 
 // ==========================================
 // 1. GLOBAL TELEMETRY & SYSTEM ANALYTICS
@@ -70,7 +70,48 @@ router.get(
 );
 
 // ==========================================
-// 3. FINANCIAL DISPATCH & EXECUTIVE REFUNDS
+// 3. ALL COMPANY SERVICES & TARIFFS
+// ==========================================
+router.get(
+  "/services",
+  safe(superAdminController.getAllCompanyServices, "getAllCompanyServices")
+);
+
+router.get(
+  "/all-services",
+  safe(superAdminController.getAllCompanyServices, "getAllCompanyServices")
+);
+
+// ==========================================
+// 4. DATA PACKAGES MATRIX (GET, CREATE, UPDATE, DELETE)
+// ==========================================
+router.get(
+  "/plans",
+  safe(superAdminController.getAllDataPlans, "getAllDataPlans")
+);
+
+router.get(
+  "/all-plans",
+  safe(superAdminController.getAllDataPlans, "getAllDataPlans")
+);
+
+router.post(
+  "/set-plan",
+  safe(superAdminController.setDataPlan, "setDataPlan")
+);
+
+router.put(
+  "/plans/:id",
+  safe(superAdminController.updateDataPlan, "updateDataPlan")
+);
+
+router.delete(
+  "/plans/:id",
+  safe(superAdminController.deleteDataPlan, "deleteDataPlan")
+);
+
+// ==========================================
+// 5. FINANCIAL DISPATCH & EXECUTIVE REFUNDS
 // ==========================================
 // Direct Wallet Credit / Debit
 router.post(
@@ -101,25 +142,7 @@ router.post(
 );
 
 // ==========================================
-// 4. DATA PACKAGES MATRIX (CRUD)
-// ==========================================
-router.post(
-  "/set-plan",
-  safe(superAdminController.setDataPlan, "setDataPlan")
-);
-
-router.put(
-  "/plans/:id",
-  safe(superAdminController.updateDataPlan, "updateDataPlan")
-);
-
-router.delete(
-  "/plans/:id",
-  safe(superAdminController.deleteDataPlan, "deleteDataPlan")
-);
-
-// ==========================================
-// 5. TARGET MANAGEMENT (SUPERVISORS & AGENTS)
+// 6. TARGET MANAGEMENT (SUPERVISORS, AGENTS & LEADERS)
 // ==========================================
 router.post(
   "/assign-target",
@@ -127,7 +150,7 @@ router.post(
 );
 
 // ==========================================
-// 6. ROLE ELEVATION & SECURITY CONTROLS
+// 7. ROLE ELEVATION & SECURITY CONTROLS
 // ==========================================
 // Promote / Demote User Role
 router.patch(
@@ -169,7 +192,7 @@ router.post(
 );
 
 // ==========================================
-// 7. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
+// 8. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
 // ==========================================
 router.post(
   "/broadcast-notification",
@@ -190,7 +213,7 @@ router.post(
 );
 
 // ==========================================
-// 8. GLOBAL PRICING & TARIFF MATRIX OVERRIDE
+// 9. GLOBAL PRICING & TARIFF MATRIX OVERRIDE
 // ==========================================
 router.post(
   "/pricing/set-global",
@@ -209,7 +232,7 @@ router.post(
 );
 
 // ==========================================
-// 9. FORENSIC AUDIT EXPUNGING
+// 10. FORENSIC AUDIT EXPUNGING
 // ==========================================
 router.delete(
   "/logs/expunge",

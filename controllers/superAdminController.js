@@ -90,6 +90,7 @@ exports.getGlobalDataOverview = async (req, res) => {
       totalUsers,
       totalAgents,
       totalSupervisors,
+      totalLeaders,
       totalAdmins,
       totalSuperAdmins,
       successfulTransactions,
@@ -105,7 +106,8 @@ exports.getGlobalDataOverview = async (req, res) => {
     ] = await Promise.all([
       User.countDocuments({ role: "user" }),
       User.countDocuments({ role: "agent" }),
-      User.countDocuments({ role: { $in: ["supervisor", "leader"] } }),
+      User.countDocuments({ role: "supervisor" }),
+      User.countDocuments({ role: "leader" }),
       User.countDocuments({ role: "admin" }),
       User.countDocuments({ role: "superadmin" }),
       Transaction.countDocuments({ status: { $in: ["success", "completed"] } }),
@@ -177,11 +179,12 @@ exports.getGlobalDataOverview = async (req, res) => {
         pendingBVN,
         totalUsers,
         totalAgents,
-        totalSupervisors,
+        totalSupervisors: totalSupervisors + totalLeaders,
+        totalLeaders,
         totalAdmins,
         totalSuperAdmins,
         totalPlatformAccounts:
-          totalUsers + totalAgents + totalSupervisors + totalAdmins + totalSuperAdmins,
+          totalUsers + totalAgents + totalSupervisors + totalLeaders + totalAdmins + totalSuperAdmins,
       },
       prices: pricesMap,
     });
@@ -199,12 +202,12 @@ exports.getGlobalDataOverview = async (req, res) => {
 exports.getStats = exports.getGlobalDataOverview;
 
 // =========================================================================
-// 2. ALL COMPANY STAFF & USERS DIRECTORATE (NEW)
+// 2. ALL COMPANY STAFF & USERS DIRECTORATE
 // =========================================================================
 
 exports.getAllUsers = async (req, res) => {
   try {
-    const { role, limit = 200, search } = req.query;
+    const { role, limit = 500, search } = req.query;
     const query = {};
 
     if (role && role !== "all") {
@@ -219,6 +222,8 @@ exports.getAllUsers = async (req, res) => {
         { surname: { $regex: q, $options: "i" } },
         { phone: { $regex: q, $options: "i" } },
         { email: { $regex: q, $options: "i" } },
+        { state: { $regex: q, $options: "i" } },
+        { lga: { $regex: q, $options: "i" } },
       ];
     }
 
@@ -247,7 +252,171 @@ exports.getAllUsers = async (req, res) => {
 };
 
 // =========================================================================
-// 3. FINANCIAL DISPATCH: CREDIT, DEBIT & DIRECT OVERRIDE REFUNDS
+// 3. ALL COMPANY SERVICES & TARIFFS VIEWER
+// =========================================================================
+
+exports.getAllCompanyServices = async (req, res) => {
+  try {
+    const [nimcList, bvnList, dataList] = await Promise.all([
+      NIMCPrice.find().lean(),
+      BVNPrice.find().lean(),
+      DataPlan.find().sort({ network: 1, userPrice: 1 }).lean(),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      data: {
+        nimcServices: nimcList,
+        bvnServices: bvnList,
+        dataPlans: dataList,
+      },
+    });
+  } catch (error) {
+    console.error("getAllCompanyServices Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to fetch company services.",
+      error: error.message,
+    });
+  }
+};
+
+// =========================================================================
+// 4. DATA PACKAGES MATRIX (GET ALL, CREATE, UPDATE, DELETE)
+// =========================================================================
+
+exports.getAllDataPlans = async (req, res) => {
+  try {
+    const plans = await DataPlan.find().sort({ network: 1, userPrice: 1 }).lean();
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      count: plans.length,
+      data: plans,
+      plans: plans,
+    });
+  } catch (error) {
+    console.error("getAllDataPlans Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to retrieve data plans list.",
+      error: error.message,
+    });
+  }
+};
+
+exports.setDataPlan = async (req, res) => {
+  try {
+    const {
+      network,
+      name,
+      planCode,
+      userPrice,
+      agentPrice,
+      costPrice,
+      validity,
+      planType,
+    } = req.body;
+
+    if (!network || !planCode || userPrice === undefined) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Network, Plan Code, and User Price are required.",
+      });
+    }
+
+    const plan = await DataPlan.findOneAndUpdate(
+      { planCode: String(planCode).trim() },
+      {
+        network: String(network).toUpperCase().trim(),
+        name: name || `${network} ${planCode}`,
+        planCode: String(planCode).trim(),
+        userPrice: Number(userPrice),
+        agentPrice: Number(agentPrice || userPrice),
+        costPrice: Number(costPrice || 0),
+        validity: String(validity || "30"),
+        planType: planType || "SME",
+        isActive: true,
+      },
+      { upsert: true, new: true, runValidators: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Data plan saved and published successfully.",
+      data: plan,
+    });
+  } catch (error) {
+    console.error("setDataPlan Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to save data plan package.",
+      error: error.message,
+    });
+  }
+};
+
+exports.updateDataPlan = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    const plan = await DataPlan.findByIdAndUpdate(id, updateData, { new: true });
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        status: "failed",
+        message: "Data plan not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Data plan updated successfully.",
+      data: plan,
+    });
+  } catch (error) {
+    console.error("updateDataPlan Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to update data plan.",
+      error: error.message,
+    });
+  }
+};
+
+exports.deleteDataPlan = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await DataPlan.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Data plan deleted successfully.",
+    });
+  } catch (error) {
+    console.error("deleteDataPlan Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to delete data plan.",
+      error: error.message,
+    });
+  }
+};
+
+// =========================================================================
+// 5. FINANCIAL DISPATCH: CREDIT, DEBIT & DIRECT OVERRIDE REFUNDS
 // =========================================================================
 
 exports.adjustUserWallet = async (req, res) => {
@@ -314,7 +483,7 @@ exports.adjustUserWallet = async (req, res) => {
       oldBalance: oldBal,
       newBalance: newBal,
       status: "success",
-      details: `SuperAdmin ${action.toUpperCase()}: ${
+      details: `Admin ${action.toUpperCase()}: ${
         reason || "Direct wallet balance adjustment"
       }`,
       requestedBy: superAdminId,
@@ -335,7 +504,7 @@ exports.adjustUserWallet = async (req, res) => {
           ? "SUPERADMIN_WALLET_CREDIT"
           : "SUPERADMIN_WALLET_DEBIT",
       category: "FINANCIAL",
-      details: `SuperAdmin performed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on user ${
+      details: `Admin performed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on user ${
         user.phone || user.email
       }. Reason: ${reason || "Manual balance override"}`,
       targetUser: user._id,
@@ -461,7 +630,7 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
     if (txn) {
       txn.status = "refunded";
       txn.isRefunded = true;
-      txn.refundReason = reason || "SuperAdmin direct executive refund override";
+      txn.refundReason = reason || "Direct executive refund override";
       txn.refundedBy = superAdminId;
       txn.refundedAt = new Date();
       await txn.save(session ? { session } : undefined);
@@ -499,7 +668,7 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
       actorRole: "SUPERADMIN",
       action: "SUPERADMIN_EXECUTIVE_REFUND",
       category: "FINANCIAL",
-      details: `Executed executive refund of ₦${finalRefundAmount.toLocaleString()} to ${
+      details: `Executed refund of ₦${finalRefundAmount.toLocaleString()} to ${
         user.phone || user.email
       }`,
       targetUser: user._id,
@@ -537,7 +706,7 @@ exports.processRefundSuperAdminOnly = async (req, res) => {
 };
 
 // =========================================================================
-// 4. ROLE MANAGEMENT & SECURITY OVERRIDES
+// 6. ROLE MANAGEMENT & SECURITY OVERRIDES
 // =========================================================================
 
 exports.changeUserRole = async (req, res) => {
@@ -748,7 +917,7 @@ exports.toggleWalletLock = async (req, res) => {
 };
 
 // =========================================================================
-// 5. TARGET ASSIGNMENT (SUPERVISORS & AGENTS)
+// 7. TARGET ASSIGNMENT (SUPERVISORS, AGENTS & LEADERS)
 // =========================================================================
 
 exports.assignTarget = async (req, res) => {
@@ -821,117 +990,7 @@ exports.assignTarget = async (req, res) => {
 };
 
 // =========================================================================
-// 6. DATA PLAN MATRIX (CRUD FOR PACKAGES)
-// =========================================================================
-
-exports.setDataPlan = async (req, res) => {
-  try {
-    const {
-      network,
-      name,
-      planCode,
-      userPrice,
-      agentPrice,
-      costPrice,
-      validity,
-      planType,
-    } = req.body;
-
-    if (!network || !planCode || userPrice === undefined) {
-      return res.status(400).json({
-        success: false,
-        status: "failed",
-        message: "Network, Plan Code, and User Price are required.",
-      });
-    }
-
-    const plan = await DataPlan.findOneAndUpdate(
-      { planCode: String(planCode).trim() },
-      {
-        network: String(network).toUpperCase().trim(),
-        name: name || `${network} ${planCode}`,
-        planCode: String(planCode).trim(),
-        userPrice: Number(userPrice),
-        agentPrice: Number(agentPrice || userPrice),
-        costPrice: Number(costPrice || 0),
-        validity: String(validity || "30"),
-        planType: planType || "SME",
-        isActive: true,
-      },
-      { upsert: true, new: true, runValidators: true }
-    );
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: "Data plan saved and published successfully.",
-      data: plan,
-    });
-  } catch (error) {
-    console.error("setDataPlan Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Failed to save data plan package.",
-      error: error.message,
-    });
-  }
-};
-
-exports.updateDataPlan = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updateData = req.body;
-
-    const plan = await DataPlan.findByIdAndUpdate(id, updateData, { new: true });
-    if (!plan) {
-      return res.status(404).json({
-        success: false,
-        status: "failed",
-        message: "Data plan not found.",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: "Data plan updated successfully.",
-      data: plan,
-    });
-  } catch (error) {
-    console.error("updateDataPlan Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Failed to update data plan.",
-      error: error.message,
-    });
-  }
-};
-
-exports.deleteDataPlan = async (req, res) => {
-  try {
-    const { id } = req.params;
-    await DataPlan.findByIdAndDelete(id);
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: "Data plan deleted successfully.",
-    });
-  } catch (error) {
-    console.error("deleteDataPlan Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Failed to delete data plan.",
-      error: error.message,
-    });
-  }
-};
-
-// =========================================================================
-// 7. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
+// 8. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
 // =========================================================================
 
 exports.broadcastNotification = async (req, res) => {
@@ -1083,7 +1142,7 @@ exports.dispatchDataBundle = async (req, res) => {
 };
 
 // =========================================================================
-// 8. GLOBAL PRICING & TARIFF ENGINE OVERRIDES
+// 9. GLOBAL PRICING & TARIFF ENGINE OVERRIDES
 // =========================================================================
 
 exports.setGlobalServicePrice = async (req, res) => {
@@ -1207,7 +1266,7 @@ exports.setGlobalServicePrice = async (req, res) => {
 };
 
 // =========================================================================
-// 9. FORENSIC AUDIT EXPUNGING
+// 10. FORENSIC AUDIT EXPUNGING
 // =========================================================================
 
 exports.expungeSystemAuditLogs = async (req, res) => {
