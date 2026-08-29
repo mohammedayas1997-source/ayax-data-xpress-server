@@ -2,13 +2,6 @@ const User = require("../models/User");
 const Activity = require("../models/Activity");
 const mongoose = require("mongoose");
 
-let Sale;
-try {
-  Sale = require("../models/Sale");
-} catch (e) {
-  Sale = null;
-}
-
 let Transaction;
 try {
   Transaction = require("../models/Transaction");
@@ -19,11 +12,10 @@ try {
 /**
  * @desc    Get Supervisor Dashboard Real-Time Telemetry
  * @route   GET /api/v1/supervisor/dashboard
- * @access  Private (Supervisor)
  */
 exports.getSupervisorDashboard = async (req, res) => {
   try {
-    const supervisorId = req.user._id || req.user?.id;
+    const supervisorId = req.user?._id || req.user?.id;
     const supervisor = await User.findById(supervisorId).select("-password").lean();
 
     if (!supervisor) {
@@ -117,8 +109,8 @@ exports.getSupervisorDashboard = async (req, res) => {
           totalGB: agentDataSold,
           airtimeSold: agentAirtimeSold,
           targets: {
-            dataGoal: tg.dataGoal || 100,
-            airtimeGoal: tg.airtimeGoal || 10000,
+            dataGoal: tg.dataGoal || 0,
+            airtimeGoal: tg.airtimeGoal || 0,
             currentMonth: tg.currentMonth || "August 2026",
           },
         };
@@ -137,6 +129,11 @@ exports.getSupervisorDashboard = async (req, res) => {
 
     const supTargets = supervisor.targets || {};
 
+    const cleanRefCode =
+      supervisor.referralCode ||
+      supervisor.referralId ||
+      `AYX-${String(myLga).toUpperCase()}-${String(supervisor.phone || "").slice(-4)}`;
+
     const dashboardPayload = {
       _id: supervisor._id,
       id: supervisor._id,
@@ -145,13 +142,15 @@ exports.getSupervisorDashboard = async (req, res) => {
       email: supervisor.email,
       state: myState,
       lga: myLga,
+      referralCode: cleanRefCode,
+      referralId: cleanRefCode,
       walletBalance: supervisor.walletBalance || supervisor.balance || 0,
       agentsCount: formattedAgents.length,
       dataSold: totalTeamDataSold,
       airtimeSold: totalTeamAirtimeSold,
       myTarget: {
-        dataGoal: supTargets.dataGoal || 500,
-        airtimeGoal: supTargets.airtimeGoal || 50000,
+        dataGoal: supTargets.dataGoal || 0,
+        airtimeGoal: supTargets.airtimeGoal || 0,
         agentGoal: supTargets.agentGoal || 10,
         currentMonth: supTargets.currentMonth || "August 2026",
       },
@@ -174,21 +173,21 @@ exports.getSupervisorDashboard = async (req, res) => {
 };
 
 /**
- * @desc    Get Supervisor Profile, Target, & Agents Matrix
+ * @desc    Get Supervisor Profile
  * @route   GET /api/v1/supervisor/profile
  */
 exports.getSupervisorProfile = exports.getSupervisorDashboard;
 
 /**
- * @desc    Get Supervisor Assigned Target Quota
+ * @desc    Get Supervisor Target
  * @route   GET /api/v1/supervisor/my-target
  */
 exports.getMyTarget = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id || req.user?.id).lean();
+    const user = await User.findById(req.user?._id || req.user?.id).lean();
     const targets = user?.targets || {
-      dataGoal: 500,
-      airtimeGoal: 50000,
+      dataGoal: 0,
+      airtimeGoal: 0,
       agentGoal: 10,
       currentMonth: "August 2026",
     };
@@ -204,12 +203,12 @@ exports.getMyTarget = async (req, res) => {
 };
 
 /**
- * @desc    Get Agents assigned to the logged-in Supervisor
- * @route   GET /api/v1/supervisor/my-agents OR GET /api/v1/supervisor/agents
+ * @desc    Get Agents Directory
+ * @route   GET /api/v1/supervisor/agents OR GET /api/v1/supervisor/my-agents
  */
 exports.getMyAgents = async (req, res) => {
   try {
-    const supervisorId = req.user._id || req.user?.id;
+    const supervisorId = req.user?._id || req.user?.id;
     const supervisor = await User.findById(supervisorId).lean();
 
     const agents = await User.find({
@@ -238,8 +237,8 @@ exports.getMyAgents = async (req, res) => {
         lga: ag.lga || supervisor?.lga,
         isSuspended: ag.isSuspended || false,
         targets: {
-          dataGoal: tg.dataGoal || 100,
-          airtimeGoal: tg.airtimeGoal || 10000,
+          dataGoal: tg.dataGoal || 0,
+          airtimeGoal: tg.airtimeGoal || 0,
           currentMonth: tg.currentMonth || "August 2026",
         },
       };
@@ -252,7 +251,6 @@ exports.getMyAgents = async (req, res) => {
       data: formattedAgents,
     });
   } catch (error) {
-    console.error("Get My Agents Error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -260,21 +258,21 @@ exports.getMyAgents = async (req, res) => {
 exports.getAgents = exports.getMyAgents;
 
 /**
- * @desc    Enroll / Create New Retail Agent (Persists to Database)
+ * @desc    Enroll / Signup Agent under Supervisor with Referral Code
  * @route   POST /api/v1/supervisor/create-agent
  */
 exports.createAgent = async (req, res) => {
   try {
-    const { name, phone, email, password, address, state, lga } = req.body;
+    const { firstName, surname, name, phone, email, password, address, state, lga, referralCode, referredBy } = req.body;
 
-    if (!phone || !name) {
+    if (!phone || (!name && !firstName)) {
       return res.status(400).json({
         success: false,
         message: "Agent Name and Phone Number are required.",
       });
     }
 
-    const supervisor = await User.findById(req.user._id || req.user?.id);
+    const supervisor = await User.findById(req.user?._id || req.user?.id);
     const cleanPhone = String(phone).trim();
     const cleanState = String(state || supervisor?.state || "Kano").trim();
     const cleanLga = String(lga || supervisor?.lga || "Ajingi").trim();
@@ -286,6 +284,8 @@ exports.createAgent = async (req, res) => {
       $or: [{ phone: cleanPhone }, { email: cleanEmail }],
     });
 
+    const activeRef = referralCode || referredBy || supervisor?.referralCode || supervisor?.referralId;
+
     if (user) {
       user.role = "agent";
       user.state = cleanState;
@@ -293,23 +293,24 @@ exports.createAgent = async (req, res) => {
       user.assignedSupervisor = supervisor?._id;
       user.assignedSupervisorName = supervisor?.name;
       if (address) user.address = address;
+      if (activeRef) user.referredBy = activeRef;
       await user.save({ validateBeforeSave: false });
 
       return res.status(200).json({
         success: true,
-        message: `Existing account updated to Retail Agent under ${cleanLga} LGA.`,
+        message: `Existing user profile promoted to Retail Agent under ${cleanLga} LGA.`,
         data: user,
       });
     }
 
-    const names = name.trim().split(" ");
-    const firstName = names[0] || "Retail";
-    const surname = names.slice(1).join(" ") || "Agent";
+    const first = firstName || (name ? name.trim().split(" ")[0] : "Retail");
+    const sur = surname || (name ? name.trim().split(" ").slice(1).join(" ") : "Agent");
+    const fullName = name || `${first} ${sur}`.trim();
 
     const newAgent = await User.create({
-      firstName,
-      surname,
-      name: name.toUpperCase().trim(),
+      firstName: first,
+      surname: sur,
+      name: fullName.toUpperCase().trim(),
       email: cleanEmail,
       phone: cleanPhone,
       password: password || "Password123@",
@@ -319,6 +320,7 @@ exports.createAgent = async (req, res) => {
       state: cleanState,
       lga: cleanLga,
       address,
+      referredBy: activeRef,
       assignedSupervisor: supervisor?._id || null,
       assignedSupervisorName: supervisor?.name || "Field Supervisor",
       walletBalance: 0,
@@ -327,8 +329,8 @@ exports.createAgent = async (req, res) => {
       isVerified: true,
       status: "active",
       targets: {
-        dataGoal: 100,
-        airtimeGoal: 10000,
+        dataGoal: 0,
+        airtimeGoal: 0,
         currentMonth: "August 2026",
       },
     });
@@ -340,7 +342,7 @@ exports.createAgent = async (req, res) => {
         lga: cleanLga,
         state: cleanState,
         action: "AGENT_ENROLLED",
-        details: `Supervisor appointed ${newAgent.name} (${cleanPhone}) as Retail Agent for ${cleanLga} LGA`,
+        details: `Supervisor enrolled ${newAgent.name} (${cleanPhone}) as Retail Agent with Referral Code: ${activeRef}`,
         targetUser: newAgent._id,
       }).catch(() => {});
     }
@@ -357,67 +359,12 @@ exports.createAgent = async (req, res) => {
 };
 
 /**
- * @desc    Assign / Update Data & Airtime Target to an Agent (Handles Auto-Split & Single Body)
- * @route   POST /api/v1/supervisor/assign-agent-target
- */
-exports.assignAgentTarget = async (req, res) => {
-  try {
-    const { agentId, dataGoal, airtimeGoal, month } = req.body;
-
-    if (!agentId) {
-      return res.status(400).json({ success: false, message: "Agent ID is required." });
-    }
-
-    const currentMonthName = month || "August 2026";
-    const dGoal = Number(dataGoal) || 0;
-    const aGoal = Number(airtimeGoal) || 0;
-
-    const agent = await User.findOneAndUpdate(
-      { _id: agentId, role: "agent" },
-      {
-        $set: {
-          "targets.dataGoal": dGoal,
-          "targets.airtimeGoal": aGoal,
-          "targets.currentMonth": currentMonthName,
-        },
-      },
-      { new: true, runValidators: false }
-    );
-
-    if (!agent) {
-      return res.status(404).json({ success: false, message: "Agent not found" });
-    }
-
-    if (Activity && req.user?._id) {
-      await Activity.create({
-        staffId: req.user._id,
-        user: req.user._id,
-        action: "ASSIGN_AGENT_TARGET",
-        details: `Supervisor allocated target quota (${dGoal}GB Data & ₦${aGoal} Airtime) to Agent ${agent.name}`,
-        targetUser: agent._id,
-      }).catch(() => {});
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Agent quota updated successfully",
-      targets: agent.targets,
-    });
-  } catch (error) {
-    console.error("Assign Agent Target Error:", error);
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-exports.assignTargetToAgent = exports.assignAgentTarget;
-
-/**
- * @desc    Get Real-Time Activity Logs for Supervisor's LGA
+ * @desc    Get Real-Time Activity Logs for Supervisor LGA
  * @route   GET /api/v1/supervisor/activity-logs
  */
 exports.getActivityLogs = async (req, res) => {
   try {
-    const supervisor = await User.findById(req.user._id || req.user?.id);
+    const supervisor = await User.findById(req.user?._id || req.user?.id);
     const myLga = supervisor?.lga || "Ajingi";
 
     let logs = [];
@@ -497,21 +444,3 @@ exports.getAgentSalesSummary = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-// A lokacin da sabon Agent yayi Signup / Register:
-const refCode = req.body.referralCode || req.body.referredBy;
-if (refCode) {
-  const supervisor = await User.findOne({
-    $or: [
-      { referralCode: refCode },
-      { referralId: refCode },
-      { phone: refCode.replace(/[^0-9]/g, "") },
-    ],
-  });
-
-  if (supervisor) {
-    newAgent.assignedSupervisor = supervisor._id;
-    newAgent.assignedSupervisorName = supervisor.name;
-    newAgent.state = supervisor.state;
-    newAgent.lga = supervisor.lga;
-  }
-}
