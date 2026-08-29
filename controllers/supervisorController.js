@@ -10,7 +10,7 @@ try {
 }
 
 /**
- * @desc    Get Supervisor Dashboard Real-Time Telemetry
+ * @desc    Get Supervisor Dashboard Real-Time Telemetry & Agents
  * @route   GET /api/v1/supervisor/dashboard
  */
 exports.getSupervisorDashboard = async (req, res) => {
@@ -22,8 +22,8 @@ exports.getSupervisorDashboard = async (req, res) => {
       return res.status(404).json({ success: false, message: "Supervisor profile not found" });
     }
 
-    const myLga = (supervisor.lga || "Ajingi").trim();
-    const myState = (supervisor.state || "Kano").trim();
+    const myLga = String(supervisor.lga || "Ajingi").trim();
+    const myState = String(supervisor.state || "Kano").trim();
     const myPhone = String(supervisor.phone || "").trim();
     const myRefCode = String(
       supervisor.referralCode ||
@@ -31,17 +31,12 @@ exports.getSupervisorDashboard = async (req, res) => {
       `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
     ).trim();
 
-    // 1. NEMO AGENTS TA DUKKAN HANYOYI 5:
-    // (a) assignedSupervisor ID
-    // (b) referredBy da yayi daidai da Ref Code na Supervisor
-    // (c) referredBy da yayi daidai da Lambar Wayar Supervisor
-    // (d) supervisorId field
-    // (e) LGA da State matching
-    const agentQuery = {
-      role: { $in: ["agent", "sub_agent", "reseller", "user"] },
+    // Kwaso Agents ta kowace hanya: (Supervisor ID, Referral Code, Phone, ko LGA)
+    const agents = await User.find({
+      _id: { $ne: supervisor._id },
       $or: [
-        { assignedSupervisor: supervisorId },
-        { assignedSupervisor: String(supervisorId) },
+        { assignedSupervisor: supervisor._id },
+        { assignedSupervisor: String(supervisor._id) },
         { referredBy: new RegExp(`^${myRefCode}$`, "i") },
         { referredBy: new RegExp(`^${myPhone}$`, "i") },
         { supervisorId: new RegExp(`^${myRefCode}$`, "i") },
@@ -51,12 +46,6 @@ exports.getSupervisorDashboard = async (req, res) => {
           state: new RegExp(`^${myState}$`, "i"),
         },
       ],
-    };
-
-    // Cire shi kansa Supervisor din daga jerin Agents
-    const agents = await User.find({
-      ...agentQuery,
-      _id: { $ne: supervisor._id },
     })
       .select("-password -pin -transactionPin")
       .sort({ createdAt: -1 })
@@ -124,7 +113,7 @@ exports.getSupervisorDashboard = async (req, res) => {
           surname: ag.surname,
           phone: ag.phone,
           email: ag.email || `${ag.phone}@ayaxdata.online`,
-          address: ag.address || "Outlet Location",
+          address: ag.address || `${ag.lga || myLga} LGA`,
           walletBalance: ag.walletBalance || ag.balance || 0,
           balance: ag.balance || ag.walletBalance || 0,
           state: ag.state || myState,
@@ -188,10 +177,55 @@ exports.getSupervisorDashboard = async (req, res) => {
       activityLogs,
     });
   } catch (error) {
-    console.error("Supervisor Dashboard Telemetry Error:", error);
+    console.error("Supervisor Dashboard Error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.getMyAgents = async (req, res) => {
+  try {
+    const supervisorId = req.user?._id || req.user?.id;
+    const supervisor = await User.findById(supervisorId).lean();
+
+    const myLga = String(supervisor?.lga || "Ajingi").trim();
+    const myState = String(supervisor?.state || "Kano").trim();
+    const myPhone = String(supervisor?.phone || "").trim();
+    const myRefCode = String(
+      supervisor?.referralCode ||
+      supervisor?.referralId ||
+      `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
+    ).trim();
+
+    const agents = await User.find({
+      _id: { $ne: supervisor?._id },
+      $or: [
+        { assignedSupervisor: supervisorId },
+        { assignedSupervisor: String(supervisorId) },
+        { referredBy: new RegExp(`^${myRefCode}$`, "i") },
+        { referredBy: new RegExp(`^${myPhone}$`, "i") },
+        { supervisorId: new RegExp(`^${myRefCode}$`, "i") },
+        { supervisorId: new RegExp(`^${myPhone}$`, "i") },
+        {
+          lga: new RegExp(`^${myLga}$`, "i"),
+          state: new RegExp(`^${myState}$`, "i"),
+        },
+      ],
+    })
+      .select("-password")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: agents.length,
+      agents,
+      data: agents,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+exports.getAgents = exports.getMyAgents;
 
 /**
  * @desc    Get Agents Directory
