@@ -28,10 +28,14 @@ const safeAuth = (handlerName) => {
 };
 
 // ==========================================
-// 1. PUBLIC AUTHENTICATION ROUTES
+// 1. PUBLIC AUTHENTICATION ROUTES (BABU PROTECT ANAN)
 // ==========================================
 router.post("/register", safeAuth("register"));
+router.post("/signup", safeAuth("register")); // <-- Kofar /signup ta asali
+router.post("/agent-signup", safeAuth("register"));
+
 router.post("/login", safeAuth("login"));
+router.post("/signin", safeAuth("login"));
 router.post("/supervisor-login", safeAuth("supervisorLogin"));
 router.post("/forgot-password", safeAuth("forgotPassword"));
 router.post("/reset-password", safeAuth("resetPassword"));
