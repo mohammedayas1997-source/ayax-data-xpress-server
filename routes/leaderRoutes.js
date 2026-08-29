@@ -45,6 +45,7 @@ router.patch("/toggle-status/:supervisorId", toggleSupervisorStatus);
 router.patch("/toggle-status/:id", toggleSupervisorStatus);
 router.patch("/toggle-supervisor/:supervisorId", toggleSupervisorStatus);
 router.patch("/toggle-status", toggleSupervisorStatus); // Fallback idan an turo id ta req.body
+router.get("/my-state-target", leaderController.getMyStateTarget);
 
 // 5. REPORTS & EXPORTS
 router.get("/download-full-report", downloadSupervisorReport);

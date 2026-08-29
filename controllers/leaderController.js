@@ -575,3 +575,23 @@ exports.downloadSupervisorReport = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
+// @desc    Get Specific State Target for Logged-In State Manager
+// @route   GET /api/v1/leader/my-state-target
+exports.getMyStateTarget = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const targets = user.targets || {};
+
+    return res.status(200).json({
+      success: true,
+      data: targets,
+      targets: targets,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
