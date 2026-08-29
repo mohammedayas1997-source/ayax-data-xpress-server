@@ -38,6 +38,8 @@ router.get("/live-audit-stream", safeLeader("getLiveAuditStream"));
 // ==========================================
 router.post("/deploy-targets", safeLeader("assignStateLeaderTarget"));
 router.post("/assign-target", safeLeader("assignStateLeaderTarget"));
+router.post("/assign-target", leaderController.assignStateLeaderTarget);
+router.post("/deploy-targets", leaderController.assignStateLeaderTarget);
 
 // ==========================================
 // 4. APPOINT & ENROLL SUPERVISORS

@@ -847,3 +847,89 @@ exports.getLiveAuditStream = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+// @desc    Assign / Deploy Targets to Supervisors, Agents, or LGAs (Single, Multi, or Auto-Split)
+// @route   POST /api/v1/leader/assign-target OR POST /api/v1/leader/deploy-targets
+exports.assignStateLeaderTarget = async (req, res) => {
+  try {
+    const {
+      category,
+      supervisorIds = [],
+      agentIds = [],
+      dataGoal,
+      airtimeGoal,
+      agentGoal,
+      month,
+      targetMonth,
+      state,
+      lgas = [],
+    } = req.body;
+
+    const actorId = req.user?._id || req.user?.id;
+    const finalMonth = month || targetMonth || "August 2026";
+    const dGoal = Number(dataGoal) || 0;
+    const aGoal = Number(airtimeGoal) || 0;
+    const agGoal = Number(agentGoal) || 0;
+
+    const targetPayload = {
+      dataGoal: dGoal,
+      airtimeGoal: aGoal,
+      agentGoal: agGoal,
+      currentMonth: finalMonth,
+      assignedBy: actorId,
+    };
+
+    let targetIds = [];
+    if (Array.isArray(supervisorIds) && supervisorIds.length > 0) {
+      targetIds = [...supervisorIds];
+    }
+    if (Array.isArray(agentIds) && agentIds.length > 0) {
+      targetIds = [...targetIds, ...agentIds];
+    }
+
+    // 1. Idan an tura takamaiman mutane ta hanyar ID (Auto-Split ko Checkbox)
+    if (targetIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: targetIds } },
+        { $set: { targets: targetPayload } }
+      );
+    }
+
+    // 2. Idan an tura ta hanyar LGAs
+    if (Array.isArray(lgas) && lgas.length > 0) {
+      await User.updateMany(
+        {
+          state: new RegExp(`^${(state || req.user?.state || "Kano").trim()}$`, "i"),
+          lga: { $in: lgas },
+          role: { $in: ["supervisor", "agent"] },
+        },
+        { $set: { targets: targetPayload } }
+      );
+    }
+
+    // 3. Log Activity
+    if (Activity && actorId) {
+      await Activity.create({
+        staffId: actorId,
+        user: actorId,
+        action: "FIELD_TARGETS_DEPLOYED",
+        details: `State Manager allocated quota (${dGoal}GB Data & ₦${aGoal} Airtime) to ${targetIds.length || lgas.length} recipients`,
+      }).catch(() => {});
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Targets successfully deployed for ${finalMonth}.`,
+      data: targetPayload,
+    });
+  } catch (error) {
+    console.error("Assign Target Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to deploy target quota.",
+    });
+  }
+};
+
+// Aliases don tabbatar da kowace hanya ta gane shi
+exports.deployStateTargets = exports.assignStateLeaderTarget;
+exports.assignTarget = exports.assignStateLeaderTarget;
