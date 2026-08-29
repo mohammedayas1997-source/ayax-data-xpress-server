@@ -19,16 +19,21 @@ const safeSup = (handlerName) => {
 
 // 1. KARE HANYOYI DA AUTHENTICATION & ROLE-BASED ACCESS CONTROL (RBAC)
 router.use(protect);
+
+// Sassauta authorize don kar ya toshe Supervisor mai alamar role daban-daban
 router.use(
   authorize(
     "supervisor",
     "field_supervisor",
+    "fs",
     "state_manager",
     "leader",
     "national_sales_director",
     "super_leader",
     "admin",
-    "superadmin"
+    "superadmin",
+    "agent",
+    "user"
   )
 );
 

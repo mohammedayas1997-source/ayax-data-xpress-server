@@ -1,6 +1,16 @@
 const User = require("../models/User");
-const Activity = require("../models/Activity");
 const mongoose = require("mongoose");
+
+let Activity;
+try {
+  Activity = require("../models/Activity");
+} catch (e) {
+  try {
+    Activity = require("../models/activityModel");
+  } catch (err) {
+    Activity = null;
+  }
+}
 
 let Transaction;
 try {
@@ -25,26 +35,27 @@ exports.getSupervisorDashboard = async (req, res) => {
     const myLga = String(supervisor.lga || "Ajingi").trim();
     const myState = String(supervisor.state || "Kano").trim();
     const myPhone = String(supervisor.phone || "").trim();
+    const phoneDigits = myPhone.replace(/[^0-9]/g, "");
+    
     const myRefCode = String(
       supervisor.referralCode ||
       supervisor.referralId ||
       `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
     ).trim();
 
-    // Faɗaɗa binciken da zai kwaso dukkan Agents na wannan LGA ba tare da matsalar Case-Sensitivity ko Sarari ba
+    // Sassaukan bincike mai kwaso dukkan Agents da suka yi rajista a wannan LGA ko ta Referral Code
     const agents = await User.find({
       _id: { $ne: supervisor._id },
       $or: [
         { assignedSupervisor: supervisor._id },
         { assignedSupervisor: String(supervisor._id) },
-        { referredBy: new RegExp(`^${myRefCode}$`, "i") },
-        { referredBy: new RegExp(`^${myPhone}$`, "i") },
-        { supervisorId: new RegExp(`^${myRefCode}$`, "i") },
-        { supervisorId: new RegExp(`^${myPhone}$`, "i") },
-        {
-          lga: new RegExp(`^${myLga}$`, "i"),
-          state: new RegExp(`^${myState}$`, "i"),
-        },
+        { referredBy: new RegExp(myRefCode, "i") },
+        { supervisorId: new RegExp(myRefCode, "i") },
+        ...(phoneDigits.length >= 7 ? [
+          { referredBy: new RegExp(phoneDigits, "i") },
+          { supervisorId: new RegExp(phoneDigits, "i") }
+        ] : []),
+        { lga: new RegExp(myLga, "i") },
       ],
     })
       .select("-password -pin -transactionPin")
@@ -118,6 +129,7 @@ exports.getSupervisorDashboard = async (req, res) => {
           balance: ag.balance || ag.walletBalance || 0,
           state: ag.state || myState,
           lga: ag.lga || myLga,
+          role: ag.role || "agent",
           isSuspended: ag.isSuspended || false,
           dataSold: agentDataSold,
           dataVolumeSold: agentDataSold,
@@ -134,12 +146,16 @@ exports.getSupervisorDashboard = async (req, res) => {
 
     let activityLogs = [];
     if (Activity) {
-      activityLogs = await Activity.find({
-        $or: [{ lga: new RegExp(`^${myLga}$`, "i") }, { user: supervisor._id }, { staffId: supervisor._id }],
-      })
-        .sort({ createdAt: -1 })
-        .limit(30)
-        .lean();
+      try {
+        activityLogs = await Activity.find({
+          $or: [{ lga: new RegExp(myLga, "i") }, { user: supervisor._id }, { staffId: supervisor._id }],
+        })
+          .sort({ createdAt: -1 })
+          .limit(30)
+          .lean();
+      } catch (err) {
+        activityLogs = [];
+      }
     }
 
     const supTargets = supervisor.targets || {};
@@ -228,6 +244,8 @@ exports.getMyAgents = async (req, res) => {
     const myLga = String(supervisor?.lga || "Ajingi").trim();
     const myState = String(supervisor?.state || "Kano").trim();
     const myPhone = String(supervisor?.phone || "").trim();
+    const phoneDigits = myPhone.replace(/[^0-9]/g, "");
+
     const myRefCode = String(
       supervisor?.referralCode ||
       supervisor?.referralId ||
@@ -239,14 +257,13 @@ exports.getMyAgents = async (req, res) => {
       $or: [
         { assignedSupervisor: supervisorId },
         { assignedSupervisor: String(supervisorId) },
-        { referredBy: new RegExp(`^${myRefCode}$`, "i") },
-        { referredBy: new RegExp(`^${myPhone}$`, "i") },
-        { supervisorId: new RegExp(`^${myRefCode}$`, "i") },
-        { supervisorId: new RegExp(`^${myPhone}$`, "i") },
-        {
-          lga: new RegExp(`^${myLga}$`, "i"),
-          state: new RegExp(`^${myState}$`, "i"),
-        },
+        { referredBy: new RegExp(myRefCode, "i") },
+        { supervisorId: new RegExp(myRefCode, "i") },
+        ...(phoneDigits.length >= 7 ? [
+          { referredBy: new RegExp(phoneDigits, "i") },
+          { supervisorId: new RegExp(phoneDigits, "i") }
+        ] : []),
+        { lga: new RegExp(myLga, "i") },
       ],
     })
       .select("-password -pin -transactionPin")
@@ -264,8 +281,9 @@ exports.getMyAgents = async (req, res) => {
         address: ag.address || `${ag.lga || myLga} LGA`,
         walletBalance: ag.walletBalance || ag.balance || 0,
         balance: ag.balance || ag.walletBalance || 0,
-        state: ag.state || myState,
-        lga: ag.lga || myLga,
+        state: ag.state || supervisor?.state,
+        lga: ag.lga || supervisor?.lga,
+        role: ag.role || "agent",
         isSuspended: ag.isSuspended || false,
         targets: {
           dataGoal: tg.dataGoal || 0,
