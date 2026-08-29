@@ -28,13 +28,19 @@ router.get("/super-dashboard", safeLeader("getSuperLeaderDashboard"));
 router.get("/my-state-target", safeLeader("getMyStateTarget"));
 
 // ==========================================
-// 2. TARGET DEPLOYMENT (NSD & STATE MANAGER)
+// 2. LIVE FIELD STREAMS (AGENTS & AUDIT LOGS)
+// ==========================================
+router.get("/agents-stream", safeLeader("getAgentsStream"));
+router.get("/live-audit-stream", safeLeader("getLiveAuditStream"));
+
+// ==========================================
+// 3. TARGET DEPLOYMENT (NSD & STATE MANAGER)
 // ==========================================
 router.post("/deploy-targets", safeLeader("assignStateLeaderTarget"));
 router.post("/assign-target", safeLeader("assignStateLeaderTarget"));
 
 // ==========================================
-// 3. APPOINT & ENROLL SUPERVISORS
+// 4. APPOINT & ENROLL SUPERVISORS
 // ==========================================
 router.post("/create-supervisor", safeLeader("appointStateLeader"));
 router.post("/appoint-supervisor", safeLeader("appointStateLeader"));
@@ -43,7 +49,7 @@ router.patch("/toggle-status/:staffId", safeLeader("toggleStaffSuspension"));
 router.patch("/toggle-status", safeLeader("toggleStaffSuspension"));
 
 // ==========================================
-// 4. REPORTS
+// 5. AUDIT REPORTS (CSV)
 // ==========================================
 router.get("/download-full-report", safeLeader("downloadNationalReport"));
 router.get("/download-report", safeLeader("downloadNationalReport"));

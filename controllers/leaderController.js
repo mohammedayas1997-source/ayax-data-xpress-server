@@ -713,3 +713,137 @@ exports.appointStateLeader = async (req, res) => {
 exports.createSupervisor = exports.appointStateLeader;
 exports.appointManager = exports.appointStateLeader;
 exports.appointSupervisor = exports.appointStateLeader;
+
+// @desc    Leader & State Manager Dashboard Data
+// @route   GET /api/v1/leader/dashboard
+exports.getSuperLeaderDashboard = async (req, res) => {
+  try {
+    const user = await User.findById(req.user?._id || req.user?.id);
+    const myState = user?.state || "Kano";
+    const stateRegex = new RegExp(`^${myState.trim()}$`, "i");
+
+    // 1. Kwaso dukkan Supervisors da ke wannan jihar
+    const supervisors = await User.find({
+      role: { $in: ["supervisor", "field_supervisor"] },
+      state: stateRegex,
+    })
+      .select("-password -pin -transactionPin")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // 2. Kwaso dukkan Agents da ke wannan jihar
+    const agents = await User.find({
+      role: "agent",
+      state: stateRegex,
+    })
+      .select("-password -pin -transactionPin")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // 3. Ƙirga team size da agents ga kowane supervisor
+    const supervisorsWithTeam = supervisors.map((sup) => {
+      const team = agents.filter(
+        (a) =>
+          String(a.assignedSupervisor) === String(sup._id) ||
+          (a.lga && sup.lga && a.lga.toLowerCase() === sup.lga.toLowerCase())
+      );
+      return {
+        ...sup,
+        teamSize: team.length,
+        agentsCount: team.length,
+        dataGoal: sup.targets?.dataGoal || 0,
+        airtimeGoal: sup.targets?.airtimeGoal || 0,
+        agentGoal: sup.targets?.agentGoal || 10,
+      };
+    });
+
+    // 4. Activity logs na jihar
+    let activityLogs = [];
+    if (Activity) {
+      activityLogs = await Activity.find({
+        $or: [{ state: stateRegex }, { user: user._id }],
+      })
+        .sort({ createdAt: -1 })
+        .limit(25)
+        .lean();
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      data: {
+        state: myState,
+        supervisors: supervisorsWithTeam,
+        agents,
+        activityLogs,
+        myTargets: user?.targets || {},
+        networkStats: {
+          totalSupervisors: supervisors.length,
+          totalAgents: agents.length,
+          overallDataSold: user?.walletBalance || 0,
+          overallAirtimeSold: 0,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Dashboard Sync Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load dashboard telemetry.",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get Active Retail Agents Stream for State
+// @route   GET /api/v1/leader/agents-stream
+exports.getAgentsStream = async (req, res) => {
+  try {
+    const user = await User.findById(req.user?._id || req.user?.id);
+    const myState = user?.state || "Kano";
+    const stateRegex = new RegExp(`^${myState.trim()}$`, "i");
+
+    const agents = await User.find({
+      role: "agent",
+      state: stateRegex,
+    })
+      .select("-password -pin -transactionPin")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: agents.length,
+      agents,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get State Operational Audit Logs Stream
+// @route   GET /api/v1/leader/live-audit-stream
+exports.getLiveAuditStream = async (req, res) => {
+  try {
+    const user = await User.findById(req.user?._id || req.user?.id);
+    const myState = user?.state || "Kano";
+    const stateRegex = new RegExp(`^${myState.trim()}$`, "i");
+
+    let logs = [];
+    if (Activity) {
+      logs = await Activity.find({
+        $or: [{ state: stateRegex }, { user: user._id }],
+      })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean();
+    }
+
+    return res.status(200).json({
+      success: true,
+      logs,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
