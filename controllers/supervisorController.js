@@ -17,37 +17,36 @@ try {
 }
 
 /**
- * @desc    Get Supervisor Profile, Assigned Target (Data & Airtime), & Agents Matrix
- * @route   GET /api/v1/supervisor/profile
- * @access  Private (Field Supervisor)
+ * @desc    Get Supervisor Dashboard Real-Time Telemetry
+ * @route   GET /api/v1/supervisor/dashboard
+ * @access  Private (Supervisor)
  */
-exports.getSupervisorProfile = async (req, res) => {
+exports.getSupervisorDashboard = async (req, res) => {
   try {
-    const supervisorId = req.user._id;
-
-    const supervisor = await User.findById(supervisorId)
-      .select("-password")
-      .lean();
+    const supervisorId = req.user._id || req.user?.id;
+    const supervisor = await User.findById(supervisorId).select("-password").lean();
 
     if (!supervisor) {
-      return res.status(404).json({ success: false, message: "Supervisor not found" });
+      return res.status(404).json({ success: false, message: "Supervisor profile not found" });
     }
 
-    // 1. Nemo Agents karkashin wannan Supervisor din (ta assignedSupervisor ko LGA matching)
+    const myLga = supervisor.lga || "Ajingi";
+    const myState = supervisor.state || "Kano";
+
     const agents = await User.find({
       role: "agent",
       $or: [
-        { assignedSupervisor: supervisor._id },
-        { lga: supervisor.lga, state: supervisor.state },
+        { assignedSupervisor: supervisorId },
+        { lga: new RegExp(`^${myLga.trim()}$`, "i"), state: new RegExp(`^${myState.trim()}$`, "i") },
       ],
     })
-      .select("firstName surname name phone email walletBalance balance targets state lga isSuspended createdAt")
+      .select("-password -pin -transactionPin")
+      .sort({ createdAt: -1 })
       .lean();
 
     let totalTeamDataSold = 0;
     let totalTeamAirtimeSold = 0;
 
-    // 2. Lissafa tallace-tallace na kowane agent
     const formattedAgents = await Promise.all(
       agents.map(async (ag) => {
         let agentDataSold = 0;
@@ -55,7 +54,6 @@ exports.getSupervisorProfile = async (req, res) => {
 
         try {
           if (Transaction) {
-            // Data Sales
             const dataAgg = await Transaction.aggregate([
               {
                 $match: {
@@ -73,7 +71,6 @@ exports.getSupervisorProfile = async (req, res) => {
             ]);
             agentDataSold = dataAgg[0]?.totalVolume || 0;
 
-            // Airtime Sales
             const airtimeAgg = await Transaction.aggregate([
               {
                 $match: {
@@ -90,19 +87,6 @@ exports.getSupervisorProfile = async (req, res) => {
               },
             ]);
             agentAirtimeSold = airtimeAgg[0]?.totalAmount || 0;
-          } else if (Sale) {
-            const saleStats = await Sale.aggregate([
-              { $match: { agentId: ag._id } },
-              {
-                $group: {
-                  _id: null,
-                  totalGB: { $sum: "$dataAmountGB" },
-                  totalAmount: { $sum: "$amount" },
-                },
-              },
-            ]);
-            agentDataSold = saleStats[0]?.totalGB || 0;
-            agentAirtimeSold = saleStats[0]?.totalAmount || 0;
           }
         } catch (e) {
           agentDataSold = 0;
@@ -121,15 +105,16 @@ exports.getSupervisorProfile = async (req, res) => {
           firstName: ag.firstName,
           surname: ag.surname,
           phone: ag.phone,
-          email: ag.email,
+          email: ag.email || `${ag.phone}@ayaxdata.online`,
+          address: ag.address || "Outlet Location",
           walletBalance: ag.walletBalance || ag.balance || 0,
           balance: ag.balance || ag.walletBalance || 0,
-          state: ag.state || supervisor.state,
-          lga: ag.lga || supervisor.lga,
+          state: ag.state || myState,
+          lga: ag.lga || myLga,
           isSuspended: ag.isSuspended || false,
           dataSold: agentDataSold,
+          dataVolumeSold: agentDataSold,
           totalGB: agentDataSold,
-          todayGB: `${agentDataSold}GB`,
           airtimeSold: agentAirtimeSold,
           targets: {
             dataGoal: tg.dataGoal || 100,
@@ -140,58 +125,91 @@ exports.getSupervisorProfile = async (req, res) => {
       })
     );
 
+    let activityLogs = [];
+    if (Activity) {
+      activityLogs = await Activity.find({
+        $or: [{ lga: myLga }, { user: supervisor._id }, { staffId: supervisor._id }],
+      })
+        .sort({ createdAt: -1 })
+        .limit(30)
+        .lean();
+    }
+
     const supTargets = supervisor.targets || {};
 
-    const supervisorPayload = {
+    const dashboardPayload = {
       _id: supervisor._id,
       id: supervisor._id,
       name: supervisor.name || `${supervisor.firstName || ""} ${supervisor.surname || ""}`.trim(),
-      firstName: supervisor.firstName,
-      surname: supervisor.surname,
       phone: supervisor.phone,
       email: supervisor.email,
-      state: supervisor.state || "Kano",
-      lga: supervisor.lga || "Central",
-      referralId: supervisor.referralId || `AX${String(supervisor.phone || "").slice(-4)}`,
+      state: myState,
+      lga: myLga,
       walletBalance: supervisor.walletBalance || supervisor.balance || 0,
       agentsCount: formattedAgents.length,
-      teamPerformance: totalTeamDataSold,
       dataSold: totalTeamDataSold,
       airtimeSold: totalTeamAirtimeSold,
-      targets: {
+      myTarget: {
         dataGoal: supTargets.dataGoal || 500,
         airtimeGoal: supTargets.airtimeGoal || 50000,
         agentGoal: supTargets.agentGoal || 10,
-        totalAgentsTarget: supTargets.agentGoal || 10,
-        gbTarget: supTargets.dataGoal || 500,
-        gbSold: totalTeamDataSold,
-        dataSold: totalTeamDataSold,
-        airtimeSold: totalTeamAirtimeSold,
         currentMonth: supTargets.currentMonth || "August 2026",
       },
+      targets: supTargets,
       agents: formattedAgents,
+      activityLogs,
     };
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       status: "success",
-      data: supervisorPayload,
-      supervisor: supervisorPayload,
+      data: dashboardPayload,
+      agents: formattedAgents,
+      activityLogs,
     });
   } catch (error) {
-    console.error("Get Supervisor Profile Error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Supervisor Dashboard Telemetry Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 /**
- * @desc    Get Agents assigned to the logged-in Supervisor (used in AgentManagementScreen)
- * @route   GET /api/v1/supervisor/my-agents
- * @access  Private (Supervisor)
+ * @desc    Get Supervisor Profile, Target, & Agents Matrix
+ * @route   GET /api/v1/supervisor/profile
+ */
+exports.getSupervisorProfile = exports.getSupervisorDashboard;
+
+/**
+ * @desc    Get Supervisor Assigned Target Quota
+ * @route   GET /api/v1/supervisor/my-target
+ */
+exports.getMyTarget = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id || req.user?.id).lean();
+    const targets = user?.targets || {
+      dataGoal: 500,
+      airtimeGoal: 50000,
+      agentGoal: 10,
+      currentMonth: "August 2026",
+    };
+
+    return res.status(200).json({
+      success: true,
+      targets,
+      data: targets,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * @desc    Get Agents assigned to the logged-in Supervisor
+ * @route   GET /api/v1/supervisor/my-agents OR GET /api/v1/supervisor/agents
  */
 exports.getMyAgents = async (req, res) => {
   try {
-    const supervisorId = req.user._id;
+    const supervisorId = req.user._id || req.user?.id;
     const supervisor = await User.findById(supervisorId).lean();
 
     const agents = await User.find({
@@ -202,113 +220,228 @@ exports.getMyAgents = async (req, res) => {
       ],
     })
       .select("-password")
+      .sort({ createdAt: -1 })
       .lean();
 
-    let totalData = 0;
-    let totalAirtime = 0;
+    const formattedAgents = agents.map((ag) => {
+      const tg = ag.targets || {};
+      return {
+        _id: ag._id,
+        id: ag._id,
+        name: ag.name || `${ag.firstName || ""} ${ag.surname || ""}`.trim() || "Retail Agent",
+        phone: ag.phone,
+        email: ag.email || `${ag.phone}@ayaxdata.online`,
+        address: ag.address || "Outlet Location",
+        walletBalance: ag.walletBalance || ag.balance || 0,
+        balance: ag.balance || ag.walletBalance || 0,
+        state: ag.state || supervisor?.state,
+        lga: ag.lga || supervisor?.lga,
+        isSuspended: ag.isSuspended || false,
+        targets: {
+          dataGoal: tg.dataGoal || 100,
+          airtimeGoal: tg.airtimeGoal || 10000,
+          currentMonth: tg.currentMonth || "August 2026",
+        },
+      };
+    });
 
-    const formattedAgents = await Promise.all(
-      agents.map(async (ag) => {
-        let agentDataSold = 0;
-        let agentAirtimeSold = 0;
-
-        try {
-          if (Transaction) {
-            const dataAgg = await Transaction.aggregate([
-              {
-                $match: {
-                  user: ag._id,
-                  status: { $in: ["successful", "success", "completed"] },
-                  type: { $in: ["data", "DATA"] },
-                },
-              },
-              {
-                $group: {
-                  _id: null,
-                  totalVolume: { $sum: { $ifNull: ["$dataSize", "$volume", "$amount"] } },
-                },
-              },
-            ]);
-            agentDataSold = dataAgg[0]?.totalVolume || 0;
-
-            const airtimeAgg = await Transaction.aggregate([
-              {
-                $match: {
-                  user: ag._id,
-                  status: { $in: ["successful", "success", "completed"] },
-                  type: { $in: ["airtime", "AIRTIME", "vtu", "VTU"] },
-                },
-              },
-              {
-                $group: {
-                  _id: null,
-                  totalAmount: { $sum: "$amount" },
-                },
-              },
-            ]);
-            agentAirtimeSold = airtimeAgg[0]?.totalAmount || 0;
-          }
-        } catch (e) {
-          agentDataSold = 0;
-          agentAirtimeSold = 0;
-        }
-
-        totalData += agentDataSold;
-        totalAirtime += agentAirtimeSold;
-
-        const tg = ag.targets || {};
-
-        return {
-          _id: ag._id,
-          id: ag._id,
-          name: ag.name || `${ag.firstName || ""} ${ag.surname || ""}`.trim() || "Retail Agent",
-          fullName: ag.name || `${ag.firstName || ""} ${ag.surname || ""}`.trim(),
-          phone: ag.phone,
-          email: ag.email,
-          walletBalance: ag.walletBalance || ag.balance || 0,
-          balance: ag.balance || ag.walletBalance || 0,
-          state: ag.state || supervisor?.state,
-          lga: ag.lga || supervisor?.lga,
-          isSuspended: ag.isSuspended || false,
-          dataSold: agentDataSold,
-          todaySales: agentDataSold,
-          totalGB: agentDataSold,
-          airtimeSold: agentAirtimeSold,
-          targets: {
-            dataGoal: tg.dataGoal || 100,
-            airtimeGoal: tg.airtimeGoal || 10000,
-            currentMonth: tg.currentMonth || "August 2026",
-          },
-        };
-      })
-    );
-
-    const supTargets = supervisor?.targets || {};
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: formattedAgents.length,
       agents: formattedAgents,
       data: formattedAgents,
-      stats: {
-        totalRegistered: formattedAgents.length,
-        totalDataSold: totalData,
-        totalAirtimeSold: totalAirtime,
-        monthlyGoal: supTargets.agentGoal || 10,
-        dataGoal: supTargets.dataGoal || 500,
-        airtimeGoal: supTargets.airtimeGoal || 50000,
-      },
     });
   } catch (error) {
     console.error("Get My Agents Error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAgents = exports.getMyAgents;
+
+/**
+ * @desc    Enroll / Create New Retail Agent (Persists to Database)
+ * @route   POST /api/v1/supervisor/create-agent
+ */
+exports.createAgent = async (req, res) => {
+  try {
+    const { name, phone, email, password, address, state, lga } = req.body;
+
+    if (!phone || !name) {
+      return res.status(400).json({
+        success: false,
+        message: "Agent Name and Phone Number are required.",
+      });
+    }
+
+    const supervisor = await User.findById(req.user._id || req.user?.id);
+    const cleanPhone = String(phone).trim();
+    const cleanState = String(state || supervisor?.state || "Kano").trim();
+    const cleanLga = String(lga || supervisor?.lga || "Ajingi").trim();
+    const cleanEmail = email
+      ? String(email).toLowerCase().trim()
+      : `${cleanPhone}@ayaxdata.online`;
+
+    let user = await User.findOne({
+      $or: [{ phone: cleanPhone }, { email: cleanEmail }],
+    });
+
+    if (user) {
+      user.role = "agent";
+      user.state = cleanState;
+      user.lga = cleanLga;
+      user.assignedSupervisor = supervisor?._id;
+      user.assignedSupervisorName = supervisor?.name;
+      if (address) user.address = address;
+      await user.save({ validateBeforeSave: false });
+
+      return res.status(200).json({
+        success: true,
+        message: `Existing account updated to Retail Agent under ${cleanLga} LGA.`,
+        data: user,
+      });
+    }
+
+    const names = name.trim().split(" ");
+    const firstName = names[0] || "Retail";
+    const surname = names.slice(1).join(" ") || "Agent";
+
+    const newAgent = await User.create({
+      firstName,
+      surname,
+      name: name.toUpperCase().trim(),
+      email: cleanEmail,
+      phone: cleanPhone,
+      password: password || "Password123@",
+      pin: "2026",
+      transactionPin: "2026",
+      role: "agent",
+      state: cleanState,
+      lga: cleanLga,
+      address,
+      assignedSupervisor: supervisor?._id || null,
+      assignedSupervisorName: supervisor?.name || "Field Supervisor",
+      walletBalance: 0,
+      balance: 0,
+      isSuspended: false,
+      isVerified: true,
+      status: "active",
+      targets: {
+        dataGoal: 100,
+        airtimeGoal: 10000,
+        currentMonth: "August 2026",
+      },
+    });
+
+    if (Activity && supervisor?._id) {
+      await Activity.create({
+        staffId: supervisor._id,
+        user: supervisor._id,
+        lga: cleanLga,
+        state: cleanState,
+        action: "AGENT_ENROLLED",
+        details: `Supervisor appointed ${newAgent.name} (${cleanPhone}) as Retail Agent for ${cleanLga} LGA`,
+        targetUser: newAgent._id,
+      }).catch(() => {});
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: `Retail Agent ${newAgent.name} successfully registered!`,
+      data: newAgent,
+    });
+  } catch (error) {
+    console.error("Create Agent Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * @desc    Assign / Update Data & Airtime Target to an Agent (Handles Auto-Split & Single Body)
+ * @route   POST /api/v1/supervisor/assign-agent-target
+ */
+exports.assignAgentTarget = async (req, res) => {
+  try {
+    const { agentId, dataGoal, airtimeGoal, month } = req.body;
+
+    if (!agentId) {
+      return res.status(400).json({ success: false, message: "Agent ID is required." });
+    }
+
+    const currentMonthName = month || "August 2026";
+    const dGoal = Number(dataGoal) || 0;
+    const aGoal = Number(airtimeGoal) || 0;
+
+    const agent = await User.findOneAndUpdate(
+      { _id: agentId, role: "agent" },
+      {
+        $set: {
+          "targets.dataGoal": dGoal,
+          "targets.airtimeGoal": aGoal,
+          "targets.currentMonth": currentMonthName,
+        },
+      },
+      { new: true, runValidators: false }
+    );
+
+    if (!agent) {
+      return res.status(404).json({ success: false, message: "Agent not found" });
+    }
+
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        staffId: req.user._id,
+        user: req.user._id,
+        action: "ASSIGN_AGENT_TARGET",
+        details: `Supervisor allocated target quota (${dGoal}GB Data & ₦${aGoal} Airtime) to Agent ${agent.name}`,
+        targetUser: agent._id,
+      }).catch(() => {});
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Agent quota updated successfully",
+      targets: agent.targets,
+    });
+  } catch (error) {
+    console.error("Assign Agent Target Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.assignTargetToAgent = exports.assignAgentTarget;
+
+/**
+ * @desc    Get Real-Time Activity Logs for Supervisor's LGA
+ * @route   GET /api/v1/supervisor/activity-logs
+ */
+exports.getActivityLogs = async (req, res) => {
+  try {
+    const supervisor = await User.findById(req.user._id || req.user?.id);
+    const myLga = supervisor?.lga || "Ajingi";
+
+    let logs = [];
+    if (Activity) {
+      logs = await Activity.find({
+        $or: [{ lga: myLga }, { user: supervisor._id }, { staffId: supervisor._id }],
+      })
+        .sort({ createdAt: -1 })
+        .limit(40)
+        .lean();
+    }
+
+    return res.status(200).json({
+      success: true,
+      logs,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 /**
  * @desc    Get Sales Summary for a specific Agent
  * @route   GET /api/v1/supervisor/agent-sales/:agentId
- * @access  Private (Supervisor/Admin)
  */
 exports.getAgentSalesSummary = async (req, res) => {
   try {
@@ -350,7 +483,7 @@ exports.getAgentSalesSummary = async (req, res) => {
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
         totalGB,
@@ -361,60 +494,6 @@ exports.getAgentSalesSummary = async (req, res) => {
     });
   } catch (error) {
     console.error("Get Agent Sales Summary Error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-/**
- * @desc    Assign / Update Data & Airtime Target to an Agent under Supervisor
- * @route   PATCH /api/v1/supervisor/assign-target/:agentId
- * @access  Private (Supervisor)
- */
-exports.assignTargetToAgent = async (req, res) => {
-  try {
-    const { agentId } = req.params;
-    const { dataGoal, airtimeGoal, month } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(agentId)) {
-      return res.status(400).json({ success: false, message: "Invalid Agent ID format" });
-    }
-
-    const currentMonthName = month || new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
-
-    const agent = await User.findOneAndUpdate(
-      { _id: agentId, role: "agent" },
-      {
-        $set: {
-          "targets.dataGoal": Number(dataGoal) || 0,
-          "targets.airtimeGoal": Number(airtimeGoal) || 0,
-          "targets.currentMonth": currentMonthName,
-        },
-      },
-      { new: true, runValidators: true }
-    ).select("name firstName surname email phone targets");
-
-    if (!agent) {
-      return res.status(404).json({
-        success: false,
-        message: "Agent not found",
-      });
-    }
-
-    // Rubuta Activity Log
-    await Activity.create({
-      staffId: req.user._id,
-      action: "ASSIGN_AGENT_TARGET",
-      details: `Supervisor assigned target (${dataGoal || 0}GB Data & ₦${airtimeGoal || 0} Airtime) to Agent ${agent.name || agent.phone}`,
-      targetUser: agent._id,
-    });
-
-    res.status(200).json({
-      success: true,
-      message: "Agent target quota updated successfully",
-      targets: agent.targets,
-    });
-  } catch (error) {
-    console.error("Assign Target Error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
