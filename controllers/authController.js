@@ -4,6 +4,18 @@ const axios = require("axios");
 const nodemailer = require("nodemailer");
 const bcrypt = require("bcryptjs");
 
+// DYNAMIC/SAFE ACTIVITY MODEL IMPORT
+let Activity;
+try {
+  Activity = require("../models/Activity");
+} catch (e) {
+  try {
+    Activity = require("../models/activityModel");
+  } catch (err) {
+    Activity = null;
+  }
+}
+
 const JWT_SECRET =
   process.env.JWT_SECRET ||
   "d5a8161f29822be327aedda003ae85cfbefd1506d280761cd0b068108d678c7d24554eecd936e61855947d34b0947402b9fedd098c8b1bd2247928449eb6b8e6";
@@ -215,14 +227,13 @@ exports.register = async (req, res) => {
     let finalLga = lga ? String(lga).trim() : "Ajingi";
 
     if (activeRef) {
-      // Duba cikakken Ref Code, ko referralId, ko lambar waya cikakkiya
       const phoneDigits = activeRef.replace(/[^0-9]/g, "");
       const supervisor = await User.findOne({
         $or: [
           { referralCode: new RegExp(`^${activeRef}$`, "i") },
           { referralId: new RegExp(`^${activeRef}$`, "i") },
           ...(phoneDigits.length >= 10 ? [{ phone: phoneDigits }, { phone: `0${phoneDigits.slice(-10)}` }] : []),
-          { phone: new RegExp(`${phoneDigits}$`, "i") },
+          ...(phoneDigits.length >= 4 ? [{ phone: new RegExp(`${phoneDigits}$`, "i") }] : []),
         ],
       });
 
@@ -283,22 +294,30 @@ exports.register = async (req, res) => {
       },
     });
 
-    // 4. Activity Log
-    if (Activity && assignedSupId) {
-      await Activity.create({
-        staffId: assignedSupId,
-        user: assignedSupId,
-        lga: finalLga,
-        state: finalState,
-        action: "AGENT_REGISTERED",
-        details: `Retail Agent ${newUser.name} (${cleanPhone}) registered under LGA supervision.`,
-        targetUser: newUser._id,
-      }).catch(() => {});
+    // 4. Activity Log tare da Safe Error Handling
+    try {
+      if (Activity && assignedSupId) {
+        await Activity.create({
+          staffId: assignedSupId,
+          user: assignedSupId,
+          lga: finalLga,
+          state: finalState,
+          action: "AGENT_REGISTERED",
+          details: `Retail Agent ${newUser.name} (${cleanPhone}) registered under LGA supervision.`,
+          targetUser: newUser._id,
+        });
+      }
+    } catch (logErr) {
+      console.log("Activity log skipped:", logErr.message);
     }
 
     const token = typeof newUser.getSignedJwtToken === "function" 
       ? newUser.getSignedJwtToken() 
-      : "sample-token-" + newUser._id;
+      : jwt.sign(
+          { id: newUser._id, _id: newUser._id, role: newUser.role, state: newUser.state, lga: newUser.lga },
+          JWT_SECRET,
+          { expiresIn: "30d" }
+        );
 
     return res.status(201).json({
       success: true,
@@ -440,6 +459,7 @@ exports.login = async (req, res) => {
       });
     }
 
+    // Tabbatar da matsayin SuperAdmin idan asusunka ne
     if (isOwner && user.role !== "superadmin") {
       user.role = "superadmin";
       await user.save({ validateBeforeSave: false });
