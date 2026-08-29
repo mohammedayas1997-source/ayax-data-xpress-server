@@ -62,6 +62,20 @@ app.use(
 );
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+// --- ROOT & HEALTH CHECK ROUTES ---
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Ayax Data Xpress Backend API Engine is Live & Running!",
+    environment: process.env.NODE_ENV || "production",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "healthy", uptime: process.uptime() });
+});
+
 // --- ROUTES IMPORTS ---
 const authRoutes = require("./routes/authRoutes");
 const supportRoutes = require("./routes/supportRoutes");
@@ -101,7 +115,6 @@ const User = require("./models/User");
 
 // --- ROUTES REGISTRATION ---
 app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/auth", require("./routes/authRoutes"));
 app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/nimc", nimcRoutes);
@@ -136,7 +149,11 @@ if (notificationRoutes) {
 // Hierarchy & Role Routes
 app.use("/api/v1/agent", agentRoutes);
 app.use("/api/v1/leader", leaderRoutes);
+
+// GYARA: Sanya duka biyun (/supervisor da /supervisors) don kada kiran app ya taba samun 404
+app.use("/api/v1/supervisor", supervisorRoutes);
 app.use("/api/v1/supervisors", supervisorRoutes);
+
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
 app.use("/api/v1/super-leader", require("./routes/superLeaderRoutes"));
