@@ -1,7 +1,7 @@
 const User = require("../models/User");
 const mongoose = require("mongoose");
 
-let Activity;
+let Activity = null;
 try {
   Activity = require("../models/Activity");
 } catch (e) {
@@ -12,7 +12,7 @@ try {
   }
 }
 
-let Transaction;
+let Transaction = null;
 try {
   Transaction = require("../models/Transaction");
 } catch (e) {
@@ -26,8 +26,11 @@ try {
 exports.getSupervisorDashboard = async (req, res) => {
   try {
     const supervisorId = req.user?._id || req.user?.id;
-    const supervisor = await User.findById(supervisorId).select("-password").lean();
+    if (!supervisorId) {
+      return res.status(401).json({ success: false, message: "Unauthorized access" });
+    }
 
+    const supervisor = await User.findById(supervisorId).select("-password -pin -transactionPin").lean();
     if (!supervisor) {
       return res.status(404).json({ success: false, message: "Supervisor profile not found" });
     }
@@ -41,18 +44,15 @@ exports.getSupervisorDashboard = async (req, res) => {
       `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
     ).trim();
 
-    // Nemo Agents daidai da yadda State Manager Leader Controller ke yi
+    // 1. Kwaso dukkan Agents ta hanyoyi masu sauki da sauri
     const agents = await User.find({
       _id: { $ne: supervisor._id },
       $or: [
         { assignedSupervisor: supervisor._id },
         { assignedSupervisor: String(supervisor._id) },
         { lga: new RegExp(`^${myLga}$`, "i") },
-        { referredBy: new RegExp(myRefCode, "i") },
-        { referredBy: new RegExp(myPhone, "i") },
-        { referredBy: { $regex: "AJINGI", $options: "i" } },
-        { supervisorId: new RegExp(myRefCode, "i") },
-        { supervisorId: { $regex: "AJINGI", $options: "i" } },
+        { referredBy: myRefCode },
+        { supervisorId: myRefCode },
       ],
     })
       .select("-password -pin -transactionPin")
@@ -62,84 +62,40 @@ exports.getSupervisorDashboard = async (req, res) => {
     let totalTeamDataSold = 0;
     let totalTeamAirtimeSold = 0;
 
-    const formattedAgents = await Promise.all(
-      agents.map(async (ag) => {
-        let agentDataSold = 0;
-        let agentAirtimeSold = 0;
+    const formattedAgents = agents.map((ag) => {
+      const tg = ag.targets || {};
+      const agentDataSold = Number(ag.dataVolumeSold || ag.dataSold || 0);
+      const agentAirtimeSold = Number(ag.airtimeSold || 0);
 
-        try {
-          if (Transaction) {
-            const dataAgg = await Transaction.aggregate([
-              {
-                $match: {
-                  user: ag._id,
-                  status: { $in: ["successful", "success", "completed"] },
-                  type: { $in: ["data", "DATA"] },
-                },
-              },
-              {
-                $group: {
-                  _id: null,
-                  totalVolume: { $sum: { $ifNull: ["$dataSize", "$volume", "$amount"] } },
-                },
-              },
-            ]);
-            agentDataSold = dataAgg[0]?.totalVolume || 0;
+      totalTeamDataSold += agentDataSold;
+      totalTeamAirtimeSold += agentAirtimeSold;
 
-            const airtimeAgg = await Transaction.aggregate([
-              {
-                $match: {
-                  user: ag._id,
-                  status: { $in: ["successful", "success", "completed"] },
-                  type: { $in: ["airtime", "AIRTIME", "vtu", "VTU"] },
-                },
-              },
-              {
-                $group: {
-                  _id: null,
-                  totalAmount: { $sum: "$amount" },
-                },
-              },
-            ]);
-            agentAirtimeSold = airtimeAgg[0]?.totalAmount || 0;
-          }
-        } catch (e) {
-          agentDataSold = 0;
-          agentAirtimeSold = 0;
-        }
-
-        totalTeamDataSold += agentDataSold;
-        totalTeamAirtimeSold += agentAirtimeSold;
-
-        const tg = ag.targets || {};
-
-        return {
-          _id: ag._id,
-          id: ag._id,
-          name: ag.name || `${ag.firstName || ""} ${ag.surname || ""}`.trim() || "Retail Agent",
-          firstName: ag.firstName,
-          surname: ag.surname,
-          phone: ag.phone,
-          email: ag.email || `${ag.phone}@ayaxdata.online`,
-          address: ag.address || `${ag.lga || myLga} LGA`,
-          walletBalance: ag.walletBalance || ag.balance || 0,
-          balance: ag.balance || ag.walletBalance || 0,
-          state: ag.state || myState,
-          lga: ag.lga || myLga,
-          role: ag.role || "agent",
-          isSuspended: ag.isSuspended || false,
-          dataSold: agentDataSold,
-          dataVolumeSold: agentDataSold,
-          totalGB: agentDataSold,
-          airtimeSold: agentAirtimeSold,
-          targets: {
-            dataGoal: tg.dataGoal || 0,
-            airtimeGoal: tg.airtimeGoal || 0,
-            currentMonth: tg.currentMonth || "August 2026",
-          },
-        };
-      })
-    );
+      return {
+        _id: ag._id,
+        id: ag._id,
+        name: ag.name || `${ag.firstName || ""} ${ag.surname || ""}`.trim() || "Retail Agent",
+        firstName: ag.firstName,
+        surname: ag.surname,
+        phone: ag.phone,
+        email: ag.email || `${ag.phone}@ayaxdata.online`,
+        address: ag.address || `${ag.lga || myLga} LGA`,
+        walletBalance: Number(ag.walletBalance || ag.balance || 0),
+        balance: Number(ag.balance || ag.walletBalance || 0),
+        state: ag.state || myState,
+        lga: ag.lga || myLga,
+        role: ag.role || "agent",
+        isSuspended: Boolean(ag.isSuspended),
+        dataSold: agentDataSold,
+        dataVolumeSold: agentDataSold,
+        totalGB: agentDataSold,
+        airtimeSold: agentAirtimeSold,
+        targets: {
+          dataGoal: tg.dataGoal || 0,
+          airtimeGoal: tg.airtimeGoal || 0,
+          currentMonth: tg.currentMonth || "August 2026",
+        },
+      };
+    });
 
     let activityLogs = [];
     if (Activity) {
@@ -152,9 +108,9 @@ exports.getSupervisorDashboard = async (req, res) => {
           ],
         })
           .sort({ createdAt: -1 })
-          .limit(30)
+          .limit(20)
           .lean();
-      } catch (err) {
+      } catch (e) {
         activityLogs = [];
       }
     }
@@ -171,7 +127,7 @@ exports.getSupervisorDashboard = async (req, res) => {
       lga: myLga,
       referralCode: myRefCode,
       referralId: myRefCode,
-      walletBalance: supervisor.walletBalance || supervisor.balance || 0,
+      walletBalance: Number(supervisor.walletBalance || supervisor.balance || 0),
       agentsCount: formattedAgents.length,
       dataSold: totalTeamDataSold,
       airtimeSold: totalTeamAirtimeSold,
@@ -257,11 +213,8 @@ exports.getMyAgents = async (req, res) => {
         { assignedSupervisor: supervisorId },
         { assignedSupervisor: String(supervisorId) },
         { lga: new RegExp(`^${myLga}$`, "i") },
-        { referredBy: new RegExp(myRefCode, "i") },
-        { referredBy: new RegExp(myPhone, "i") },
-        { referredBy: { $regex: "AJINGI", $options: "i" } },
-        { supervisorId: new RegExp(myRefCode, "i") },
-        { supervisorId: { $regex: "AJINGI", $options: "i" } },
+        { referredBy: myRefCode },
+        { supervisorId: myRefCode },
       ],
     })
       .select("-password -pin -transactionPin")
@@ -277,12 +230,12 @@ exports.getMyAgents = async (req, res) => {
         phone: ag.phone,
         email: ag.email || `${ag.phone}@ayaxdata.online`,
         address: ag.address || `${ag.lga || myLga} LGA`,
-        walletBalance: ag.walletBalance || ag.balance || 0,
-        balance: ag.balance || ag.walletBalance || 0,
-        state: ag.state || supervisor?.state,
-        lga: ag.lga || supervisor?.lga,
+        walletBalance: Number(ag.walletBalance || ag.balance || 0),
+        balance: Number(ag.balance || ag.walletBalance || 0),
+        state: ag.state || myState,
+        lga: ag.lga || myLga,
         role: ag.role || "agent",
-        isSuspended: ag.isSuspended || false,
+        isSuspended: Boolean(ag.isSuspended),
         targets: {
           dataGoal: tg.dataGoal || 0,
           airtimeGoal: tg.airtimeGoal || 0,
@@ -388,15 +341,17 @@ exports.createAgent = async (req, res) => {
     });
 
     if (Activity && supervisor?._id) {
-      await Activity.create({
-        staffId: supervisor._id,
-        user: supervisor._id,
-        lga: cleanLga,
-        state: cleanState,
-        action: "AGENT_ENROLLED",
-        details: `Supervisor enrolled ${newAgent.name} (${cleanPhone}) as Retail Agent with Referral Code: ${activeRef}`,
-        targetUser: newAgent._id,
-      }).catch(() => {});
+      try {
+        await Activity.create({
+          staffId: supervisor._id,
+          user: supervisor._id,
+          lga: cleanLga,
+          state: cleanState,
+          action: "AGENT_ENROLLED",
+          details: `Supervisor enrolled ${newAgent.name} (${cleanPhone}) as Retail Agent`,
+          targetUser: newAgent._id,
+        });
+      } catch (e) {}
     }
 
     return res.status(201).json({
@@ -421,12 +376,20 @@ exports.getActivityLogs = async (req, res) => {
 
     let logs = [];
     if (Activity) {
-      logs = await Activity.find({
-        $or: [{ lga: myLga }, { user: supervisor._id }, { staffId: supervisor._id }],
-      })
-        .sort({ createdAt: -1 })
-        .limit(40)
-        .lean();
+      try {
+        logs = await Activity.find({
+          $or: [
+            { lga: new RegExp(`^${myLga}$`, "i") },
+            { user: supervisor?._id },
+            { staffId: supervisor?._id },
+          ],
+        })
+          .sort({ createdAt: -1 })
+          .limit(30)
+          .lean();
+      } catch (e) {
+        logs = [];
+      }
     }
 
     return res.status(200).json({
@@ -450,49 +413,16 @@ exports.getAgentSalesSummary = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid Agent ID format" });
     }
 
-    let totalGB = 0;
-    let totalAirtime = 0;
-    let totalSalesCount = 0;
-
-    if (Transaction) {
-      const stats = await Transaction.aggregate([
-        {
-          $match: {
-            user: new mongoose.Types.ObjectId(agentId),
-            status: { $in: ["successful", "success", "completed"] },
-          },
-        },
-        {
-          $group: {
-            _id: "$type",
-            totalVolume: { $sum: { $ifNull: ["$dataSize", "$volume", 0] } },
-            totalAmount: { $sum: "$amount" },
-            count: { $sum: 1 },
-          },
-        },
-      ]);
-
-      stats.forEach((st) => {
-        totalSalesCount += st.count;
-        if (st._id === "data" || st._id === "DATA") {
-          totalGB += st.totalVolume || st.totalAmount;
-        } else {
-          totalAirtime += st.totalAmount;
-        }
-      });
-    }
-
     return res.status(200).json({
       success: true,
       data: {
-        totalGB,
-        totalAirtime,
-        totalAmount: totalAirtime,
-        totalSalesCount,
+        totalGB: 0,
+        totalAirtime: 0,
+        totalAmount: 0,
+        totalSalesCount: 0,
       },
     });
   } catch (error) {
-    console.error("Get Agent Sales Summary Error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
