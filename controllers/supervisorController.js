@@ -22,15 +22,41 @@ exports.getSupervisorDashboard = async (req, res) => {
       return res.status(404).json({ success: false, message: "Supervisor profile not found" });
     }
 
-    const myLga = supervisor.lga || "Ajingi";
-    const myState = supervisor.state || "Kano";
+    const myLga = (supervisor.lga || "Ajingi").trim();
+    const myState = (supervisor.state || "Kano").trim();
+    const myPhone = String(supervisor.phone || "").trim();
+    const myRefCode = String(
+      supervisor.referralCode ||
+      supervisor.referralId ||
+      `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
+    ).trim();
 
-    const agents = await User.find({
-      role: "agent",
+    // 1. NEMO AGENTS TA DUKKAN HANYOYI 5:
+    // (a) assignedSupervisor ID
+    // (b) referredBy da yayi daidai da Ref Code na Supervisor
+    // (c) referredBy da yayi daidai da Lambar Wayar Supervisor
+    // (d) supervisorId field
+    // (e) LGA da State matching
+    const agentQuery = {
+      role: { $in: ["agent", "sub_agent", "reseller", "user"] },
       $or: [
         { assignedSupervisor: supervisorId },
-        { lga: new RegExp(`^${myLga.trim()}$`, "i"), state: new RegExp(`^${myState.trim()}$`, "i") },
+        { assignedSupervisor: String(supervisorId) },
+        { referredBy: new RegExp(`^${myRefCode}$`, "i") },
+        { referredBy: new RegExp(`^${myPhone}$`, "i") },
+        { supervisorId: new RegExp(`^${myRefCode}$`, "i") },
+        { supervisorId: new RegExp(`^${myPhone}$`, "i") },
+        {
+          lga: new RegExp(`^${myLga}$`, "i"),
+          state: new RegExp(`^${myState}$`, "i"),
+        },
       ],
+    };
+
+    // Cire shi kansa Supervisor din daga jerin Agents
+    const agents = await User.find({
+      ...agentQuery,
+      _id: { $ne: supervisor._id },
     })
       .select("-password -pin -transactionPin")
       .sort({ createdAt: -1 })
@@ -129,11 +155,6 @@ exports.getSupervisorDashboard = async (req, res) => {
 
     const supTargets = supervisor.targets || {};
 
-    const cleanRefCode =
-      supervisor.referralCode ||
-      supervisor.referralId ||
-      `AYX-${String(myLga).toUpperCase()}-${String(supervisor.phone || "").slice(-4)}`;
-
     const dashboardPayload = {
       _id: supervisor._id,
       id: supervisor._id,
@@ -142,8 +163,8 @@ exports.getSupervisorDashboard = async (req, res) => {
       email: supervisor.email,
       state: myState,
       lga: myLga,
-      referralCode: cleanRefCode,
-      referralId: cleanRefCode,
+      referralCode: myRefCode,
+      referralId: myRefCode,
       walletBalance: supervisor.walletBalance || supervisor.balance || 0,
       agentsCount: formattedAgents.length,
       dataSold: totalTeamDataSold,
@@ -168,6 +189,82 @@ exports.getSupervisorDashboard = async (req, res) => {
     });
   } catch (error) {
     console.error("Supervisor Dashboard Telemetry Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * @desc    Get Agents Directory
+ * @route   GET /api/v1/supervisor/agents OR GET /api/v1/supervisor/my-agents
+ */
+exports.getMyAgents = async (req, res) => {
+  try {
+    const supervisorId = req.user?._id || req.user?.id;
+    const supervisor = await User.findById(supervisorId).lean();
+
+    if (!supervisor) {
+      return res.status(404).json({ success: false, message: "Supervisor not found" });
+    }
+
+    const myLga = (supervisor.lga || "Ajingi").trim();
+    const myState = (supervisor.state || "Kano").trim();
+    const myPhone = String(supervisor.phone || "").trim();
+    const myRefCode = String(
+      supervisor.referralCode ||
+      supervisor.referralId ||
+      `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
+    ).trim();
+
+    const agents = await User.find({
+      role: { $in: ["agent", "sub_agent", "reseller", "user"] },
+      _id: { $ne: supervisor._id },
+      $or: [
+        { assignedSupervisor: supervisorId },
+        { assignedSupervisor: String(supervisorId) },
+        { referredBy: new RegExp(`^${myRefCode}$`, "i") },
+        { referredBy: new RegExp(`^${myPhone}$`, "i") },
+        { supervisorId: new RegExp(`^${myRefCode}$`, "i") },
+        { supervisorId: new RegExp(`^${myPhone}$`, "i") },
+        {
+          lga: new RegExp(`^${myLga}$`, "i"),
+          state: new RegExp(`^${myState}$`, "i"),
+        },
+      ],
+    })
+      .select("-password")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formattedAgents = agents.map((ag) => {
+      const tg = ag.targets || {};
+      return {
+        _id: ag._id,
+        id: ag._id,
+        name: ag.name || `${ag.firstName || ""} ${ag.surname || ""}`.trim() || "Retail Agent",
+        phone: ag.phone,
+        email: ag.email || `${ag.phone}@ayaxdata.online`,
+        address: ag.address || "Outlet Location",
+        walletBalance: ag.walletBalance || ag.balance || 0,
+        balance: ag.balance || ag.walletBalance || 0,
+        state: ag.state || supervisor?.state,
+        lga: ag.lga || supervisor?.lga,
+        isSuspended: ag.isSuspended || false,
+        targets: {
+          dataGoal: tg.dataGoal || 0,
+          airtimeGoal: tg.airtimeGoal || 0,
+          currentMonth: tg.currentMonth || "August 2026",
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: formattedAgents.length,
+      agents: formattedAgents,
+      data: formattedAgents,
+    });
+  } catch (error) {
+    console.error("Get My Agents Error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
