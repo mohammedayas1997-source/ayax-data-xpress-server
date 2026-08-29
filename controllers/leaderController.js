@@ -575,7 +575,7 @@ exports.downloadSupervisorReport = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
-// @desc    Get Specific State Target for Logged-In State Manager
+// @desc    Get SM State Quota & System Auto-Distribution Matrix
 // @route   GET /api/v1/leader/my-state-target
 exports.getMyStateTarget = async (req, res) => {
   try {
@@ -584,12 +584,36 @@ exports.getMyStateTarget = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    const targets = user.targets || {};
+    const stateName = user.state || "Kano";
+    const targets = user.targets || {
+      dataGoal: 5000,
+      airtimeGoal: 500000,
+      agentGoal: 50,
+      supervisorGoal: 10,
+      currentMonth: "August 2026",
+    };
+
+    // Nemo Supervisors da Agents na wannan jihar
+    const [supervisors, agents] = await Promise.all([
+      User.find({ role: { $in: ["supervisor", "field_supervisor"] }, state: new RegExp(`^${stateName}$`, "i") })
+        .select("name firstName surname phone lga targets")
+        .lean(),
+      User.find({ role: "agent", state: new RegExp(`^${stateName}$`, "i") })
+        .select("name firstName surname phone lga targets assignedSupervisorName")
+        .lean(),
+    ]);
 
     return res.status(200).json({
       success: true,
-      data: targets,
-      targets: targets,
+      data: {
+        state: stateName,
+        assignedTargets: targets,
+        supervisorsCount: supervisors.length,
+        agentsCount: agents.length,
+        supervisors,
+        agents,
+      },
+      targets,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
