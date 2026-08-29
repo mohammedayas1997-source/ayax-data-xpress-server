@@ -619,3 +619,97 @@ exports.getMyStateTarget = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+// @desc    State Manager (SM) Appoints / Enrolls a New Field Supervisor (FS)
+// @route   POST /api/v1/leader/create-supervisor
+exports.appointStateLeader = async (req, res) => {
+  try {
+    const { name, phone, email, state, lga, password } = req.body;
+
+    if (!phone || !name) {
+      return res.status(400).json({
+        success: false,
+        message: "Supervisor Name and Phone Number are required.",
+      });
+    }
+
+    const cleanPhone = String(phone).trim();
+    const cleanState = String(state || req.user?.state || "Kano").trim();
+    const cleanLga = String(lga || "Ajingi").trim();
+    const cleanEmail = email
+      ? String(email).toLowerCase().trim()
+      : `${cleanPhone}@ayaxdata.online`;
+
+    // 1. Duba idan mai wannan lambar ko email din ya riga ya wanzu
+    let existingUser = await User.findOne({
+      $or: [{ phone: cleanPhone }, { email: cleanEmail }],
+    });
+
+    if (existingUser) {
+      existingUser.role = "supervisor";
+      existingUser.state = cleanState;
+      existingUser.lga = cleanLga;
+      if (password) existingUser.password = password;
+      existingUser.isSuspended = false;
+      await existingUser.save({ validateBeforeSave: false });
+
+      return res.status(200).json({
+        success: true,
+        message: `Existing user profile promoted to Field Supervisor for ${cleanLga} LGA, ${cleanState} State.`,
+        data: existingUser,
+      });
+    }
+
+    // 2. Raba Suna
+    const names = name.trim().split(" ");
+    const firstName = names[0] || "Field";
+    const surname = names.slice(1).join(" ") || "Supervisor";
+
+    // 3. Kirkiri Sabon Field Supervisor a Database
+    const newSupervisor = await User.create({
+      firstName,
+      surname,
+      name: name.toUpperCase().trim(),
+      email: cleanEmail,
+      phone: cleanPhone,
+      password: password || "Password123@",
+      pin: "2026",
+      transactionPin: "2026",
+      role: "supervisor",
+      state: cleanState,
+      lga: cleanLga,
+      walletBalance: 0,
+      balance: 0,
+      isSuspended: false,
+      isVerified: true,
+      status: "active",
+      assignedLeader: req.user?._id || null,
+    });
+
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        staffId: req.user._id,
+        user: req.user._id,
+        action: "SUPERVISOR_ENROLLED",
+        details: `State Manager appointed ${newSupervisor.name} as Field Supervisor for ${cleanLga} LGA, ${cleanState} State`,
+        targetUser: newSupervisor._id,
+      }).catch(() => {});
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: `Supervisor ${newSupervisor.name} successfully deployed to ${cleanLga} LGA!`,
+      data: newSupervisor,
+    });
+  } catch (error) {
+    console.error("Create Supervisor Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to create supervisor account.",
+    });
+  }
+};
+
+// Aliases domin kar a samu 'handler not implemented'
+exports.createSupervisor = exports.appointStateLeader;
+exports.appointManager = exports.appointStateLeader;
+exports.appointSupervisor = exports.appointStateLeader;

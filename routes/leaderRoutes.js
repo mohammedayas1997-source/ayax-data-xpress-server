@@ -1,11 +1,10 @@
 const express = require("express");
 const router = express.Router();
 
-// 1. Shigo da Controllers da Middleware
 const leaderController = require("../controllers/leaderController");
 const { protect } = require("../middleware/authMiddleware");
 
-// Helper don kiyaye kuskure idan controller bai riga ya samu ba
+// Helper don kiyaye undefined handler errors
 const safeLeader = (handlerName) => {
   return (req, res, next) => {
     if (typeof leaderController[handlerName] === "function") {
@@ -22,7 +21,7 @@ const safeLeader = (handlerName) => {
 router.use(protect);
 
 // ==========================================
-// 1. NATIONAL / STATE OVERVIEW & DASHBOARD
+// 1. DASHBOARDS & TARGET TELEMETRY
 // ==========================================
 router.get("/dashboard", safeLeader("getSuperLeaderDashboard"));
 router.get("/super-dashboard", safeLeader("getSuperLeaderDashboard"));
@@ -35,15 +34,16 @@ router.post("/deploy-targets", safeLeader("assignStateLeaderTarget"));
 router.post("/assign-target", safeLeader("assignStateLeaderTarget"));
 
 // ==========================================
-// 3. SUPERVISORS & STAFF MANAGEMENT
+// 3. APPOINT & ENROLL SUPERVISORS
 // ==========================================
 router.post("/create-supervisor", safeLeader("appointStateLeader"));
+router.post("/appoint-supervisor", safeLeader("appointStateLeader"));
 router.post("/appoint-manager", safeLeader("appointStateLeader"));
 router.patch("/toggle-status/:staffId", safeLeader("toggleStaffSuspension"));
 router.patch("/toggle-status", safeLeader("toggleStaffSuspension"));
 
 // ==========================================
-// 4. LIVE AUDIT & REPORTS
+// 4. REPORTS
 // ==========================================
 router.get("/download-full-report", safeLeader("downloadNationalReport"));
 router.get("/download-report", safeLeader("downloadNationalReport"));
