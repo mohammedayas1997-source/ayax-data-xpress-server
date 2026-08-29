@@ -101,6 +101,7 @@ const User = require("./models/User");
 
 // --- ROUTES REGISTRATION ---
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/auth", require("./routes/authRoutes"));
 app.use("/api/v1/validation", validationRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/nimc", nimcRoutes);

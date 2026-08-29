@@ -3,7 +3,7 @@ const router = express.Router();
 const authController = require("../controllers/authController");
 const User = require("../models/User");
 
-// 1. Dynamic Authentication Middleware Loader
+// Dynamic Authentication Middleware Loader
 let authMiddleware;
 try {
   authMiddleware = require("../middleware/authMiddleware");
@@ -31,8 +31,9 @@ const safeAuth = (handlerName) => {
 // 1. PUBLIC AUTHENTICATION ROUTES (BABU PROTECT ANAN)
 // ==========================================
 router.post("/register", safeAuth("register"));
-router.post("/signup", safeAuth("register")); // <-- Kofar /signup ta asali
+router.post("/signup", safeAuth("register"));
 router.post("/agent-signup", safeAuth("register"));
+router.post("/create-agent", safeAuth("register"));
 
 router.post("/login", safeAuth("login"));
 router.post("/signin", safeAuth("login"));
