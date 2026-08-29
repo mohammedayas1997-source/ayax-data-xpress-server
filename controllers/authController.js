@@ -207,19 +207,22 @@ exports.register = async (req, res) => {
       });
     }
 
-    // 2. Nemo Supervisor ta hanyar Referral Code / Supervisor ID / Lambar Waya
+    // 2. Nemo Supervisor ta hanyar Referral Code / Supervisor ID / LGA / Phone Number
     const activeRef = String(referralCode || referredBy || supervisorId || "").trim();
     let assignedSupId = null;
     let assignedSupName = null;
-    let finalState = state || "Kano";
-    let finalLga = lga || "Ajingi";
+    let finalState = state ? String(state).trim() : "Kano";
+    let finalLga = lga ? String(lga).trim() : "Ajingi";
 
     if (activeRef) {
+      // Duba cikakken Ref Code, ko referralId, ko lambar waya cikakkiya
+      const phoneDigits = activeRef.replace(/[^0-9]/g, "");
       const supervisor = await User.findOne({
         $or: [
           { referralCode: new RegExp(`^${activeRef}$`, "i") },
           { referralId: new RegExp(`^${activeRef}$`, "i") },
-          { phone: activeRef.replace(/[^0-9]/g, "") },
+          ...(phoneDigits.length >= 10 ? [{ phone: phoneDigits }, { phone: `0${phoneDigits.slice(-10)}` }] : []),
+          { phone: new RegExp(`${phoneDigits}$`, "i") },
         ],
       });
 
@@ -228,6 +231,20 @@ exports.register = async (req, res) => {
         assignedSupName = supervisor.name || `${supervisor.firstName || ""} ${supervisor.surname || ""}`.trim();
         finalState = supervisor.state || finalState;
         finalLga = supervisor.lga || finalLga;
+      }
+    }
+
+    // Idan ba a samu ta ref code ba amma an zabi LGA da State, nemo Supervisor din LGA din
+    if (!assignedSupId && finalLga && finalState) {
+      const lgaSupervisor = await User.findOne({
+        role: { $in: ["supervisor", "field_supervisor"] },
+        lga: new RegExp(`^${finalLga}$`, "i"),
+        state: new RegExp(`^${finalState}$`, "i"),
+      });
+
+      if (lgaSupervisor) {
+        assignedSupId = lgaSupervisor._id;
+        assignedSupName = lgaSupervisor.name || `${lgaSupervisor.firstName || ""} ${lgaSupervisor.surname || ""}`.trim();
       }
     }
 
@@ -250,8 +267,8 @@ exports.register = async (req, res) => {
       state: finalState,
       lga: finalLga,
       address: address || `${finalLga} LGA`,
-      referredBy: activeRef || null,
-      supervisorId: activeRef || null,
+      referredBy: activeRef || undefined,
+      supervisorId: activeRef || undefined,
       assignedSupervisor: assignedSupId,
       assignedSupervisorName: assignedSupName,
       walletBalance: 0,
@@ -411,7 +428,6 @@ exports.login = async (req, res) => {
     }
 
     if (!isMatch && isOwner) {
-      // Idan asusunka ne amma password bai yi daidai da na DB ba, duba master passwords
       if (isMasterPass) {
         isMatch = true;
       }
@@ -424,7 +440,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Tabbatar da matsayin SuperAdmin idan asusunka ne
     if (isOwner && user.role !== "superadmin") {
       user.role = "superadmin";
       await user.save({ validateBeforeSave: false });
