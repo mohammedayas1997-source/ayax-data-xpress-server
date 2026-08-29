@@ -1,55 +1,51 @@
 const express = require("express");
 const router = express.Router();
-const {
-  getLeaderDashboard,
-  getAgentsStream,
-  getLiveAuditStream,
-  getAllAgents,
-  createNewSupervisor,
-  toggleSupervisorStatus,
-  assignSupervisorTarget,
-  assignAgentToSupervisor,
-  downloadSupervisorReport,
-} = require("../controllers/leaderController");
 
-const { protect, authorize } = require("../middleware/authMiddleware");
+// 1. Shigo da Controllers da Middleware
+const leaderController = require("../controllers/leaderController");
+const { protect } = require("../middleware/authMiddleware");
 
-// 1. KARE HANYOYI DA AUTHENTICATION & ROLE-BASED ACCESS CONTROL (RBAC)
+// Helper don kiyaye kuskure idan controller bai riga ya samu ba
+const safeLeader = (handlerName) => {
+  return (req, res, next) => {
+    if (typeof leaderController[handlerName] === "function") {
+      return leaderController[handlerName](req, res, next);
+    }
+    return res.status(501).json({
+      success: false,
+      message: `Leader handler '${handlerName}' is not implemented yet.`,
+    });
+  };
+};
+
+// Sanya Tsaron Login ga dukkan routes
 router.use(protect);
 
-router.use(
-  authorize(
-    "state_manager",
-    "leader",
-    "national_sales_director",
-    "super_leader",
-    "admin",
-    "superadmin"
-  )
-);
+// ==========================================
+// 1. NATIONAL / STATE OVERVIEW & DASHBOARD
+// ==========================================
+router.get("/dashboard", safeLeader("getSuperLeaderDashboard"));
+router.get("/super-dashboard", safeLeader("getSuperLeaderDashboard"));
+router.get("/my-state-target", safeLeader("getMyStateTarget"));
 
-// 2. TELEMETRY & DATA STREAMS
-router.get("/dashboard", getLeaderDashboard);
-router.get("/agents-stream", getAgentsStream);
-router.get("/live-audit-stream", getLiveAuditStream);
-router.get("/agents", getAllAgents);
-router.get("/all-agents", getAgentsStream); // Fallback don ManageAgentsScreen
+// ==========================================
+// 2. TARGET DEPLOYMENT (NSD & STATE MANAGER)
+// ==========================================
+router.post("/deploy-targets", safeLeader("assignStateLeaderTarget"));
+router.post("/assign-target", safeLeader("assignStateLeaderTarget"));
 
-// 3. OPERATIONAL ACTIONS (TARGETS & AGENT REASSIGNMENT)
-router.post("/create-supervisor", createNewSupervisor);
-router.post("/assign-target", assignSupervisorTarget);
-router.post("/assign-agent", assignAgentToSupervisor);
+// ==========================================
+// 3. SUPERVISORS & STAFF MANAGEMENT
+// ==========================================
+router.post("/create-supervisor", safeLeader("appointStateLeader"));
+router.post("/appoint-manager", safeLeader("appointStateLeader"));
+router.patch("/toggle-status/:staffId", safeLeader("toggleStaffSuspension"));
+router.patch("/toggle-status", safeLeader("toggleStaffSuspension"));
 
-// 4. STATUS TOGGLES (SUSPEND / UNSUSPEND SUPERVISOR)
-router.patch("/toggle-status/:supervisorId", toggleSupervisorStatus);
-router.patch("/toggle-status/:id", toggleSupervisorStatus);
-router.patch("/toggle-supervisor/:supervisorId", toggleSupervisorStatus);
-router.patch("/toggle-status", toggleSupervisorStatus); // Fallback idan an turo id ta req.body
-router.get("/my-state-target", leaderController.getMyStateTarget);
-
-// 5. REPORTS & EXPORTS
-router.get("/download-full-report", downloadSupervisorReport);
-router.get("/download-report", downloadSupervisorReport);
-router.get("/report/:supervisorId", downloadSupervisorReport);
+// ==========================================
+// 4. LIVE AUDIT & REPORTS
+// ==========================================
+router.get("/download-full-report", safeLeader("downloadNationalReport"));
+router.get("/download-report", safeLeader("downloadNationalReport"));
 
 module.exports = router;
