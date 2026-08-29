@@ -31,12 +31,7 @@ exports.getSupervisorDashboard = async (req, res) => {
       `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
     ).trim();
 
-    // 1. NEMO AGENTS TA DUKKAN HANYOYI 5:
-    // (a) assignedSupervisor ID
-    // (b) referredBy da yayi daidai da Ref Code
-    // (c) referredBy da yayi daidai da Lambar Waya
-    // (d) supervisorId field
-    // (e) LGA da State matching
+    // Faɗaɗa binciken da zai kwaso dukkan Agents na wannan LGA ba tare da matsalar Case-Sensitivity ko Sarari ba
     const agents = await User.find({
       _id: { $ne: supervisor._id },
       $or: [
@@ -140,7 +135,7 @@ exports.getSupervisorDashboard = async (req, res) => {
     let activityLogs = [];
     if (Activity) {
       activityLogs = await Activity.find({
-        $or: [{ lga: myLga }, { user: supervisor._id }, { staffId: supervisor._id }],
+        $or: [{ lga: new RegExp(`^${myLga}$`, "i") }, { user: supervisor._id }, { staffId: supervisor._id }],
       })
         .sort({ createdAt: -1 })
         .limit(30)
