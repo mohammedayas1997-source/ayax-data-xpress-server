@@ -32,27 +32,21 @@ router.use(
   )
 );
 
-// 2. DASHBOARD, PROFILE & TARGETS TELEMETRY
+// 2. DASHBOARD, PROFILE, MY TARGET & LOGS (REAL-TIME TELEMETRY)
 router.get("/dashboard", safeSup("getSupervisorDashboard"));
 router.get("/profile", safeSup("getSupervisorProfile"));
 router.get("/my-target", safeSup("getMyTarget"));
 router.get("/activity-logs", safeSup("getActivityLogs"));
 
-// 3. LGA AGENTS DIRECTORY
+// 3. LGA AGENTS DIRECTORY (DUBA AGENTS A RAYE)
 router.get("/my-agents", safeSup("getMyAgents"));
 router.get("/agents", safeSup("getMyAgents")); // Fallback
 
-// 4. CREATE / ENROLL RETAIL AGENTS
+// 4. AGENT SIGNUP / ENROLLMENT (CONNECTS TO OFFICIAL REGISTRATION)
 router.post("/create-agent", safeSup("createAgent"));
 router.post("/enroll-agent", safeSup("createAgent"));
 
-// 5. AGENT TARGET ASSIGNMENT (AUTO-SPLIT & DIRECT BODY/PARAMS)
-router.post("/assign-agent-target", safeSup("assignAgentTarget"));
-router.patch("/assign-target/:agentId", safeSup("assignTargetToAgent"));
-router.put("/assign-target/:agentId", safeSup("assignTargetToAgent"));
-router.post("/assign-target/:agentId", safeSup("assignTargetToAgent"));
-
-// 6. AGENT REAL-TIME SALES & PERFORMANCE
+// 5. AGENT REAL-TIME SALES, FLOAT & PERFORMANCE MONITORING
 router.get("/agent-performance/:agentId", safeSup("getAgentSalesSummary"));
 router.get("/agent-sales/:agentId", safeSup("getAgentSalesSummary"));
 

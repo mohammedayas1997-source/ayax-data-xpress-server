@@ -497,3 +497,21 @@ exports.getAgentSalesSummary = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+// A lokacin da sabon Agent yayi Signup / Register:
+const refCode = req.body.referralCode || req.body.referredBy;
+if (refCode) {
+  const supervisor = await User.findOne({
+    $or: [
+      { referralCode: refCode },
+      { referralId: refCode },
+      { phone: refCode.replace(/[^0-9]/g, "") },
+    ],
+  });
+
+  if (supervisor) {
+    newAgent.assignedSupervisor = supervisor._id;
+    newAgent.assignedSupervisorName = supervisor.name;
+    newAgent.state = supervisor.state;
+    newAgent.lga = supervisor.lga;
+  }
+}
