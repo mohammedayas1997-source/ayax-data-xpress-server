@@ -162,15 +162,13 @@ const createDedicatedAccount = async (user) => {
   );
 };
 
-// @desc    Register / Signup User or Agent
-// @route   POST /api/v1/auth/register
+// @desc Register a new user
 exports.register = async (req, res) => {
   try {
     const {
       firstName,
       surname,
       otherName,
-      name,
       email,
       phone,
       password,
@@ -178,124 +176,60 @@ exports.register = async (req, res) => {
       state,
       lga,
       address,
-      supervisorId,
-      referralCode,
-      referredBy,
     } = req.body;
 
-    if (!phone || (!firstName && !name)) {
+    if (!firstName || !surname || !email || !password || !phone) {
       return res.status(400).json({
         success: false,
-        message: "First Name and Phone Number are required.",
+        message: "Please provide all required fields",
       });
     }
 
-    const cleanPhone = String(phone).trim();
-    const cleanEmail = email
-      ? String(email).toLowerCase().trim()
-      : `${cleanPhone}@ayaxdata.online`;
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanPhone = phone.trim();
 
-    // 1. Duba ko mai amfani ya riga ya wanzu
-    let existingUser = await User.findOne({
-      $or: [{ phone: cleanPhone }, { email: cleanEmail }],
+    const existingUser = await User.findOne({
+      $or: [{ email: cleanEmail }, { phone: cleanPhone }],
     });
 
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: "An account with this phone number or email already exists.",
+        message: "User already exists with this email or phone",
       });
     }
 
-    // 2. Nemo Supervisor ta hanyar Referral Code / Supervisor ID / Lambar Waya
-    const activeRef = String(referralCode || referredBy || supervisorId || "").trim();
-    let assignedSupId = null;
-    let assignedSupName = null;
-    let finalState = state || "Kano";
-    let finalLga = lga || "Ajingi";
-
-    if (activeRef) {
-      const supervisor = await User.findOne({
-        $or: [
-          { referralCode: new RegExp(`^${activeRef}$`, "i") },
-          { referralId: new RegExp(`^${activeRef}$`, "i") },
-          { phone: activeRef.replace(/[^0-9]/g, "") },
-        ],
-      });
-
-      if (supervisor) {
-        assignedSupId = supervisor._id;
-        assignedSupName = supervisor.name || `${supervisor.firstName || ""} ${supervisor.surname || ""}`.trim();
-        finalState = supervisor.state || finalState;
-        finalLga = supervisor.lga || finalLga;
-      }
+    let referralId = undefined;
+    if (["supervisor", "field_supervisor", "agent", "state_manager", "leader"].includes(role)) {
+      referralId = generateReferralId(firstName, surname);
     }
 
-    const first = firstName || (name ? name.trim().split(" ")[0] : "Retail");
-    const sur = surname || (name ? name.trim().split(" ").slice(1).join(" ") : "Agent");
-    const fullName = name || `${first} ${sur}`.trim();
-
-    // 3. Kirkirar sabon Agent a Database
-    const newUser = await User.create({
-      firstName: first,
-      surname: sur,
+    const user = await User.create({
+      firstName: firstName.trim(),
+      surname: surname.trim(),
       otherName: otherName || "",
-      name: fullName.toUpperCase().trim(),
+      name: `${firstName} ${surname}`.toUpperCase().trim(),
       email: cleanEmail,
       phone: cleanPhone,
-      password: password || "Password123@",
-      pin: "2026",
-      transactionPin: "2026",
-      role: role && role.toLowerCase() === "agent" ? "agent" : (activeRef ? "agent" : "user"),
-      state: finalState,
-      lga: finalLga,
-      address: address || `${finalLga} LGA`,
-      referredBy: activeRef || null,
-      supervisorId: activeRef || null,
-      assignedSupervisor: assignedSupId,
-      assignedSupervisorName: assignedSupName,
-      walletBalance: 0,
-      balance: 0,
-      isSuspended: false,
-      isVerified: true,
-      status: "active",
-      targets: {
-        dataGoal: 0,
-        airtimeGoal: 0,
-        currentMonth: "August 2026",
-      },
+      password,
+      role: role || "user",
+      referralId,
+      state: state || "Kano",
+      lga: lga || "Central",
+      address,
     });
 
-    // 4. Activity Log
-    if (Activity && assignedSupId) {
-      await Activity.create({
-        staffId: assignedSupId,
-        user: assignedSupId,
-        lga: finalLga,
-        state: finalState,
-        action: "AGENT_REGISTERED",
-        details: `Retail Agent ${newUser.name} (${cleanPhone}) registered under LGA supervision.`,
-        targetUser: newUser._id,
-      }).catch(() => {});
+    try {
+      const updatedUser = await createDedicatedAccount(user);
+      await sendWelcomeEmail(updatedUser);
+      return sendToken(updatedUser, 201, res);
+    } catch (paystackError) {
+      await sendWelcomeEmail(user);
+      return sendToken(user, 201, res);
     }
-
-    const token = typeof newUser.getSignedJwtToken === "function" 
-      ? newUser.getSignedJwtToken() 
-      : "sample-token-" + newUser._id;
-
-    return res.status(201).json({
-      success: true,
-      message: "Registration successful!",
-      token,
-      user: newUser,
-      data: newUser,
-    });
   } catch (error) {
-    console.error("Register Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Registration failed.",
-    });
+    console.error("Critical Registration Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
