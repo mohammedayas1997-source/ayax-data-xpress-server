@@ -722,7 +722,7 @@ exports.getSuperLeaderDashboard = async (req, res) => {
     const myState = user?.state || "Kano";
     const stateRegex = new RegExp(`^${myState.trim()}$`, "i");
 
-    // 1. Kwaso dukkan Supervisors da ke wannan jihar
+    // 1. Kwaso dukkan Supervisors na jihar
     const supervisors = await User.find({
       role: { $in: ["supervisor", "field_supervisor"] },
       state: stateRegex,
@@ -731,7 +731,7 @@ exports.getSuperLeaderDashboard = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    // 2. Kwaso dukkan Agents da ke wannan jihar
+    // 2. Kwaso dukkan Agents na jihar
     const agents = await User.find({
       role: "agent",
       state: stateRegex,
@@ -740,13 +740,23 @@ exports.getSuperLeaderDashboard = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    // 3. Ƙirga team size da agents ga kowane supervisor
+    // 3. Lissafa ainihin Data da Airtime da aka sayar a jihar (Real Sales)
+    let actualStateDataSold = 0;
+    let actualStateAirtimeSold = 0;
+
     const supervisorsWithTeam = supervisors.map((sup) => {
       const team = agents.filter(
         (a) =>
           String(a.assignedSupervisor) === String(sup._id) ||
           (a.lga && sup.lga && a.lga.toLowerCase() === sup.lga.toLowerCase())
       );
+
+      const supDataSold = Number(sup.dataVolumeSold || sup.dataSold || 0);
+      const supAirtimeSold = Number(sup.airtimeSold || 0);
+
+      actualStateDataSold += supDataSold;
+      actualStateAirtimeSold += supAirtimeSold;
+
       return {
         ...sup,
         teamSize: team.length,
@@ -754,10 +764,20 @@ exports.getSuperLeaderDashboard = async (req, res) => {
         dataGoal: sup.targets?.dataGoal || 0,
         airtimeGoal: sup.targets?.airtimeGoal || 0,
         agentGoal: sup.targets?.agentGoal || 10,
+        dataSold: supDataSold,
+        airtimeSold: supAirtimeSold,
       };
     });
 
-    // 4. Activity logs na jihar
+    // Tara tallace-tallacen agents da basu da supervisor
+    agents.forEach((ag) => {
+      if (!ag.assignedSupervisor) {
+        actualStateDataSold += Number(ag.dataVolumeSold || ag.dataSold || 0);
+        actualStateAirtimeSold += Number(ag.airtimeSold || 0);
+      }
+    });
+
+    // 4. Activity logs
     let activityLogs = [];
     if (Activity) {
       activityLogs = await Activity.find({
@@ -780,8 +800,8 @@ exports.getSuperLeaderDashboard = async (req, res) => {
         networkStats: {
           totalSupervisors: supervisors.length,
           totalAgents: agents.length,
-          overallDataSold: user?.walletBalance || 0,
-          overallAirtimeSold: 0,
+          overallDataSold: actualStateDataSold, // Yanzu zai dawo 0 GB idan ba a sayar ba
+          overallAirtimeSold: actualStateAirtimeSold,
         },
       },
     });
