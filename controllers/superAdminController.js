@@ -5,11 +5,42 @@ const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const Notification = require("../models/Notification");
-const NIMCRequest = require("../models/NIMCRequest");
-const BVNRequest = require("../models/BVNRequest");
-const DataPlan = require("../models/DataPlan");
-const NIMCPrice = require("../models/NIMCPrice");
-const BVNPrice = require("../models/BVNPrice");
+
+// DYNAMIC MODEL LOADERS (Domin kariya daga missing files)
+let NIMCRequest;
+try {
+  NIMCRequest = require("../models/NIMCRequest");
+} catch (e) {
+  NIMCRequest = null;
+}
+
+let BVNRequest;
+try {
+  BVNRequest = require("../models/BVNRequest");
+} catch (e) {
+  BVNRequest = null;
+}
+
+let DataPlan;
+try {
+  DataPlan = require("../models/DataPlan");
+} catch (e) {
+  DataPlan = null;
+}
+
+let NIMCPrice;
+try {
+  NIMCPrice = require("../models/NIMCPrice");
+} catch (e) {
+  NIMCPrice = null;
+}
+
+let BVNPrice;
+try {
+  BVNPrice = require("../models/BVNPrice");
+} catch (e) {
+  BVNPrice = null;
+}
 
 // Ayax API Gateway Base Configuration
 const RAW_URL =
@@ -49,15 +80,18 @@ const sendNotification = async (
         date: new Date(),
         isRead: false,
       });
-      await user.save();
+      await user.save({ validateBeforeSave: false });
     }
 
     if (Notification) {
       await Notification.create({
         recipient: userId,
+        user: userId,
         title,
         message,
+        category: category.toUpperCase(),
         type: category.toLowerCase(),
+        isRead: false,
       }).catch(() => {});
     }
   } catch (error) {
@@ -74,6 +108,8 @@ const findUserByIdentifier = async (identifier, session = null) => {
       { _id: mongoose.Types.ObjectId.isValid(cleanId) ? cleanId : null },
       { email: cleanId.toLowerCase() },
       { phone: cleanId },
+      { phone: cleanId.replace(/^0/, "+234") },
+      { phone: cleanId.replace(/^\+234/, "0") },
       { username: cleanId.toLowerCase() },
     ],
   };
@@ -90,14 +126,15 @@ exports.getGlobalDataOverview = async (req, res) => {
       totalUsers,
       totalAgents,
       totalSupervisors,
-      totalLeaders,
+      totalStateManagers,
+      totalDirectors,
       totalAdmins,
       totalSuperAdmins,
       successfulTransactions,
       failedTransactions,
       refundedTransactions,
       revenueAgg,
-      pendingRefunds,
+      pendingRefundsCount,
       systemWalletLiabilities,
       pendingNIMC,
       pendingBVN,
@@ -106,8 +143,9 @@ exports.getGlobalDataOverview = async (req, res) => {
     ] = await Promise.all([
       User.countDocuments({ role: "user" }),
       User.countDocuments({ role: "agent" }),
-      User.countDocuments({ role: "supervisor" }),
-      User.countDocuments({ role: "leader" }),
+      User.countDocuments({ role: { $in: ["supervisor", "field_supervisor"] } }),
+      User.countDocuments({ role: { $in: ["leader", "state_manager"] } }),
+      User.countDocuments({ role: { $in: ["national_sales_director", "super_leader"] } }),
       User.countDocuments({ role: "admin" }),
       User.countDocuments({ role: "superadmin" }),
       Transaction.countDocuments({ status: { $in: ["success", "completed"] } }),
@@ -119,8 +157,9 @@ exports.getGlobalDataOverview = async (req, res) => {
       ]),
       Transaction.countDocuments({
         $or: [
-          { status: { $in: ["pending-refund", "failed"] }, isRefunded: false },
+          { status: "pending-refund" },
           { status: "refund_requested" },
+          { refundReason: { $exists: true, $ne: "" }, status: { $ne: "refunded" } },
         ],
       }),
       User.aggregate([
@@ -133,10 +172,10 @@ exports.getGlobalDataOverview = async (req, res) => {
           },
         },
       ]),
-      NIMCRequest.countDocuments({ status: "pending" }),
-      BVNRequest.countDocuments({ status: "pending" }),
-      NIMCPrice.find().lean(),
-      BVNPrice.find().lean(),
+      NIMCRequest ? NIMCRequest.countDocuments({ status: "pending" }) : 0,
+      BVNRequest ? BVNRequest.countDocuments({ status: "pending" }) : 0,
+      NIMCPrice ? NIMCPrice.find().lean() : [],
+      BVNPrice ? BVNPrice.find().lean() : [],
     ]);
 
     let gatewayBalance = "Online";
@@ -155,14 +194,18 @@ exports.getGlobalDataOverview = async (req, res) => {
     }
 
     const pricesMap = {};
-    nimcPrices.forEach((p) => {
-      if (p.serviceId) pricesMap[p.serviceId] = p.amount;
-      if (p.serviceType) pricesMap[p.serviceType] = p.amount;
-    });
-    bvnPrices.forEach((p) => {
-      if (p.serviceId) pricesMap[p.serviceId] = p.amount;
-      if (p.serviceType) pricesMap[p.serviceType] = p.amount;
-    });
+    if (Array.isArray(nimcPrices)) {
+      nimcPrices.forEach((p) => {
+        if (p.serviceId) pricesMap[p.serviceId] = p.amount;
+        if (p.serviceType) pricesMap[p.serviceType] = p.amount;
+      });
+    }
+    if (Array.isArray(bvnPrices)) {
+      bvnPrices.forEach((p) => {
+        if (p.serviceId) pricesMap[p.serviceId] = p.amount;
+        if (p.serviceType) pricesMap[p.serviceType] = p.amount;
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -174,17 +217,18 @@ exports.getGlobalDataOverview = async (req, res) => {
         successfulTransactions,
         failedTransactions,
         refundedTransactions,
-        pendingRefunds,
+        pendingRefunds: pendingRefundsCount,
         pendingNIMC,
         pendingBVN,
         totalUsers,
         totalAgents,
-        totalSupervisors: totalSupervisors + totalLeaders,
-        totalLeaders,
+        totalSupervisors,
+        totalLeaders: totalStateManagers,
+        totalDirectors,
         totalAdmins,
         totalSuperAdmins,
         totalPlatformAccounts:
-          totalUsers + totalAgents + totalSupervisors + totalLeaders + totalAdmins + totalSuperAdmins,
+          totalUsers + totalAgents + totalSupervisors + totalStateManagers + totalDirectors + totalAdmins + totalSuperAdmins,
       },
       prices: pricesMap,
     });
@@ -202,7 +246,115 @@ exports.getGlobalDataOverview = async (req, res) => {
 exports.getStats = exports.getGlobalDataOverview;
 
 // =========================================================================
-// 2. ALL COMPANY STAFF & USERS DIRECTORATE
+// 2. DIRECT USER CREATION & STAFF APPOINTMENT
+// =========================================================================
+
+exports.createUser = async (req, res) => {
+  try {
+    const {
+      firstName,
+      surname,
+      name,
+      email,
+      phone,
+      password,
+      role,
+      state,
+      lga,
+      walletBalance,
+      supervisorId,
+    } = req.body;
+
+    if (!phone || (!firstName && !name)) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "First Name and Phone Number are required.",
+      });
+    }
+
+    const cleanPhone = String(phone).trim();
+    const cleanEmail = email
+      ? String(email).toLowerCase().trim()
+      : `${cleanPhone}@ayaxdata.online`;
+
+    let existingUser = await User.findOne({
+      $or: [{ phone: cleanPhone }, { email: cleanEmail }],
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "An account with this phone number or email already exists.",
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password || "Password123@", salt);
+    const first = firstName || (name ? name.split(" ")[0] : "Staff");
+    const sur = surname || (name ? name.split(" ").slice(1).join(" ") : "Member");
+    const fullName = name || `${first} ${sur}`.trim();
+    const initialBal = Number(walletBalance || 0);
+
+    const newUser = await User.create({
+      firstName: first,
+      surname: sur,
+      name: fullName.toUpperCase(),
+      email: cleanEmail,
+      phone: cleanPhone,
+      password: hashedPassword,
+      role: String(role || "agent").toLowerCase().trim(),
+      state: state || "Kano",
+      lga: lga || "Ajingi",
+      walletBalance: initialBal,
+      balance: initialBal,
+      assignedSupervisor: supervisorId || undefined,
+      pin: "2026",
+      transactionPin: "2026",
+      isSuspended: false,
+      isVerified: true,
+      status: "active",
+      targets: {
+        dataGoal: 500,
+        agentGoal: 10,
+        airtimeGoal: 0,
+        currentMonth: "August 2026",
+      },
+    });
+
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        user: req.user._id,
+        staffId: req.user._id,
+        actorRole: "SUPERADMIN",
+        action: "USER_PROVISIONED_BY_SUPERADMIN",
+        category: "ADMIN_CONTROL",
+        details: `SuperAdmin provisioned ${fullName} (${cleanPhone}) as ${newUser.role.toUpperCase()}`,
+        targetUser: newUser._id,
+      }).catch(() => {});
+    }
+
+    return res.status(201).json({
+      success: true,
+      status: "success",
+      message: `Account successfully provisioned for ${fullName} as ${newUser.role.toUpperCase()}.`,
+      data: newUser,
+      user: newUser,
+    });
+  } catch (error) {
+    console.error("createUser Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to create and save user in database.",
+      error: error.message,
+    });
+  }
+};
+
+// =========================================================================
+// 3. ALL COMPANY STAFF & USERS DIRECTORATE
 // =========================================================================
 
 exports.getAllUsers = async (req, res) => {
@@ -211,7 +363,16 @@ exports.getAllUsers = async (req, res) => {
     const query = {};
 
     if (role && role !== "all") {
-      query.role = role.toLowerCase().trim();
+      const r = role.toLowerCase().trim();
+      if (r === "supervisor") {
+        query.role = { $in: ["supervisor", "field_supervisor"] };
+      } else if (r === "leader" || r === "state_manager") {
+        query.role = { $in: ["leader", "state_manager"] };
+      } else if (r === "national_sales_director" || r === "super_leader") {
+        query.role = { $in: ["national_sales_director", "super_leader"] };
+      } else {
+        query.role = r;
+      }
     }
 
     if (search) {
@@ -252,43 +413,200 @@ exports.getAllUsers = async (req, res) => {
 };
 
 // =========================================================================
-// 3. ALL COMPANY SERVICES & TARIFFS VIEWER
+// 4. REFUND DISPUTE QUEUE & APPROVAL ENGINE
 // =========================================================================
 
-exports.getAllCompanyServices = async (req, res) => {
+exports.getRefundRequests = async (req, res) => {
   try {
-    const [nimcList, bvnList, dataList] = await Promise.all([
-      NIMCPrice.find().lean(),
-      BVNPrice.find().lean(),
-      DataPlan.find().sort({ network: 1, userPrice: 1 }).lean(),
-    ]);
+    const requests = await Transaction.find({
+      $or: [
+        { status: "pending-refund" },
+        { status: "refund_requested" },
+        { refundReason: { $exists: true, $ne: "" }, status: { $ne: "refunded" } },
+      ],
+    })
+      .populate("user", "name firstName surname phone email walletBalance")
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
 
     return res.status(200).json({
       success: true,
       status: "success",
-      data: {
-        nimcServices: nimcList,
-        bvnServices: bvnList,
-        dataPlans: dataList,
-      },
+      count: requests.length,
+      requests,
+      data: requests,
     });
   } catch (error) {
-    console.error("getAllCompanyServices Error:", error);
+    console.error("getRefundRequests Error:", error);
     return res.status(500).json({
       success: false,
       status: "failed",
-      message: "Failed to fetch company services.",
+      message: "Failed to fetch refund queue.",
+      error: error.message,
+    });
+  }
+};
+
+exports.approveRefund = async (req, res) => {
+  try {
+    const { transactionId, reference, beneficiary, refundAmount, reason } = req.body;
+    const superAdminId = req.user?._id || req.user?.id;
+
+    let targetTx = null;
+    if (transactionId && mongoose.Types.ObjectId.isValid(transactionId)) {
+      targetTx = await Transaction.findById(transactionId);
+    } else if (reference) {
+      targetTx = await Transaction.findOne({
+        $or: [{ reference }, { transactionId: reference }],
+      });
+    }
+
+    const targetUserIdentifier = beneficiary || targetTx?.user;
+    const user = await findUserByIdentifier(targetUserIdentifier);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        status: "failed",
+        message: "Beneficiary user account not found.",
+      });
+    }
+
+    const amount = Number(refundAmount || targetTx?.amount || 0);
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Invalid refund amount.",
+      });
+    }
+
+    const oldBal = Number(user.walletBalance ?? user.balance ?? 0);
+    const newBal = Number((oldBal + amount).toFixed(2));
+
+    user.walletBalance = newBal;
+    user.balance = newBal;
+    await user.save({ validateBeforeSave: false });
+
+    if (targetTx) {
+      targetTx.status = "refunded";
+      targetTx.isRefunded = true;
+      targetTx.refundReason = reason || "SuperAdmin Approved Refund";
+      targetTx.refundedBy = superAdminId;
+      targetTx.refundedAt = new Date();
+      await targetTx.save({ validateBeforeSave: false });
+    }
+
+    const refCode = `REFUND-${Date.now()}`;
+    await Transaction.create({
+      user: user._id,
+      userId: user._id,
+      transactionId: `TXN-${refCode}`,
+      reference: refCode,
+      type: "refund",
+      category: "CREDIT",
+      amount: amount,
+      oldBalance: oldBal,
+      newBalance: newBal,
+      status: "success",
+      details: `Executive Refund Disbursed for ${targetTx?.reference || "Disputed Transaction"}`,
+      refundReason: reason || "Approved by SuperAdmin",
+      requestedBy: superAdminId,
+    });
+
+    if (Activity && superAdminId) {
+      await Activity.create({
+        user: superAdminId,
+        staffId: superAdminId,
+        actorRole: "SUPERADMIN",
+        action: "REFUND_APPROVED",
+        category: "FINANCIAL",
+        details: `Approved refund of ₦${amount.toLocaleString()} to ${user.phone || user.email}`,
+        targetUser: user._id,
+      }).catch(() => {});
+    }
+
+    await sendNotification(
+      user._id,
+      "Refund Approved & Credited 💳",
+      `Your refund claim of ₦${amount.toLocaleString()} has been approved. New Wallet Balance: ₦${newBal.toLocaleString()}`,
+      "REFUND"
+    );
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: `₦${amount.toLocaleString()} successfully credited back to ${user.phone || user.email}.`,
+      newBalance: newBal,
+    });
+  } catch (error) {
+    console.error("approveRefund Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to approve and execute refund.",
       error: error.message,
     });
   }
 };
 
 // =========================================================================
-// 4. DATA PACKAGES MATRIX (GET ALL, CREATE, UPDATE, DELETE)
+// 5. ALL COMPANY TRANSACTIONS (AUDIT TRAIL)
+// =========================================================================
+
+exports.getAllTransactions = async (req, res) => {
+  try {
+    const { limit = 150, status, search } = req.query;
+    const query = {};
+
+    if (status && status !== "all") {
+      query.status = status.toLowerCase().trim();
+    }
+
+    if (search) {
+      const q = String(search).trim();
+      query.$or = [
+        { reference: { $regex: q, $options: "i" } },
+        { transactionId: { $regex: q, $options: "i" } },
+        { recipient: { $regex: q, $options: "i" } },
+        { "details.phone": { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const transactions = await Transaction.find(query)
+      .populate("user", "name firstName surname phone email role lga state")
+      .sort({ createdAt: -1 })
+      .limit(Number(limit))
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      count: transactions.length,
+      transactions,
+      data: transactions,
+    });
+  } catch (error) {
+    console.error("getAllTransactions Error:", error);
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to retrieve transactions.",
+      error: error.message,
+    });
+  }
+};
+
+// =========================================================================
+// 6. DATA PACKAGES MATRIX (GET ALL, CREATE, UPDATE, DELETE)
 // =========================================================================
 
 exports.getAllDataPlans = async (req, res) => {
   try {
+    if (!DataPlan) {
+      return res.status(200).json({ success: true, count: 0, data: [], plans: [] });
+    }
     const plans = await DataPlan.find().sort({ network: 1, userPrice: 1 }).lean();
 
     return res.status(200).json({
@@ -311,6 +629,9 @@ exports.getAllDataPlans = async (req, res) => {
 
 exports.setDataPlan = async (req, res) => {
   try {
+    if (!DataPlan) {
+      return res.status(500).json({ success: false, message: "DataPlan model not loaded." });
+    }
     const {
       network,
       name,
@@ -416,18 +737,10 @@ exports.deleteDataPlan = async (req, res) => {
 };
 
 // =========================================================================
-// 5. FINANCIAL DISPATCH: CREDIT, DEBIT & DIRECT OVERRIDE REFUNDS
+// 7. FINANCIAL DISPATCH: CREDIT, DEBIT & DIRECT OVERRIDE REFUNDS
 // =========================================================================
 
 exports.adjustUserWallet = async (req, res) => {
-  let session = null;
-  try {
-    session = await mongoose.startSession();
-    session.startTransaction();
-  } catch (err) {
-    session = null;
-  }
-
   try {
     const { userId, targetUserId, amount, reason, actionType } = req.body;
     const identifier = userId || targetUserId;
@@ -436,25 +749,16 @@ exports.adjustUserWallet = async (req, res) => {
     const action = String(actionType || "credit").toLowerCase();
 
     if (!identifier || isNaN(numericAmount) || numericAmount <= 0) {
-      if (session) {
-        await session.abortTransaction();
-        session.endSession();
-      }
       return res.status(400).json({
         success: false,
         status: "failed",
-        message:
-          "Please provide a valid user identifier (Phone, Email, or ID) and a positive numeric amount.",
+        message: "Provide a valid user identifier (Phone, Email, or ID) and positive amount.",
       });
     }
 
-    const user = await findUserByIdentifier(identifier, session);
+    const user = await findUserByIdentifier(identifier);
 
     if (!user) {
-      if (session) {
-        await session.abortTransaction();
-        session.endSession();
-      }
       return res.status(404).json({
         success: false,
         status: "failed",
@@ -469,12 +773,13 @@ exports.adjustUserWallet = async (req, res) => {
         : Number(Math.max(0, oldBal - numericAmount).toFixed(2));
 
     user.walletBalance = newBal;
-    if (user.balance !== undefined) user.balance = newBal;
-    await user.save(session ? { session } : undefined);
+    user.balance = newBal;
+    await user.save({ validateBeforeSave: false });
 
     const ref = `SUPER-ADJ-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
-    const adjustmentTxn = new Transaction({
+    await Transaction.create({
       user: user._id,
+      userId: user._id,
       transactionId: `TXN-SUPER-${Date.now()}`,
       reference: ref,
       type: action === "credit" ? "superadmin_credit" : "superadmin_debit",
@@ -483,58 +788,37 @@ exports.adjustUserWallet = async (req, res) => {
       oldBalance: oldBal,
       newBalance: newBal,
       status: "success",
-      details: `Admin ${action.toUpperCase()}: ${
-        reason || "Direct wallet balance adjustment"
-      }`,
+      details: `Admin ${action.toUpperCase()}: ${reason || "Direct wallet balance adjustment"}`,
       requestedBy: superAdminId,
     });
-    await adjustmentTxn.save(session ? { session } : undefined);
 
-    if (session) {
-      await session.commitTransaction();
-      session.endSession();
+    if (Activity && superAdminId) {
+      await Activity.create({
+        user: superAdminId,
+        staffId: superAdminId,
+        actorRole: "SUPERADMIN",
+        action: action === "credit" ? "SUPERADMIN_WALLET_CREDIT" : "SUPERADMIN_WALLET_DEBIT",
+        category: "FINANCIAL",
+        details: `Admin performed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on user ${user.phone || user.email}. Reason: ${reason || "Manual balance override"}`,
+        targetUser: user._id,
+      }).catch(() => {});
     }
-
-    await Activity.create({
-      user: superAdminId,
-      staffId: superAdminId,
-      actorRole: "SUPERADMIN",
-      action:
-        action === "credit"
-          ? "SUPERADMIN_WALLET_CREDIT"
-          : "SUPERADMIN_WALLET_DEBIT",
-      category: "FINANCIAL",
-      details: `Admin performed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on user ${
-        user.phone || user.email
-      }. Reason: ${reason || "Manual balance override"}`,
-      targetUser: user._id,
-    }).catch(() => {});
 
     await sendNotification(
       user._id,
       action === "credit" ? "Wallet Credited by Admin 💰" : "Wallet Debited by Admin ⚠️",
-      `Your wallet balance has been ${
-        action === "credit" ? "credited" : "debited"
-      } with ₦${numericAmount.toLocaleString()}. Reason: ${
-        reason || "Administrative balance sync"
-      }. New Balance: ₦${newBal.toLocaleString()}`,
+      `Your wallet balance has been ${action === "credit" ? "credited" : "debited"} with ₦${numericAmount.toLocaleString()}. Reason: ${reason || "Administrative balance sync"}. New Balance: ₦${newBal.toLocaleString()}`,
       "FINANCIAL"
     );
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Successfully executed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on ${
-        user.phone || user.email
-      }.`,
+      message: `Successfully executed ${action.toUpperCase()} of ₦${numericAmount.toLocaleString()} on ${user.phone || user.email}.`,
       newBalance: newBal,
       reference: ref,
     });
   } catch (error) {
-    if (session && session.inTransaction()) {
-      await session.abortTransaction();
-      session.endSession();
-    }
     console.error("adjustUserWallet Error:", error);
     return res.status(500).json({
       success: false,
@@ -545,168 +829,10 @@ exports.adjustUserWallet = async (req, res) => {
   }
 };
 
-exports.processRefundSuperAdminOnly = async (req, res) => {
-  let session = null;
-  try {
-    session = await mongoose.startSession();
-    session.startTransaction();
-  } catch (err) {
-    session = null;
-  }
-
-  try {
-    const {
-      transactionId,
-      reference,
-      txRef,
-      targetUserId,
-      userId,
-      refundAmount,
-      amount,
-      reason,
-    } = req.body;
-    const superAdminId = req.user?._id || req.user?.id;
-
-    let txn = null;
-    const refKey = reference || txRef || transactionId;
-    if (refKey) {
-      txn = await Transaction.findOne({
-        $or: [
-          { _id: mongoose.Types.ObjectId.isValid(refKey) ? refKey : null },
-          { transactionId: refKey },
-          { reference: refKey },
-        ],
-      }).session(session);
-    }
-
-    const recipientIdentifier = targetUserId || userId || txn?.user;
-    if (!recipientIdentifier) {
-      if (session) {
-        await session.abortTransaction();
-        session.endSession();
-      }
-      return res.status(400).json({
-        success: false,
-        status: "failed",
-        message:
-          "Please provide a valid transaction reference or beneficiary phone/email.",
-      });
-    }
-
-    const user = await findUserByIdentifier(recipientIdentifier, session);
-
-    if (!user) {
-      if (session) {
-        await session.abortTransaction();
-        session.endSession();
-      }
-      return res.status(404).json({
-        success: false,
-        status: "failed",
-        message: "Beneficiary user account not found.",
-      });
-    }
-
-    const finalRefundAmount = Number(refundAmount || amount || txn?.amount || 0);
-    if (isNaN(finalRefundAmount) || finalRefundAmount <= 0) {
-      if (session) {
-        await session.abortTransaction();
-        session.endSession();
-      }
-      return res.status(400).json({
-        success: false,
-        status: "failed",
-        message: "Invalid refund amount provided.",
-      });
-    }
-
-    const oldBal = Number(user.walletBalance ?? user.balance ?? 0);
-    const newBal = Number((oldBal + finalRefundAmount).toFixed(2));
-
-    user.walletBalance = newBal;
-    if (user.balance !== undefined) user.balance = newBal;
-    await user.save(session ? { session } : undefined);
-
-    if (txn) {
-      txn.status = "refunded";
-      txn.isRefunded = true;
-      txn.refundReason = reason || "Direct executive refund override";
-      txn.refundedBy = superAdminId;
-      txn.refundedAt = new Date();
-      await txn.save(session ? { session } : undefined);
-    }
-
-    const refundRef = `SUPER-REF-${Date.now()}-${Math.floor(
-      100 + Math.random() * 900
-    )}`;
-    const refundLog = new Transaction({
-      user: user._id,
-      transactionId: `TXN-SUPER-REF-${Date.now()}`,
-      reference: refundRef,
-      type: "refund",
-      category: "CREDIT",
-      amount: finalRefundAmount,
-      oldBalance: oldBal,
-      newBalance: newBal,
-      status: "success",
-      details: `Executive Refund of ₦${finalRefundAmount.toLocaleString()} for ${
-        txn?.reference || "Manual Override"
-      }`,
-      refundReason: reason || "Executive Overrule",
-      requestedBy: superAdminId,
-    });
-    await refundLog.save(session ? { session } : undefined);
-
-    if (session) {
-      await session.commitTransaction();
-      session.endSession();
-    }
-
-    await Activity.create({
-      user: superAdminId,
-      staffId: superAdminId,
-      actorRole: "SUPERADMIN",
-      action: "SUPERADMIN_EXECUTIVE_REFUND",
-      category: "FINANCIAL",
-      details: `Executed refund of ₦${finalRefundAmount.toLocaleString()} to ${
-        user.phone || user.email
-      }`,
-      targetUser: user._id,
-    }).catch(() => {});
-
-    await sendNotification(
-      user._id,
-      "Executive Refund Credited 💰",
-      `An executive refund of ₦${finalRefundAmount.toLocaleString()} has been credited to your wallet balance. New Balance: ₦${newBal.toLocaleString()}`,
-      "REFUND"
-    );
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: `Executive refund of ₦${finalRefundAmount.toLocaleString()} successfully credited to ${
-        user.phone || user.email
-      }.`,
-      newBalance: newBal,
-      refundReference: refundRef,
-    });
-  } catch (error) {
-    if (session && session.inTransaction()) {
-      await session.abortTransaction();
-      session.endSession();
-    }
-    console.error("processRefundSuperAdminOnly Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Failed to execute executive refund override.",
-      error: error.message,
-    });
-  }
-};
+exports.processRefundSuperAdminOnly = exports.approveRefund;
 
 // =========================================================================
-// 6. ROLE MANAGEMENT & SECURITY OVERRIDES
+// 8. ROLE MANAGEMENT & SECURITY OVERRIDES
 // =========================================================================
 
 exports.changeUserRole = async (req, res) => {
@@ -719,7 +845,11 @@ exports.changeUserRole = async (req, res) => {
       "user",
       "agent",
       "supervisor",
+      "field_supervisor",
       "leader",
+      "state_manager",
+      "super_leader",
+      "national_sales_director",
       "customer_service",
       "customer_care",
       "support",
@@ -747,26 +877,24 @@ exports.changeUserRole = async (req, res) => {
 
     const previousRole = user.role;
     user.role = normalizedRole;
-    await user.save();
+    await user.save({ validateBeforeSave: false });
 
-    await Activity.create({
-      user: superAdminId,
-      staffId: superAdminId,
-      actorRole: "SUPERADMIN",
-      action: "USER_ROLE_PROMOTED_OR_DEMOTED",
-      category: "ADMIN_CONTROL",
-      details: `Changed role of user ${user.phone || user.email} from ${String(
-        previousRole
-      ).toUpperCase()} to ${normalizedRole.toUpperCase()}`,
-      targetUser: user._id,
-    }).catch(() => {});
+    if (Activity && superAdminId) {
+      await Activity.create({
+        user: superAdminId,
+        staffId: superAdminId,
+        actorRole: "SUPERADMIN",
+        action: "USER_ROLE_PROMOTED_OR_DEMOTED",
+        category: "ADMIN_CONTROL",
+        details: `Changed role of user ${user.phone || user.email} from ${String(previousRole).toUpperCase()} to ${normalizedRole.toUpperCase()}`,
+        targetUser: user._id,
+      }).catch(() => {});
+    }
 
     await sendNotification(
       user._id,
       "Account Role Updated 🎖️",
-      `Your platform account role has been updated from ${String(
-        previousRole
-      ).toUpperCase()} to ${normalizedRole.toUpperCase()}.`,
+      `Your platform account role has been updated from ${String(previousRole).toUpperCase()} to ${normalizedRole.toUpperCase()}.`,
       "SYSTEM"
     );
 
@@ -827,17 +955,19 @@ exports.forceResetUserSecurity = async (req, res) => {
       user.transactionPin = String(targetPin);
     }
 
-    await user.save();
+    await user.save({ validateBeforeSave: false });
 
-    await Activity.create({
-      user: superAdminId,
-      staffId: superAdminId,
-      actorRole: "SUPERADMIN",
-      action: "SECURITY_CREDENTIALS_OVERRIDDEN",
-      category: "SECURITY",
-      details: `Force-reset credentials for ${user.phone || user.email}`,
-      targetUser: user._id,
-    }).catch(() => {});
+    if (Activity && superAdminId) {
+      await Activity.create({
+        user: superAdminId,
+        staffId: superAdminId,
+        actorRole: "SUPERADMIN",
+        action: "SECURITY_CREDENTIALS_OVERRIDDEN",
+        category: "SECURITY",
+        details: `Force-reset credentials for ${user.phone || user.email}`,
+        targetUser: user._id,
+      }).catch(() => {});
+    }
 
     await sendNotification(
       user._id,
@@ -849,9 +979,7 @@ exports.forceResetUserSecurity = async (req, res) => {
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Security credentials successfully updated for user ${
-        user.phone || user.email
-      }.`,
+      message: `Security credentials successfully updated for user ${user.phone || user.email}.`,
     });
   } catch (error) {
     console.error("forceResetUserSecurity Error:", error);
@@ -882,26 +1010,24 @@ exports.toggleWalletLock = async (req, res) => {
 
     user.isSuspended = lockState;
     user.status = lockState ? "suspended" : "active";
-    await user.save();
+    await user.save({ validateBeforeSave: false });
 
-    await Activity.create({
-      user: superAdminId,
-      staffId: superAdminId,
-      actorRole: "SUPERADMIN",
-      action: lockState ? "ACCOUNT_LOCKED" : "ACCOUNT_UNLOCKED",
-      category: "SECURITY",
-      details: `${lockState ? "Locked" : "Unlocked"} user account ${
-        user.phone || user.email
-      }. Reason: ${reason || "Administrative inspection"}`,
-      targetUser: user._id,
-    }).catch(() => {});
+    if (Activity && superAdminId) {
+      await Activity.create({
+        user: superAdminId,
+        staffId: superAdminId,
+        actorRole: "SUPERADMIN",
+        action: lockState ? "ACCOUNT_LOCKED" : "ACCOUNT_UNLOCKED",
+        category: "SECURITY",
+        details: `${lockState ? "Locked" : "Unlocked"} user account ${user.phone || user.email}. Reason: ${reason || "Administrative inspection"}`,
+        targetUser: user._id,
+      }).catch(() => {});
+    }
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `User account is now ${
-        lockState ? "LOCKED / SUSPENDED" : "ACTIVE / UNLOCKED"
-      }.`,
+      message: `User account is now ${lockState ? "LOCKED / SUSPENDED" : "ACTIVE / UNLOCKED"}.`,
       isSuspended: user.isSuspended,
       accountStatus: user.status,
     });
@@ -917,7 +1043,7 @@ exports.toggleWalletLock = async (req, res) => {
 };
 
 // =========================================================================
-// 7. TARGET ASSIGNMENT (SUPERVISORS, AGENTS & LEADERS)
+// 9. TARGET ASSIGNMENT (NSD, SM, SUPERVISORS, AGENTS)
 // =========================================================================
 
 exports.assignTarget = async (req, res) => {
@@ -929,7 +1055,7 @@ exports.assignTarget = async (req, res) => {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Supervisor or Agent identifier is required.",
+        message: "Staff identifier is required.",
       });
     }
 
@@ -949,26 +1075,24 @@ exports.assignTarget = async (req, res) => {
     if (month) user.targets.currentMonth = String(month).trim();
 
     user.markModified("targets");
-    await user.save();
+    await user.save({ validateBeforeSave: false });
 
-    await Activity.create({
-      user: req.user._id,
-      staffId: req.user._id,
-      actorRole: "SUPERADMIN",
-      action: "SUPERADMIN_ASSIGN_TARGET",
-      category: "TARGET",
-      details: `Assigned monthly targets (${user.targets.dataGoal}GB Data, ${user.targets.agentGoal} Agents) to ${
-        user.phone || user.email
-      }`,
-      targetUser: user._id,
-    }).catch(() => {});
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        user: req.user._id,
+        staffId: req.user._id,
+        actorRole: "SUPERADMIN",
+        action: "SUPERADMIN_ASSIGN_TARGET",
+        category: "TARGET",
+        details: `Assigned monthly targets (${user.targets.dataGoal}GB Data, ${user.targets.agentGoal} Agents) to ${user.phone || user.email}`,
+        targetUser: user._id,
+      }).catch(() => {});
+    }
 
     await sendNotification(
       user._id,
       "Monthly Targets Assigned 🎯",
-      `Your performance quota for ${user.targets.currentMonth || "this month"} is set: ${
-        user.targets.dataGoal
-      }GB Data & ${user.targets.agentGoal} Agents goal.`,
+      `Your performance quota for ${user.targets.currentMonth || "this month"} is set: ${user.targets.dataGoal}GB Data & ${user.targets.agentGoal} Agents goal.`,
       "TARGET"
     );
 
@@ -990,13 +1114,12 @@ exports.assignTarget = async (req, res) => {
 };
 
 // =========================================================================
-// 8. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
+// 10. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
 // =========================================================================
 
 exports.broadcastNotification = async (req, res) => {
   try {
-    const { title, message, targetType, targetUserId, recipientId, category } =
-      req.body;
+    const { title, message, targetType, targetUserId, recipientId, category } = req.body;
     const superAdminId = req.user?._id || req.user?.id;
 
     if (!title || !message) {
@@ -1033,6 +1156,17 @@ exports.broadcastNotification = async (req, res) => {
       });
     }
 
+    if (Notification) {
+      await Notification.create({
+        title: title.trim(),
+        message: message.trim(),
+        category: String(category || "BROADCAST").toUpperCase(),
+        isBroadcast: true,
+        target: "all",
+        createdAt: new Date(),
+      }).catch(() => {});
+    }
+
     const updateResult = await User.updateMany(
       { isSuspended: { $ne: true } },
       {
@@ -1053,14 +1187,16 @@ exports.broadcastNotification = async (req, res) => {
       }
     );
 
-    await Activity.create({
-      user: superAdminId,
-      staffId: superAdminId,
-      actorRole: "SUPERADMIN",
-      action: "BROADCAST_NOTIFICATION_DISPATCHED",
-      category: "COMMUNICATION",
-      details: `Broadcast alert: "${title}" delivered to ${updateResult.modifiedCount} accounts`,
-    }).catch(() => {});
+    if (Activity && superAdminId) {
+      await Activity.create({
+        user: superAdminId,
+        staffId: superAdminId,
+        actorRole: "SUPERADMIN",
+        action: "BROADCAST_NOTIFICATION_DISPATCHED",
+        category: "COMMUNICATION",
+        details: `Broadcast alert: "${title}" delivered to ${updateResult.modifiedCount} accounts`,
+      }).catch(() => {});
+    }
 
     return res.status(200).json({
       success: true,
@@ -1081,14 +1217,7 @@ exports.broadcastNotification = async (req, res) => {
 
 exports.dispatchDataBundle = async (req, res) => {
   try {
-    const {
-      network,
-      planType,
-      planCode,
-      price,
-      recipients,
-      sendToAllUsers,
-    } = req.body;
+    const { network, planCode, price, recipients, sendToAllUsers } = req.body;
 
     if (!network || !planCode || price === undefined) {
       return res.status(400).json({
@@ -1100,9 +1229,7 @@ exports.dispatchDataBundle = async (req, res) => {
 
     let targetPhones = [];
     if (sendToAllUsers) {
-      const allUsers = await User.find({ isSuspended: { $ne: true } }).select(
-        "phone"
-      );
+      const allUsers = await User.find({ isSuspended: { $ne: true } }).select("phone");
       targetPhones = allUsers.map((u) => u.phone).filter(Boolean);
     } else if (recipients) {
       targetPhones = (Array.isArray(recipients) ? recipients : recipients.split(","))
@@ -1110,24 +1237,22 @@ exports.dispatchDataBundle = async (req, res) => {
         .filter(Boolean);
     }
 
-    await Activity.create({
-      user: req.user._id,
-      staffId: req.user._id,
-      actorRole: "SUPERADMIN",
-      action: "BULK_DATA_CAMPAIGN_DISPATCHED",
-      category: "VTU",
-      details: `Dispatched campaign ${network.toUpperCase()} ${planCode} (₦${price}) to ${
-        targetPhones.length
-      } recipient numbers`,
-      targetUser: null,
-    }).catch(() => {});
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        user: req.user._id,
+        staffId: req.user._id,
+        actorRole: "SUPERADMIN",
+        action: "BULK_DATA_CAMPAIGN_DISPATCHED",
+        category: "VTU",
+        details: `Dispatched campaign ${network.toUpperCase()} ${planCode} (₦${price}) to ${targetPhones.length} recipient numbers`,
+        targetUser: null,
+      }).catch(() => {});
+    }
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Bulk package campaign for ${network.toUpperCase()} (${planCode}) queued for ${
-        targetPhones.length
-      } recipient(s).`,
+      message: `Bulk package campaign for ${network.toUpperCase()} (${planCode}) queued for ${targetPhones.length} recipient(s).`,
       recipientCount: targetPhones.length,
     });
   } catch (error) {
@@ -1142,7 +1267,7 @@ exports.dispatchDataBundle = async (req, res) => {
 };
 
 // =========================================================================
-// 9. GLOBAL PRICING & TARIFF ENGINE OVERRIDES
+// 11. GLOBAL PRICING & TARIFF ENGINE OVERRIDES
 // =========================================================================
 
 exports.setGlobalServicePrice = async (req, res) => {
@@ -1173,80 +1298,72 @@ exports.setGlobalServicePrice = async (req, res) => {
     }
 
     const priceNum = finalAmount;
-    const agentPriceNum =
-      agentPrice !== undefined ? Number(agentPrice) : priceNum;
+    const agentPriceNum = agentPrice !== undefined ? Number(agentPrice) : priceNum;
     const costPriceNum = costPrice !== undefined ? Number(costPrice) : 0;
 
     let updatedDoc = null;
 
     if (category.includes("nimc") || category.includes("nin")) {
-      updatedDoc = await NIMCPrice.findOneAndUpdate(
-        { $or: [{ serviceId: key }, { serviceType: key }] },
-        {
-          serviceId: key,
-          serviceType: key,
-          name: name || key,
-          amount: priceNum,
-          agentPrice: agentPriceNum,
-          costPrice: costPriceNum,
-          description: description || "",
-          isActive: true,
-          updatedBy: req.user._id,
-        },
-        { upsert: true, new: true, runValidators: true }
-      );
+      if (NIMCPrice) {
+        updatedDoc = await NIMCPrice.findOneAndUpdate(
+          { $or: [{ serviceId: key }, { serviceType: key }] },
+          {
+            serviceId: key,
+            serviceType: key,
+            name: name || key,
+            amount: priceNum,
+            agentPrice: agentPriceNum,
+            costPrice: costPriceNum,
+            description: description || "",
+            isActive: true,
+            updatedBy: req.user._id,
+          },
+          { upsert: true, new: true, runValidators: true }
+        );
+      }
     } else if (category.includes("bvn")) {
-      updatedDoc = await BVNPrice.findOneAndUpdate(
-        { $or: [{ serviceId: key }, { serviceType: key }] },
-        {
-          serviceId: key,
-          serviceType: key,
-          name: name || key,
-          amount: priceNum,
-          agentPrice: agentPriceNum,
-          costPrice: costPriceNum,
-          description: description || "",
-          isActive: true,
-          updatedBy: req.user._id,
-        },
-        { upsert: true, new: true, runValidators: true }
-      );
+      if (BVNPrice) {
+        updatedDoc = await BVNPrice.findOneAndUpdate(
+          { $or: [{ serviceId: key }, { serviceType: key }] },
+          {
+            serviceId: key,
+            serviceType: key,
+            name: name || key,
+            amount: priceNum,
+            agentPrice: agentPriceNum,
+            costPrice: costPriceNum,
+            description: description || "",
+            isActive: true,
+            updatedBy: req.user._id,
+          },
+          { upsert: true, new: true, runValidators: true }
+        );
+      }
     } else if (category.includes("data")) {
-      updatedDoc = await DataPlan.findOneAndUpdate(
-        { planCode: key },
-        {
-          userPrice: priceNum,
-          agentPrice: agentPriceNum,
-          costPrice: costPriceNum,
-          isActive: true,
-        },
-        { new: true }
-      );
-    } else {
-      updatedDoc = await NIMCPrice.findOneAndUpdate(
-        { $or: [{ serviceId: key }, { serviceType: key }] },
-        {
-          serviceId: key,
-          serviceType: key,
-          name: name || key,
-          amount: priceNum,
-          agentPrice: agentPriceNum,
-          costPrice: costPriceNum,
-          isActive: true,
-          updatedBy: req.user._id,
-        },
-        { upsert: true, new: true }
-      );
+      if (DataPlan) {
+        updatedDoc = await DataPlan.findOneAndUpdate(
+          { planCode: key },
+          {
+            userPrice: priceNum,
+            agentPrice: agentPriceNum,
+            costPrice: costPriceNum,
+            isActive: true,
+          },
+          { new: true }
+        );
+      }
     }
 
-    await Activity.create({
-      user: req.user._id,
-      staffId: req.user._id,
-      actorRole: "SUPERADMIN",
-      action: "GLOBAL_PRICING_UPDATED",
-      category: "ADMIN_CONTROL",
-      details: `Updated tariff [${key}] - User: ₦${priceNum}, Agent: ₦${agentPriceNum}, Cost: ₦${costPriceNum}`,
-    }).catch(() => {});
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        user: req.user._id,
+        staffId: req.user._id,
+        actorRole: "SUPERADMIN",
+        action: "GLOBAL_PRICING_UPDATED",
+        category: "ADMIN_CONTROL",
+        details: `Updated tariff [${key}] - User: ₦${priceNum}, Agent: ₦${agentPriceNum}, Cost: ₦${costPriceNum}`,
+      }).catch(() => {});
+    }
 
     return res.status(200).json({
       success: true,
@@ -1266,7 +1383,7 @@ exports.setGlobalServicePrice = async (req, res) => {
 };
 
 // =========================================================================
-// 10. FORENSIC AUDIT EXPUNGING
+// 12. FORENSIC AUDIT EXPUNGING
 // =========================================================================
 
 exports.expungeSystemAuditLogs = async (req, res) => {
@@ -1276,18 +1393,20 @@ exports.expungeSystemAuditLogs = async (req, res) => {
 
     const thresholdDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    const deleteResult = await Activity.deleteMany({
-      createdAt: { $lt: thresholdDate },
-    });
+    const deleteResult = Activity
+      ? await Activity.deleteMany({ createdAt: { $lt: thresholdDate } })
+      : { deletedCount: 0 };
 
-    await Activity.create({
-      user: req.user._id,
-      staffId: req.user._id,
-      actorRole: "SUPERADMIN",
-      action: "AUDIT_TRAIL_EXPUNGED",
-      category: "SYSTEM",
-      details: `Expunged ${deleteResult.deletedCount} activity records older than ${days} days`,
-    }).catch(() => {});
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        user: req.user._id,
+        staffId: req.user._id,
+        actorRole: "SUPERADMIN",
+        action: "AUDIT_TRAIL_EXPUNGED",
+        category: "SYSTEM",
+        details: `Expunged ${deleteResult.deletedCount} activity records older than ${days} days`,
+      }).catch(() => {});
+    }
 
     return res.status(200).json({
       success: true,

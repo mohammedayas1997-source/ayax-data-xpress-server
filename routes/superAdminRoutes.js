@@ -29,7 +29,7 @@ const safe = (fn, name) => {
     return res.status(501).json({
       success: false,
       status: "failed",
-      message: `Admin controller handler '${name}' is not implemented yet.`,
+      message: `SuperAdmin controller handler '${name}' is not implemented yet.`,
     });
   };
 };
@@ -57,7 +57,21 @@ router.get(
 );
 
 // ==========================================
-// 2. ALL COMPANY STAFF & USERS DIRECTORATE
+// 2. USER CREATION & STAFF APPOINTMENTS
+// ==========================================
+// Matches SuperAdminDashboard.js: Provision NSD, SM, Supervisor, Agent
+router.post(
+  "/create-user",
+  safe(superAdminController.createUser, "createUser")
+);
+
+router.post(
+  "/users/create",
+  safe(superAdminController.createUser, "createUser")
+);
+
+// ==========================================
+// 3. ALL COMPANY STAFF & USERS DIRECTORATE
 // ==========================================
 router.get(
   "/users",
@@ -70,7 +84,51 @@ router.get(
 );
 
 // ==========================================
-// 3. ALL COMPANY SERVICES & TARIFFS
+// 4. REFUND DISPUTES QUEUE & APPROVAL ENGINE
+// ==========================================
+// Matches SuperAdminDashboard.js: Refunds Tab & Approval Action
+router.get(
+  "/refund-requests",
+  safe(superAdminController.getRefundRequests, "getRefundRequests")
+);
+
+router.get(
+  "/refunds/pending",
+  safe(superAdminController.getRefundRequests, "getRefundRequests")
+);
+
+router.post(
+  "/refunds/approve",
+  safe(superAdminController.approveRefund, "approveRefund")
+);
+
+// Executive Override Refund
+router.post(
+  "/refunds/executive-override",
+  safe(superAdminController.approveRefund, "approveRefund")
+);
+
+router.post(
+  "/process-refund",
+  safe(superAdminController.approveRefund, "approveRefund")
+);
+
+// ==========================================
+// 5. ALL COMPANY TRANSACTIONS (AUDIT TRAIL)
+// ==========================================
+// Matches SuperAdminDashboard.js: Audit Stream Tab
+router.get(
+  "/transactions",
+  safe(superAdminController.getAllTransactions, "getAllTransactions")
+);
+
+router.get(
+  "/all-transactions",
+  safe(superAdminController.getAllTransactions, "getAllTransactions")
+);
+
+// ==========================================
+// 6. ALL COMPANY SERVICES & TARIFFS
 // ==========================================
 router.get(
   "/services",
@@ -83,7 +141,7 @@ router.get(
 );
 
 // ==========================================
-// 4. DATA PACKAGES MATRIX (GET, CREATE, UPDATE, DELETE)
+// 7. DATA PACKAGES MATRIX (GET, CREATE, UPDATE, DELETE)
 // ==========================================
 router.get(
   "/plans",
@@ -111,9 +169,8 @@ router.delete(
 );
 
 // ==========================================
-// 5. FINANCIAL DISPATCH & EXECUTIVE REFUNDS
+// 8. FINANCIAL DISPATCH (DIRECT LEDGER CREDIT/DEBIT)
 // ==========================================
-// Direct Wallet Credit / Debit
 router.post(
   "/wallet/adjust",
   safe(superAdminController.adjustUserWallet, "adjustUserWallet")
@@ -124,25 +181,8 @@ router.post(
   safe(superAdminController.adjustUserWallet, "adjustUserWallet")
 );
 
-// Executive Override Refund
-router.post(
-  "/refunds/executive-override",
-  safe(
-    superAdminController.processRefundSuperAdminOnly,
-    "processRefundSuperAdminOnly"
-  )
-);
-
-router.post(
-  "/process-refund",
-  safe(
-    superAdminController.processRefundSuperAdminOnly,
-    "processRefundSuperAdminOnly"
-  )
-);
-
 // ==========================================
-// 6. TARGET MANAGEMENT (SUPERVISORS, AGENTS & LEADERS)
+// 9. TARGET MANAGEMENT (NSD, SM, SUPERVISORS, AGENTS)
 // ==========================================
 router.post(
   "/assign-target",
@@ -150,7 +190,7 @@ router.post(
 );
 
 // ==========================================
-// 7. ROLE ELEVATION & SECURITY CONTROLS
+// 10. ROLE ELEVATION & SECURITY CONTROLS
 // ==========================================
 // Promote / Demote User Role
 router.patch(
@@ -166,21 +206,15 @@ router.post(
 // Force Override Password / PIN
 router.post(
   "/users/force-reset-security",
-  safe(
-    superAdminController.forceResetUserSecurity,
-    "forceResetUserSecurity"
-  )
+  safe(superAdminController.forceResetUserSecurity, "forceResetUserSecurity")
 );
 
 router.post(
   "/override-password",
-  safe(
-    superAdminController.forceResetUserSecurity,
-    "forceResetUserSecurity"
-  )
+  safe(superAdminController.forceResetUserSecurity, "forceResetUserSecurity")
 );
 
-// Lock / Unlock User Account
+// Lock / Unlock / Freeze User Account
 router.patch(
   "/users/toggle-lock",
   safe(superAdminController.toggleWalletLock, "toggleWalletLock")
@@ -192,14 +226,11 @@ router.post(
 );
 
 // ==========================================
-// 8. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
+// 11. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
 // ==========================================
 router.post(
   "/broadcast-notification",
-  safe(
-    superAdminController.broadcastNotification,
-    "broadcastNotification"
-  )
+  safe(superAdminController.broadcastNotification, "broadcastNotification")
 );
 
 router.post(
@@ -213,33 +244,24 @@ router.post(
 );
 
 // ==========================================
-// 9. GLOBAL PRICING & TARIFF MATRIX OVERRIDE
+// 12. GLOBAL PRICING & TARIFF MATRIX OVERRIDE
 // ==========================================
 router.post(
   "/pricing/set-global",
-  safe(
-    superAdminController.setGlobalServicePrice,
-    "setGlobalServicePrice"
-  )
+  safe(superAdminController.setGlobalServicePrice, "setGlobalServicePrice")
 );
 
 router.post(
   "/update-service-price",
-  safe(
-    superAdminController.setGlobalServicePrice,
-    "setGlobalServicePrice"
-  )
+  safe(superAdminController.setGlobalServicePrice, "setGlobalServicePrice")
 );
 
 // ==========================================
-// 10. FORENSIC AUDIT EXPUNGING
+// 13. FORENSIC AUDIT EXPUNGING
 // ==========================================
 router.delete(
   "/logs/expunge",
-  safe(
-    superAdminController.expungeSystemAuditLogs,
-    "expungeSystemAuditLogs"
-  )
+  safe(superAdminController.expungeSystemAuditLogs, "expungeSystemAuditLogs")
 );
 
 module.exports = router;
