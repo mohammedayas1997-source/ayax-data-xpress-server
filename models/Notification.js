@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const notificationSchema = new mongoose.Schema(
   {
-    // 1. Direct Target Mapping (Null if Global Broadcast)
+    // 1. Direct Target Mapping (Supports both recipient & user aliases)
     recipient: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -10,12 +10,35 @@ const notificationSchema = new mongoose.Schema(
       default: null,
     },
 
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      index: true,
+      default: null,
+    },
+
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    sender: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     // 2. Audience Segmentation & Scope
     target: {
       type: String,
-      enum: ["all", "user", "agent", "supervisor", "admin", "superadmin", "specific_users"],
       default: "all",
       index: true,
+    },
+
+    targetRole: {
+      type: String,
+      default: null,
     },
 
     targetUsers: [
@@ -24,6 +47,25 @@ const notificationSchema = new mongoose.Schema(
         ref: "User",
       },
     ],
+
+    // Geographic Target (State Manager & LGA Directives)
+    state: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    lga: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    isBroadcast: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
 
     // 3. Header & Content
     title: {
@@ -38,24 +80,18 @@ const notificationSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // 4. Visual Category & Priority Coding
+    body: {
+      type: String,
+      trim: true,
+    },
+
+    // 4. Visual Category & Priority Coding (Expanded to allow all dynamic types)
     category: {
       type: String,
-      enum: [
-        "ACCOUNT",
-        "CREDIT",
-        "DEBIT",
-        "REFUND",
-        "VTU_DISPATCH",
-        "ELECTRICITY_TOKEN",
-        "NIN_SERVICE",
-        "BVN_SERVICE",
-        "ADMIN_BROADCAST",
-        "SUPPORT",
-        "SYSTEM",
-      ],
       default: "SYSTEM",
       index: true,
+      uppercase: true,
+      trim: true,
     },
 
     priority: {
@@ -67,8 +103,13 @@ const notificationSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: ["info", "warning", "success", "danger", "wallet", "vtu", "system"],
       default: "info",
+    },
+
+    status: {
+      type: String,
+      enum: ["unread", "read", "pending", "sent", "archived"],
+      default: "unread",
     },
 
     // 5. In-App Navigation Action Routing
@@ -88,6 +129,11 @@ const notificationSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
       index: true,
+    },
+
+    read: {
+      type: Boolean,
+      default: false,
     },
 
     readAt: {
@@ -118,9 +164,8 @@ const notificationSchema = new mongoose.Schema(
 
     expiresAt: {
       type: Date,
-      index: { expireAfterSeconds: 0 }, // Automatic cleanup via MongoDB TTL index
+      index: { expireAfterSeconds: 0 },
       default: function () {
-        // Auto cleanup after 90 days if not specified
         return new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
       },
     },
@@ -132,9 +177,11 @@ const notificationSchema = new mongoose.Schema(
   }
 );
 
-// High-speed compound indexes for query execution
+// High-speed compound indexes for live query execution
 notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
+notificationSchema.index({ user: 1, isRead: 1, createdAt: -1 });
 notificationSchema.index({ isActive: 1, target: 1, createdAt: -1 });
+notificationSchema.index({ isBroadcast: 1, createdAt: -1 });
 notificationSchema.index({ category: 1, priority: 1, createdAt: -1 });
 notificationSchema.index({ "readBy.userId": 1, target: 1 });
 

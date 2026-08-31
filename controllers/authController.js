@@ -618,35 +618,97 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
-// =======================================
-// PAYSTACK WEBHOOK
-// =======================================
+// Models da ake bukata (Tabbatar kana da su a saman fayil din)
+const Transaction = require("../models/Transaction");
+let Notification;
+try {
+  Notification = require("../models/Notification");
+} catch (e) {
+  try {
+    Notification = require("../models/notificationModel");
+  } catch (err) {
+    Notification = null;
+  }
+}
 
+// =======================================
+// INGANNTACCEN PAYSTACK / MONNIFY WEBHOOK
+// =======================================
 exports.paystackWebhook = async (req, res) => {
   try {
     const event = req.body;
 
-    if (event.event === "charge.success") {
-      const { customer, amount } = event.data;
-      const customerEmail = customer.email;
-      const creditValue = amount / 100;
+    // Duba idan biya ya yi nasara (Paystack ko DVA Transfer)
+    if (
+      event.event === "charge.success" ||
+      event.event === "dedicated_account.assign.success" ||
+      event.eventType === "SUCCESSFUL_TRANSACTION"
+    ) {
+      const data = event.data || event.eventData || {};
+      const customerEmail = String(data.customer?.email || data.customerEmail || "").toLowerCase().trim();
+      const amountPaid = Number(data.amount || 0) / (event.event === "charge.success" ? 100 : 1);
+      const reference = data.reference || data.transactionReference || `FUND-${Date.now()}`;
 
-      await User.findOneAndUpdate(
-        { email: customerEmail },
-        {
-          $inc: {
-            walletBalance: creditValue,
-            balance: creditValue,
-          },
+      // 1. Nemo User a Database
+      const user = await User.findOne({
+        $or: [
+          { email: customerEmail },
+          { phone: customerEmail.split("@")[0] }
+        ]
+      });
+
+      if (user && amountPaid > 0) {
+        // Duba kada a saka kudi sau biyu (Idempotency Check)
+        const alreadyExists = await Transaction.findOne({ reference });
+        if (!alreadyExists) {
+          const previousBalance = Number(user.walletBalance || user.balance || 0);
+          const newBalance = previousBalance + amountPaid;
+
+          // 2. Sabunta Wallet Balance na User
+          user.walletBalance = newBalance;
+          user.balance = newBalance;
+          await user.save({ validateBeforeSave: false });
+
+          // 3. Kirkirar Record a Transaction History
+          await Transaction.create({
+            user: user._id,
+            userId: user._id,
+            type: "wallet_funding",
+            service: "Wallet Funding",
+            category: "WALLET",
+            amount: amountPaid,
+            previousBalance: previousBalance,
+            newBalance: newBalance,
+            reference: reference,
+            status: "success",
+            description: `Automated Wallet Deposit of ₦${amountPaid.toLocaleString()}`,
+            createdAt: new Date(),
+          });
+
+          // 4. Kirkirar Notification mai aiki
+          if (Notification) {
+            await Notification.create({
+              user: user._id,
+              recipient: user._id,
+              title: "Wallet Credit Alert 💳",
+              message: `Your wallet has been credited with ₦${amountPaid.toLocaleString()} via Automated Dedicated Transfer. New Balance: ₦${newBalance.toLocaleString()}.`,
+              category: "PAYMENT_SUCCESS",
+              isRead: false,
+              read: false,
+              status: "unread",
+              createdAt: new Date(),
+            });
+          }
+
+          console.log(`✅ [WALLET FUNDED]: ₦${amountPaid} credited to ${user.phone || user.email}. Ref: ${reference}`);
         }
-      );
-      console.log(`✅ Wallet funded: ${customerEmail} - ₦${creditValue}`);
+      }
     }
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ status: "success", message: "Webhook acknowledged" });
   } catch (error) {
-    console.error("❌ WEBHOOK ERROR:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    console.error("❌ WEBHOOK PROCESSING ERROR:", error);
+    return res.status(500).json({ status: "error", message: error.message });
   }
 };
 

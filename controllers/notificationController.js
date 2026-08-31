@@ -1,6 +1,13 @@
 const Notification = require("../models/Notification");
 const User = require("../models/User");
-const Activity = require("../models/Activity");
+
+// DYNAMIC ACTIVITY MODEL LOADER
+let Activity;
+try {
+  Activity = require("../models/Activity");
+} catch (e) {
+  Activity = null;
+}
 
 // Helper don kiran Socket instance idan yana aiki a server
 let getIO;
@@ -12,7 +19,7 @@ try {
 }
 
 /**
- * @desc    Get logged in user's notifications (Matches Frontend: NotificationScreen.js)
+ * @desc    Get logged in user's notifications (Daga User Array + Notification Collection + Webhook Alerts)
  * @route   GET /api/v1/notifications
  * @route   GET /api/v1/notifications/my-notifications
  * @access  Private (User)
@@ -20,7 +27,11 @@ try {
 exports.getMyNotifications = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
-    const user = await User.findById(userId).select("notifications role").lean();
+    const userRole = req.user.role || "user";
+    const userLga = req.user.lga || "";
+    const userState = req.user.state || "";
+
+    const user = await User.findById(userId).select("notifications role lga state").lean();
 
     if (!user) {
       return res.status(404).json({
@@ -30,42 +41,67 @@ exports.getMyNotifications = async (req, res) => {
       });
     }
 
-    // 1. Dauko personal notifications daga User document
-    let userDirectNotifications = user.notifications || [];
+    // 1. Dauko personal notifications daga User document array
+    let userDirectNotifications = (user.notifications || []).map((n) => ({
+      _id: n._id || n.id || Math.random().toString(),
+      id: n._id || n.id,
+      title: n.title || "Alert",
+      message: n.message || n.body || "",
+      category: n.category || "DIRECT",
+      type: n.type || "info",
+      actionRoute: n.actionRoute || null,
+      isRead: Boolean(n.isRead || n.read),
+      createdAt: n.createdAt || n.date || new Date(),
+      date: n.createdAt || n.date || new Date(),
+    }));
 
-    // 2. Dauko Active Broadcasts daga Notification Model
-    const broadcastQuery = {
-      isActive: true,
+    // 2. Dauko dukkan sanarwa daga Notification Collection (ciki har da na Webhook da Broadcasts)
+    const directAndBroadcastNotifications = await Notification.find({
       $or: [
         { recipient: userId },
+        { user: userId },
+        { userId: userId },
+        { isBroadcast: true },
+        { isGeneral: true },
         { target: "all" },
-        { target: user.role || "user" },
-        { recipient: null },
+        { target: userRole },
+        { targetRole: userRole },
+        ...(userLga ? [{ lga: new RegExp(`^${userLga}$`, "i") }] : []),
+        ...(userState ? [{ state: new RegExp(`^${userState}$`, "i") }] : []),
       ],
-    };
-
-    const globalBroadcasts = await Notification.find(broadcastQuery)
+    })
       .sort({ createdAt: -1 })
-      .limit(30)
+      .limit(50)
       .lean();
 
-    // 3. Hadawa da tsara su (Newest First)
-    const formattedBroadcasts = globalBroadcasts.map((b) => ({
+    // 3. Tsara su don su yi daidai da Frontend
+    const formattedCollectionNotifications = directAndBroadcastNotifications.map((b) => ({
       _id: b._id,
       id: b._id,
-      title: b.title,
-      message: b.message,
-      category: b.category || b.type || "BROADCAST",
+      title: b.title || "Notification",
+      message: b.message || b.body || "",
+      category: b.category || b.type || "SYSTEM_ALERT",
       type: b.type || "info",
       actionRoute: b.actionRoute || null,
       isRead: Array.isArray(b.readBy)
-        ? b.readBy.some((r) => String(r.userId) === String(userId))
-        : Boolean(b.isRead),
-      createdAt: b.createdAt || b.date,
-      date: b.createdAt || b.date,
+        ? b.readBy.some((r) => String(r.userId || r) === String(userId))
+        : Boolean(b.isRead || b.read),
+      createdAt: b.createdAt || b.date || new Date(),
+      date: b.createdAt || b.date || new Date(),
     }));
 
-    const combinedList = [...userDirectNotifications, ...formattedBroadcasts].sort(
+    // 4. Hadawa, Tace kwafi (Remove Duplicates), da Jerawa daga sabo zuwa tsoho
+    const allCombined = [...userDirectNotifications, ...formattedCollectionNotifications];
+    const uniqueMap = new Map();
+
+    allCombined.forEach((item) => {
+      const key = `${item.title}-${item.message}-${new Date(item.createdAt).getMinutes()}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, item);
+      }
+    });
+
+    const combinedList = Array.from(uniqueMap.values()).sort(
       (a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date)
     );
 
@@ -88,9 +124,10 @@ exports.getMyNotifications = async (req, res) => {
 };
 
 /**
- * @desc    Create and Send a Notification / Broadcast (Admin Only)
+ * @desc    Create and Send a Notification / Broadcast
+ * @route   POST /api/v1/notifications/send
  * @route   POST /api/v1/admin/send-notification
- * @access  Private/Admin
+ * @access  Private/Admin/Staff
  */
 exports.createNotification = async (req, res) => {
   try {
@@ -102,13 +139,17 @@ exports.createNotification = async (req, res) => {
       type,
       target,
       recipientId,
+      recipient,
       userId,
       actionRoute,
+      lga,
+      state,
+      targetRole,
     } = req.body;
 
     const finalTitle = String(title || "").trim();
     const finalMessage = String(message || body || "").trim();
-    const targetUserId = recipientId || userId || null;
+    const targetUserId = recipientId || recipient || userId || null;
 
     if (!finalTitle || !finalMessage) {
       return res.status(400).json({
@@ -121,34 +162,40 @@ exports.createNotification = async (req, res) => {
     const notificationPayload = {
       title: finalTitle,
       message: finalMessage,
-      category: String(category || "ADMIN_BROADCAST").toUpperCase(),
+      category: String(category || "GENERAL_NOTIFICATION").toUpperCase(),
       type: type || "info",
       target: target || (targetUserId ? "specific_users" : "all"),
       recipient: targetUserId,
+      user: targetUserId,
+      userId: targetUserId,
+      sender: req.user?._id || req.user?.id,
       actionRoute: actionRoute || null,
+      lga: lga || undefined,
+      state: state || undefined,
+      targetRole: targetRole || undefined,
+      isBroadcast: Boolean(!targetUserId),
       isRead: false,
+      read: false,
+      status: "unread",
       createdAt: new Date(),
       date: new Date(),
     };
 
-    // A. Idan sanarwa ce ta mutum daya (Single User)
+    // 1. Ajiye a Notification Collection
+    const createdNotification = await Notification.create(notificationPayload);
+
+    // 2. Ajiye a User array idan mutum daya ne
     if (targetUserId) {
       const recipientUser = await User.findById(targetUserId);
-      if (!recipientUser) {
-        return res.status(404).json({
-          success: false,
-          status: "failed",
-          message: "Recipient user not found.",
-        });
-      }
+      if (recipientUser) {
+        if (!recipientUser.notifications) recipientUser.notifications = [];
+        recipientUser.notifications.unshift(notificationPayload);
 
-      if (!recipientUser.notifications) recipientUser.notifications = [];
-      recipientUser.notifications.unshift(notificationPayload);
-
-      if (recipientUser.notifications.length > 100) {
-        recipientUser.notifications = recipientUser.notifications.slice(0, 100);
+        if (recipientUser.notifications.length > 100) {
+          recipientUser.notifications = recipientUser.notifications.slice(0, 100);
+        }
+        await recipientUser.save({ validateBeforeSave: false });
       }
-      await recipientUser.save();
 
       // Real-time socket dispatch
       try {
@@ -157,10 +204,7 @@ exports.createNotification = async (req, res) => {
         }
       } catch (sockErr) {}
     } else {
-      // B. Idan Broadcast ce ga kowa (Global Broadcast)
-      await Notification.create(notificationPayload);
-
-      // Tura wa dukkan users a array dinsu
+      // 3. Idan Broadcast ce ga kowa, tura a User arrays
       await User.updateMany(
         {},
         {
@@ -172,9 +216,8 @@ exports.createNotification = async (req, res) => {
             },
           },
         }
-      );
+      ).catch(() => {});
 
-      // Real-time broadcast socket dispatch
       try {
         if (typeof getIO === "function") {
           getIO("global-broadcast", notificationPayload);
@@ -182,23 +225,23 @@ exports.createNotification = async (req, res) => {
       } catch (sockErr) {}
     }
 
-    // Rubuta Activity Log
-    await Activity.create({
-      user: req.user._id,
-      staffId: req.user._id,
-      action: "SEND_NOTIFICATION",
-      category: "ADMIN_CONTROL",
-      details: `Dispatched Notification: "${finalTitle}" | Target: ${
-        targetUserId ? `User (${targetUserId})` : `Broadcast (${target || "ALL"})`
-      }`,
-      targetUser: targetUserId,
-    }).catch(() => {});
+    // Activity Log
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        user: req.user._id,
+        staffId: req.user._id,
+        action: "SEND_NOTIFICATION",
+        category: "ADMIN_CONTROL",
+        details: `Dispatched Notification: "${finalTitle}"`,
+        targetUser: targetUserId,
+      }).catch(() => {});
+    }
 
     return res.status(201).json({
       success: true,
       status: "success",
       message: "Notification sent successfully.",
-      data: notificationPayload,
+      data: createdNotification,
     });
   } catch (error) {
     console.error("Create Notification Error:", error);
@@ -251,17 +294,18 @@ exports.markAsRead = async (req, res) => {
     const notificationId = req.params.id;
     const userId = req.user._id || req.user.id;
 
-    // 1. Duba idan notification yana cikin User document
+    // 1. Duba a User document array
     await User.updateOne(
       { _id: userId, "notifications._id": notificationId },
-      { $set: { "notifications.$.isRead": true } }
+      { $set: { "notifications.$.isRead": true, "notifications.$.read": true } }
     );
 
-    // 2. Duba idan sanarwar Broadcast ce a Notification Model
+    // 2. Duba a Notification Model
     await Notification.updateOne(
-      { _id: notificationId, "readBy.userId": { $ne: userId } },
+      { _id: notificationId },
       {
-        $push: {
+        $set: { isRead: true, read: true, status: "read" },
+        $addToSet: {
           readBy: {
             userId: userId,
             readAt: new Date(),
@@ -296,13 +340,22 @@ exports.deleteNotification = async (req, res) => {
     const notificationId = req.params.id;
     const userId = req.user._id || req.user.id;
 
-    // Cire daga User notifications array
+    // Cire daga User array
     await User.updateOne(
       { _id: userId },
       { $pull: { notifications: { _id: notificationId } } }
     );
 
-    // Idan admin ne, zai iya goge Global Broadcast gaba daya
+    // Cire daga Collection idan admin ne ko nasa ne
+    await Notification.deleteOne({
+      _id: notificationId,
+      $or: [
+        { recipient: userId },
+        { user: userId },
+        { sender: userId }
+      ]
+    });
+
     if (req.user.role === "admin" || req.user.role === "superadmin") {
       await Notification.findByIdAndDelete(notificationId);
     }
