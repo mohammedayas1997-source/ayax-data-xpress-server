@@ -867,86 +867,186 @@ exports.getLiveAuditStream = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-// @desc    Assign / Deploy Targets to Supervisors, Agents, or LGAs (Single, Multi, or Auto-Split)
-// @route   POST /api/v1/leader/assign-target OR POST /api/v1/leader/deploy-targets
+/**
+ * @desc    Smart Target Engine: Auto-Split, Bulk LGA, Supervisor Customizer & Single Agent Dispatch
+ * @route   POST /api/v1/leader/assign-target
+ */
 exports.assignStateLeaderTarget = async (req, res) => {
   try {
     const {
-      category,
+      mode, // 'auto_split_state' | 'lga_split' | 'single_supervisor' | 'single_agent' | 'custom_bulk'
+      targetMonth,
+      month,
+      dataGoal = 0,
+      airtimeGoal = 0,
+      agentGoal = 10,
+      state,
+      lga,
+      supervisorId,
+      agentId,
       supervisorIds = [],
       agentIds = [],
-      dataGoal,
-      airtimeGoal,
-      agentGoal,
-      month,
-      targetMonth,
-      state,
-      lgas = [],
     } = req.body;
 
     const actorId = req.user?._id || req.user?.id;
     const finalMonth = month || targetMonth || "August 2026";
-    const dGoal = Number(dataGoal) || 0;
-    const aGoal = Number(airtimeGoal) || 0;
-    const agGoal = Number(agentGoal) || 0;
+    const myState = String(state || req.user?.state || "Kano").trim();
 
-    const targetPayload = {
-      dataGoal: dGoal,
-      airtimeGoal: aGoal,
-      agentGoal: agGoal,
-      currentMonth: finalMonth,
-      assignedBy: actorId,
-    };
+    // ----------------------------------------------------
+    // CASE 1: SINGLE AGENT DISPATCH (Turawa Agent Guda Daya)
+    // ----------------------------------------------------
+    if (mode === "single_agent" || agentId) {
+      const targetAgentId = agentId || req.body.agentId;
+      const agent = await User.findById(targetAgentId);
+      if (!agent) return res.status(404).json({ success: false, message: "Retail Agent not found" });
 
-    let targetIds = [];
-    if (Array.isArray(supervisorIds) && supervisorIds.length > 0) {
-      targetIds = [...supervisorIds];
-    }
-    if (Array.isArray(agentIds) && agentIds.length > 0) {
-      targetIds = [...targetIds, ...agentIds];
-    }
+      const agentQuota = {
+        dataGoal: Number(dataGoal) || 0,
+        airtimeGoal: Number(airtimeGoal) || 0,
+        currentMonth: finalMonth,
+        assignedByLeader: actorId,
+        assignedBy: actorId,
+      };
 
-    // 1. Idan an tura takamaiman mutane ta hanyar ID (Auto-Split ko Checkbox)
-    if (targetIds.length > 0) {
-      await User.updateMany(
-        { _id: { $in: targetIds } },
-        { $set: { targets: targetPayload } }
-      );
-    }
+      agent.targets = { ...(agent.targets || {}), ...agentQuota };
+      agent.dataGoal = Number(dataGoal) || 0;
+      agent.airtimeGoal = Number(airtimeGoal) || 0;
+      await agent.save({ validateBeforeSave: false });
 
-    // 2. Idan an tura ta hanyar LGAs
-    if (Array.isArray(lgas) && lgas.length > 0) {
-      await User.updateMany(
-        {
-          state: new RegExp(`^${(state || req.user?.state || "Kano").trim()}$`, "i"),
-          lga: { $in: lgas },
-          role: { $in: ["supervisor", "agent"] },
-        },
-        { $set: { targets: targetPayload } }
-      );
+      return res.status(200).json({
+        success: true,
+        message: `Custom Target (${dataGoal} GB & ₦${airtimeGoal}) assigned directly to Agent ${agent.name}`,
+        data: agent.targets,
+      });
     }
 
-    // 3. Log Activity
-    if (Activity && actorId) {
-      await Activity.create({
-        staffId: actorId,
-        user: actorId,
-        action: "FIELD_TARGETS_DEPLOYED",
-        details: `State Manager allocated quota (${dGoal}GB Data & ₦${aGoal} Airtime) to ${targetIds.length || lgas.length} recipients`,
-      }).catch(() => {});
+    // ----------------------------------------------------
+    // CASE 2: SINGLE SUPERVISOR (Gyara Target din Supervisor)
+    // ----------------------------------------------------
+    if (mode === "single_supervisor" || (supervisorId && !agentId)) {
+      const targetSupId = supervisorId || req.body.supervisorId;
+      const sup = await User.findById(targetSupId);
+      if (!sup) return res.status(404).json({ success: false, message: "Supervisor not found" });
+
+      const supQuota = {
+        dataGoal: Number(dataGoal) || 0,
+        airtimeGoal: Number(airtimeGoal) || 0,
+        agentGoal: Number(agentGoal) || 10,
+        currentMonth: finalMonth,
+        assignedByLeader: actorId,
+        assignedBy: actorId,
+      };
+
+      sup.targets = { ...(sup.targets || {}), ...supQuota };
+      sup.dataGoal = Number(dataGoal) || 0;
+      sup.airtimeGoal = Number(airtimeGoal) || 0;
+      sup.agentGoal = Number(agentGoal) || 10;
+      await sup.save({ validateBeforeSave: false });
+
+      // Auto-Distribute to Supervisor's Retail Agents
+      const supAgents = await User.find({
+        role: "agent",
+        $or: [
+          { assignedSupervisor: sup._id },
+          { lga: new RegExp(`^${sup.lga}$`, "i") },
+          { referredBy: sup.referralCode || `AYX-${sup.lga}` },
+        ],
+      });
+
+      if (supAgents.length > 0) {
+        const perAgentData = Math.round(Number(dataGoal) / supAgents.length);
+        const perAgentAirtime = Math.round(Number(airtimeGoal) / supAgents.length);
+
+        await User.updateMany(
+          { _id: { $in: supAgents.map((a) => a._id) } },
+          {
+            $set: {
+              "targets.dataGoal": perAgentData,
+              "targets.airtimeGoal": perAgentAirtime,
+              "targets.currentMonth": finalMonth,
+              "targets.assignedByLeader": actorId,
+              dataGoal: perAgentData,
+              airtimeGoal: perAgentAirtime,
+            },
+          }
+        );
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Supervisor ${sup.name} quota updated and auto-split across ${supAgents.length} Agents`,
+        data: sup.targets,
+      });
     }
+
+    // ----------------------------------------------------
+    // CASE 3: AUTO-SPLIT ACROSS ENTIRE STATE (Rabawa Jihar Baki Daya)
+    // ----------------------------------------------------
+    const stateSupervisors = await User.find({
+      role: { $in: ["supervisor", "field_supervisor"] },
+      state: new RegExp(`^${myState}$`, "i"),
+    });
+
+    if (stateSupervisors.length === 0) {
+      return res.status(400).json({ success: false, message: `No active Supervisors found in ${myState} State.` });
+    }
+
+    const totalDataQuota = Number(dataGoal) || 0;
+    const totalAirtimeQuota = Number(airtimeGoal) || 0;
+    const perSupData = Math.round(totalDataQuota / stateSupervisors.length);
+    const perSupAirtime = Math.round(totalAirtimeQuota / stateSupervisors.length);
+
+    // Kowane Supervisor da nasa Agents
+    await Promise.all(
+      stateSupervisors.map(async (sup) => {
+        sup.targets = {
+          dataGoal: perSupData,
+          airtimeGoal: perSupAirtime,
+          agentGoal: Number(agentGoal) || 10,
+          currentMonth: finalMonth,
+          assignedByLeader: actorId,
+        };
+        sup.dataGoal = perSupData;
+        sup.airtimeGoal = perSupAirtime;
+        await sup.save({ validateBeforeSave: false });
+
+        // Nemo Agents na wannan Supervisor
+        const underAgents = await User.find({
+          role: "agent",
+          $or: [
+            { assignedSupervisor: sup._id },
+            { lga: new RegExp(`^${sup.lga}$`, "i") },
+          ],
+        });
+
+        if (underAgents.length > 0) {
+          const perAgentData = Math.round(perSupData / underAgents.length);
+          const perAgentAirtime = Math.round(perSupAirtime / underAgents.length);
+
+          await User.updateMany(
+            { _id: { $in: underAgents.map((a) => a._id) } },
+            {
+              $set: {
+                "targets.dataGoal": perAgentData,
+                "targets.airtimeGoal": perAgentAirtime,
+                "targets.currentMonth": finalMonth,
+                "targets.assignedByLeader": actorId,
+                dataGoal: perAgentData,
+                airtimeGoal: perAgentAirtime,
+              },
+            }
+          );
+        }
+      })
+    );
 
     return res.status(200).json({
       success: true,
-      message: `Targets successfully deployed for ${finalMonth}.`,
-      data: targetPayload,
+      message: `State quota (${totalDataQuota} GB & ₦${totalAirtimeQuota}) auto-distributed across ${stateSupervisors.length} Supervisors and their subordinate Agents!`,
     });
   } catch (error) {
-    console.error("Assign Target Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to deploy target quota.",
-    });
+    console.error("Smart Target Dispatch Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
