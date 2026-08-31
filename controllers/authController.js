@@ -595,30 +595,56 @@ exports.login = async (req, res) => {
 
 exports.supervisorLogin = exports.login;
 
-// =======================================
-// FORGOT PASSWORD & OTP SYSTEM
-// =======================================
+const crypto = require("crypto");
 
+// @desc    Initiate Automated Forgot Password (OTP & Direct Magic Link)
+// @route   POST /api/v1/auth/forgot-password
 exports.forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ success: false, message: "Please provide an email address." });
-    }
+    const { identifier, email, phone } = req.body;
+    const rawInput = String(identifier || email || phone || "").trim();
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
-    if (!user) {
-      return res.status(200).json({
-        success: true,
-        message: "If an account exists with this email, an OTP has been sent.",
+    if (!rawInput) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide your registered email address or phone number.",
       });
     }
 
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    user.resetPasswordToken = otp;
-    user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
+    const cleanInput = rawInput.toLowerCase();
+    const user = await User.findOne({
+      $or: [
+        { email: new RegExp(`^${cleanInput}$`, "i") },
+        { phone: rawInput },
+        { phone: rawInput.replace(/^0/, "+234") },
+        { phone: rawInput.replace(/^\+234/, "0") },
+      ],
+    });
+
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: "If an account matches this identity, password reset instructions have been dispatched.",
+      });
+    }
+
+    // 1. Generate 4-digit OTP Code
+    const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+
+    // 2. Generate Secure Direct One-Click Token Link
+    const resetToken = crypto.randomBytes(24).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(resetToken).digest("hex");
+
+    user.resetPasswordToken = otpCode;
+    user.resetPasswordLinkToken = tokenHash;
+    user.resetPasswordExpire = Date.now() + 15 * 60 * 1000; // 15 minutes expiration
     await user.save({ validateBeforeSave: false });
 
+    // 3. Automated Server Verification Link
+    const serverOrigin = process.env.CLIENT_URL || "https://ayaxdata.online";
+    const directResetLink = `${serverOrigin}/reset-password?token=${resetToken}&email=${encodeURIComponent(user.email)}`;
+
+    // 4. Automated Mailer Dispatch
     try {
       if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
         const transporter = nodemailer.createTransport({
@@ -632,62 +658,120 @@ exports.forgotPassword = async (req, res) => {
         await transporter.sendMail({
           from: `"Ayax Data Xpress" <${process.env.EMAIL_USER}>`,
           to: user.email,
-          subject: "Password Reset OTP Code",
+          subject: "Password Reset Authorization - Ayax Data Xpress",
           html: `
-            <div style="font-family: Arial; padding: 20px; max-width: 500px; margin: auto; border: 1px solid #e2e8f0; border-radius: 10px;">
-              <h2 style="color: #1e3a8a;">Password Reset Security</h2>
-              <p>Hello ${user.firstName || "User"},</p>
-              <p>Your OTP code to reset password is:</p>
-              <div style="background: #eff6ff; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; color: #1e3a8a; letter-spacing: 5px; border-radius: 8px; margin: 20px 0;">
-                ${otp}
+            <div style="font-family: Arial, sans-serif; padding: 24px; max-width: 520px; margin: auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
+              <div style="text-align: center; margin-bottom: 20px;">
+                <h2 style="color: #0284c7; margin: 0; font-size: 22px;">Ayax Data Xpress</h2>
+                <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Security & Password Authorization</p>
               </div>
-              <p>This code expires in 10 minutes.</p>
+              
+              <p style="color: #334155; font-size: 14px;">Hello <strong>${user.firstName || user.name || "Customer"}</strong>,</p>
+              <p style="color: #475569; font-size: 13px; line-height: 1.5;">We received a password reset request for your account. You can reset your password immediately using the 4-digit OTP or by clicking the direct authorization button below:</p>
+
+              <!-- 4-Digit OTP Code Display -->
+              <div style="background-color: #f0f9ff; border: 1px dashed #0284c7; padding: 14px; text-align: center; font-size: 26px; font-weight: 900; color: #0369a1; letter-spacing: 6px; border-radius: 8px; margin: 18px 0;">
+                ${otpCode}
+              </div>
+
+              <!-- Direct One-Click Reset Link Button -->
+              <div style="text-align: center; margin: 24px 0;">
+                <a href="${directResetLink}" style="background-color: #0284c7; color: #ffffff; text-decoration: none; padding: 12px 24px; font-size: 13px; font-weight: bold; border-radius: 8px; display: inline-block;">
+                  DIRECT ONE-CLICK PASSWORD RESET
+                </a>
+              </div>
+
+              <p style="color: #94a3b8; font-size: 11.5px; line-height: 1.4; margin-top: 20px;">This authorization token is active for 15 minutes. If you did not initiate this request, please disregard this email or notify support.</p>
             </div>
           `,
         });
       }
     } catch (mailErr) {
-      console.error("OTP Email Dispatch Error:", mailErr.message);
+      console.error("Automated Mail Dispatch Notice:", mailErr.message);
     }
 
     return res.status(200).json({
       success: true,
-      message: "Verification OTP has been sent to your registered email.",
+      message: `Password reset authorization dispatched to ${user.email.replace(/(.{2})(.*)(?=@)/, "$1***")}.`,
+      data: {
+        email: user.email,
+        directLink: directResetLink, // Supported for in-app browser redirect
+      },
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    console.error("Forgot Password Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to process password reset request.",
+      error: error.message,
+    });
   }
 };
 
+// @desc    Authorize and Set New Password (Accepts either 4-digit OTP OR Direct Link Token)
+// @route   POST /api/v1/auth/reset-password
 exports.resetPassword = async (req, res) => {
   try {
-    const { email, otp, newPassword } = req.body;
-    if (!email || !otp || !newPassword) {
-      return res.status(400).json({ success: false, message: "Please provide email, OTP, and new password." });
+    const { identifier, email, otp, token, newPassword, password } = req.body;
+    const finalPassword = newPassword || password;
+
+    if (!finalPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a new strong password.",
+      });
     }
 
-    const user = await User.findOne({
-      email: email.toLowerCase().trim(),
-      resetPasswordToken: otp,
-      resetPasswordExpire: { $gt: Date.now() },
-    });
+    let user = null;
+
+    // 1. Authorization by Direct Link Token
+    if (token) {
+      const hashedToken = crypto.createHash("sha256").update(token.trim()).digest("hex");
+      user = await User.findOne({
+        resetPasswordLinkToken: hashedToken,
+        resetPasswordExpire: { $gt: Date.now() },
+      });
+    }
+
+    // 2. Authorization by 4-digit OTP code & Email/Identifier
+    if (!user && otp) {
+      const targetInput = String(email || identifier || "").trim().toLowerCase();
+      user = await User.findOne({
+        $or: [
+          { email: new RegExp(`^${targetInput}$`, "i") },
+          { phone: targetInput },
+        ],
+        resetPasswordToken: String(otp).trim(),
+        resetPasswordExpire: { $gt: Date.now() },
+      });
+    }
 
     if (!user) {
-      return res.status(400).json({ success: false, message: "Invalid or expired OTP code." });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired authorization code/link. Please request a new one.",
+      });
     }
 
+    // Hash and update password securely
     const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(newPassword, salt);
+    user.password = await bcrypt.hash(String(finalPassword), salt);
     user.resetPasswordToken = undefined;
+    user.resetPasswordLinkToken = undefined;
     user.resetPasswordExpire = undefined;
-    await user.save();
+    await user.save({ validateBeforeSave: false });
 
     return res.status(200).json({
       success: true,
-      message: "Password reset successful. You can now login.",
+      message: "Password updated successfully. You can now login with your new password.",
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    console.error("Reset Password Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to reset security password.",
+      error: error.message,
+    });
   }
 };
 
