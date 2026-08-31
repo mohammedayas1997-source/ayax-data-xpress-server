@@ -106,30 +106,34 @@ const UserSchema = new mongoose.Schema(
 
     // --- ACCESS HIERARCHY ---
     role: {
-  type: String,
-  enum: [
-    "user",
-    "agent",
-    "supervisor",
-    "field_supervisor",
-    "state_manager",
-    "leader",
-    "national_sales_director",
-    "super_leader",
-    "admin",
-    "superadmin",
-    "support",
-  ],
-  default: "user",
-  index: true,
-},
+      type: String,
+      enum: [
+        "user",
+        "agent",
+        "supervisor",
+        "field_supervisor",
+        "state_manager",
+        "leader",
+        "national_sales_director",
+        "super_leader",
+        "admin",
+        "superadmin",
+        "support",
+      ],
+      default: "user",
+      index: true,
+    },
 
-    // --- TOPOLOGICAL RELATIONSHIPS ---
+    // --- TOPOLOGICAL RELATIONSHIPS & REFERRALS ---
     assignedSupervisor: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
       index: true,
+    },
+    assignedSupervisorName: {
+      type: String,
+      trim: true,
     },
     assignedLeader: {
       type: mongoose.Schema.Types.ObjectId,
@@ -143,6 +147,40 @@ const UserSchema = new mongoose.Schema(
       sparse: true,
       index: true,
     },
+    referralCode: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+    referredBy: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+    supervisorId: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+
+    // --- TARGET & QUOTA TRACKING ENTITIES ---
+    targets: {
+      dataGoal: { type: Number, default: 0 },
+      airtimeGoal: { type: Number, default: 0 },
+      agentGoal: { type: Number, default: 10 },
+      supervisorGoal: { type: Number, default: 10 },
+      currentMonth: { type: String, default: "August 2026" },
+      assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      assignedByLeader: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      state: { type: String },
+      lga: { type: String },
+    },
+    dataGoal: { type: Number, default: 0 },
+    airtimeGoal: { type: Number, default: 0 },
+    agentGoal: { type: Number, default: 10 },
+    dataSold: { type: Number, default: 0 },
+    dataVolumeSold: { type: Number, default: 0 },
+    airtimeSold: { type: Number, default: 0 },
 
     // --- GEOGRAPHIC & SYSTEM STATUS ---
     isSuspended: { 
@@ -150,13 +188,23 @@ const UserSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    isVerified: {
+      type: Boolean,
+      default: true,
+    },
+    status: {
+      type: String,
+      default: "active",
+    },
     state: { 
       type: String,
       trim: true,
+      index: true,
     },
     lga: { 
       type: String,
       trim: true,
+      index: true,
     },
     address: { 
       type: String,
@@ -209,5 +257,6 @@ UserSchema.methods.matchPin = async function (enteredPin) {
 
 UserSchema.index({ role: 1, isSuspended: 1 });
 UserSchema.index({ assignedSupervisor: 1, role: 1 });
+UserSchema.index({ state: 1, lga: 1 });
 
 module.exports = mongoose.models.User || mongoose.model("User", UserSchema);
