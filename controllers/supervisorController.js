@@ -12,6 +12,13 @@ try {
   }
 }
 
+let TargetHistory = null;
+try {
+  TargetHistory = require("../models/TargetHistory");
+} catch (e) {
+  TargetHistory = null;
+}
+
 let Transaction = null;
 try {
   Transaction = require("../models/Transaction");
@@ -44,7 +51,7 @@ exports.getSupervisorDashboard = async (req, res) => {
       `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
     ).trim();
 
-    // 1. Kwaso dukkan Agents ta hanyoyi masu sauki da sauri
+    // 1. Kwaso dukkan Agents na LGA ko da Referral Code
     const agents = await User.find({
       _id: { $ne: supervisor._id },
       $or: [
@@ -59,10 +66,35 @@ exports.getSupervisorDashboard = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    // 2. Kwaso Target din Supervisor (Daga User ko TargetHistory)
+    let supTargets = supervisor.targets || {};
+    if ((!supTargets.dataGoal && !supTargets.airtimeGoal) && TargetHistory) {
+      try {
+        const latestHistory = await TargetHistory.findOne({
+          $or: [
+            { assignedTo: supervisor._id },
+            { lga: new RegExp(`^${myLga}$`, "i") },
+          ],
+        })
+          .sort({ createdAt: -1 })
+          .lean();
+
+        if (latestHistory) {
+          supTargets = {
+            dataGoal: latestHistory.dataGoal || 0,
+            airtimeGoal: latestHistory.airtimeGoal || 0,
+            agentGoal: latestHistory.agentGoal || 10,
+            currentMonth: latestHistory.month || "August 2026",
+          };
+        }
+      } catch (thErr) {}
+    }
+
     let totalTeamDataSold = 0;
     let totalTeamAirtimeSold = 0;
 
     const formattedAgents = agents.map((ag) => {
+      // Tabbatar an duba ko an tura masa target ta User ko an ɗauki na LGA
       const tg = ag.targets || {};
       const agentDataSold = Number(ag.dataVolumeSold || ag.dataSold || 0);
       const agentAirtimeSold = Number(ag.airtimeSold || 0);
@@ -90,9 +122,9 @@ exports.getSupervisorDashboard = async (req, res) => {
         totalGB: agentDataSold,
         airtimeSold: agentAirtimeSold,
         targets: {
-          dataGoal: tg.dataGoal || 0,
-          airtimeGoal: tg.airtimeGoal || 0,
-          currentMonth: tg.currentMonth || "August 2026",
+          dataGoal: Number(tg.dataGoal || ag.dataGoal || 0),
+          airtimeGoal: Number(tg.airtimeGoal || ag.airtimeGoal || 0),
+          currentMonth: tg.currentMonth || supTargets.currentMonth || "August 2026",
         },
       };
     });
@@ -115,8 +147,6 @@ exports.getSupervisorDashboard = async (req, res) => {
       }
     }
 
-    const supTargets = supervisor.targets || {};
-
     const dashboardPayload = {
       _id: supervisor._id,
       id: supervisor._id,
@@ -132,12 +162,17 @@ exports.getSupervisorDashboard = async (req, res) => {
       dataSold: totalTeamDataSold,
       airtimeSold: totalTeamAirtimeSold,
       myTarget: {
-        dataGoal: supTargets.dataGoal || 0,
-        airtimeGoal: supTargets.airtimeGoal || 0,
-        agentGoal: supTargets.agentGoal || 10,
+        dataGoal: Number(supTargets.dataGoal || 0),
+        airtimeGoal: Number(supTargets.airtimeGoal || 0),
+        agentGoal: Number(supTargets.agentGoal || 10),
         currentMonth: supTargets.currentMonth || "August 2026",
       },
-      targets: supTargets,
+      targets: {
+        dataGoal: Number(supTargets.dataGoal || 0),
+        airtimeGoal: Number(supTargets.airtimeGoal || 0),
+        agentGoal: Number(supTargets.agentGoal || 10),
+        currentMonth: supTargets.currentMonth || "August 2026",
+      },
       agents: formattedAgents,
       activityLogs,
     };
@@ -167,18 +202,45 @@ exports.getSupervisorProfile = exports.getSupervisorDashboard;
  */
 exports.getMyTarget = async (req, res) => {
   try {
-    const user = await User.findById(req.user?._id || req.user?.id).lean();
-    const targets = user?.targets || {
-      dataGoal: 0,
-      airtimeGoal: 0,
-      agentGoal: 10,
-      currentMonth: "August 2026",
+    const supervisorId = req.user?._id || req.user?.id;
+    const user = await User.findById(supervisorId).lean();
+    const myLga = user?.lga || "Ajingi";
+
+    let targets = user?.targets || {};
+
+    if ((!targets.dataGoal && !targets.airtimeGoal) && TargetHistory) {
+      try {
+        const history = await TargetHistory.findOne({
+          $or: [
+            { assignedTo: supervisorId },
+            { lga: new RegExp(`^${myLga}$`, "i") },
+          ],
+        })
+          .sort({ createdAt: -1 })
+          .lean();
+
+        if (history) {
+          targets = {
+            dataGoal: history.dataGoal || 0,
+            airtimeGoal: history.airtimeGoal || 0,
+            agentGoal: history.agentGoal || 10,
+            currentMonth: history.month || "August 2026",
+          };
+        }
+      } catch (e) {}
+    }
+
+    const finalTargets = {
+      dataGoal: Number(targets.dataGoal || 0),
+      airtimeGoal: Number(targets.airtimeGoal || 0),
+      agentGoal: Number(targets.agentGoal || 10),
+      currentMonth: targets.currentMonth || "August 2026",
     };
 
     return res.status(200).json({
       success: true,
-      targets,
-      data: targets,
+      targets: finalTargets,
+      data: finalTargets,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -237,8 +299,8 @@ exports.getMyAgents = async (req, res) => {
         role: ag.role || "agent",
         isSuspended: Boolean(ag.isSuspended),
         targets: {
-          dataGoal: tg.dataGoal || 0,
-          airtimeGoal: tg.airtimeGoal || 0,
+          dataGoal: Number(tg.dataGoal || ag.dataGoal || 0),
+          airtimeGoal: Number(tg.airtimeGoal || ag.airtimeGoal || 0),
           currentMonth: tg.currentMonth || "August 2026",
         },
       };
