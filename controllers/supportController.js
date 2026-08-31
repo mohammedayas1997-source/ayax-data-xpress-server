@@ -1,61 +1,120 @@
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
-const Activity = require("../models/Activity");
-const BVNRequest = require("../models/BVNRequest");
-const NIMCRequest = require("../models/NIMCRequest");
 const mongoose = require("mongoose");
 
+// SAFE DYNAMIC MODELS LOADER
+let Activity;
+try {
+  Activity = require("../models/Activity");
+} catch (e) {
+  Activity = null;
+}
+
+let BVNRequest;
+try {
+  BVNRequest = require("../models/BVNRequest");
+} catch (e) {
+  BVNRequest = null;
+}
+
+let NIMCRequest;
+try {
+  NIMCRequest = require("../models/NIMCRequest");
+} catch (e) {
+  NIMCRequest = null;
+}
+
+let Notification;
+try {
+  Notification = require("../models/Notification");
+} catch (e) {
+  Notification = null;
+}
+
 /**
- * @desc    Search for any user by Phone or Email
- * @route   GET /api/v1/admin/search-user/:identifier
- * @access  Private/Admin
+ * @desc    Search for any user by Phone, Email, Reference, or NIN/BVN
+ * @route   GET /api/v1/support/search-user/:identifier ko /api/v1/admin/search-user/:identifier
+ * @access  Private/Admin/Support
  */
 exports.searchUser = async (req, res) => {
   try {
     const { identifier } = req.params;
     if (!identifier) {
-      return res.status(400).json({ success: false, message: "Please provide phone or email identifier" });
+      return res.status(400).json({ success: false, message: "Please provide search identifier" });
     }
 
-    const cleanIdentifier = identifier.trim().toLowerCase();
+    const clean = identifier.trim();
+    const cleanLower = clean.toLowerCase();
 
-    const user = await User.findOne({
+    // 1. Duba User a Database ta hanyoyi daban-daban
+    let user = await User.findOne({
       $or: [
-        { phone: cleanIdentifier }, 
-        { phone: identifier.trim() },
-        { email: cleanIdentifier }
+        { phone: clean },
+        { phone: clean.replace(/^0/, "+234") },
+        { phone: clean.replace(/^\+234/, "0") },
+        { email: new RegExp(`^${cleanLower}$`, "i") },
+        { accountNumber: clean },
+        { bvn: clean },
+        { nin: clean },
       ],
-    }).select("-password");
+    }).select("-password").lean();
+
+    // 2. Idan ba a samu User kai tsaye ba, duba ko Reference ce aka bayar a Transaction
+    if (!user) {
+      const tx = await Transaction.findOne({
+        $or: [
+          { reference: clean },
+          { transactionId: clean },
+          { _id: mongoose.Types.ObjectId.isValid(clean) ? clean : null },
+        ],
+      }).lean();
+
+      if (tx && (tx.user || tx.userId)) {
+        user = await User.findById(tx.user || tx.userId).select("-password").lean();
+      }
+    }
 
     if (!user) {
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
+      return res.status(404).json({
+        success: false,
+        message: "No user account found matching this query.",
+      });
     }
 
+    // 3. Kwaso Tarihin Hada-hadar User din
     const history = await Transaction.find({
-      $or: [{ user: user._id }, { userId: user._id }],
+      $or: [
+        { user: user._id },
+        { userId: user._id },
+        { "details.phone": user.phone },
+        { recipient: user.phone },
+      ],
     })
       .sort({ createdAt: -1 })
-      .limit(20)
+      .limit(30)
       .lean();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      data: { profile: user, recentTransactions: history },
+      data: {
+        profile: user,
+        recentTransactions: history,
+      },
     });
   } catch (error) {
-    console.error("Search User Error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Search failed", error: error.message });
+    console.error("Search User Diagnostic Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Search diagnostic failed",
+      error: error.message,
+    });
   }
 };
 
 /**
  * @desc    Get User Transaction History
- * @route   GET /api/v1/admin/user-transactions/:userId
- * @access  Private/Admin
+ * @route   GET /api/v1/support/user-transactions/:userId ko /api/v1/admin/user-transactions/:userId
+ * @access  Private/Admin/Support
  */
 exports.getUserTransactionHistory = async (req, res) => {
   try {
@@ -71,12 +130,14 @@ exports.getUserTransactionHistory = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    res
-      .status(200)
-      .json({ success: true, count: transactions.length, data: transactions });
+    return res.status(200).json({
+      success: true,
+      count: transactions.length,
+      data: transactions,
+    });
   } catch (error) {
     console.error("Get User Transactions Error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error fetching history",
       error: error.message,
@@ -85,170 +146,182 @@ exports.getUserTransactionHistory = async (req, res) => {
 };
 
 /**
- * @desc    Initiate a refund request
- * @route   POST /api/v1/admin/request-refund
- * @access  Private/Admin
+ * @desc    Get Live Company Transactions Feed (Real-Time 5s Telemetry)
+ * @route   GET /api/v1/support/live-transactions
+ * @access  Private/Admin/Support
+ */
+exports.getLiveCompanyTransactions = async (req, res) => {
+  try {
+    const transactions = await Transaction.find()
+      .populate("user", "name firstName surname email phone lga state")
+      .sort({ createdAt: -1 })
+      .limit(35)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: transactions.length,
+      transactions: transactions,
+      data: transactions,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * @desc    Initiate a refund / Escalate to SuperAdmin
+ * @route   POST /api/v1/support/refund ko /api/v1/support/escalate-refund
+ * @access  Private/Admin/Support
  */
 exports.requestRefund = async (req, res) => {
   try {
-    const { transactionId, reason } = req.body;
-    
-    if (!transactionId || !reason) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Provide transaction ID and reason" });
+    const { transactionId, reference, reason, phoneOrEmail, amount } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ success: false, message: "Provide refund justification reason" });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(transactionId)) {
-      return res.status(400).json({ success: false, message: "Invalid Transaction ID format" });
+    let targetTransaction = null;
+
+    if (transactionId && mongoose.Types.ObjectId.isValid(transactionId)) {
+      targetTransaction = await Transaction.findById(transactionId);
+    } else if (reference) {
+      targetTransaction = await Transaction.findOne({
+        $or: [{ reference }, { transactionId: reference }],
+      });
     }
 
-    const transaction = await Transaction.findById(transactionId);
-    if (!transaction) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Transaction not found" });
+    let targetUserId = targetTransaction?.user || targetTransaction?.userId;
+
+    if (!targetUserId && phoneOrEmail) {
+      const u = await User.findOne({
+        $or: [{ phone: phoneOrEmail.trim() }, { email: phoneOrEmail.trim().toLowerCase() }],
+      });
+      if (u) targetUserId = u._id;
     }
 
-    transaction.status = "pending-refund";
-    transaction.refundReason = reason;
-    transaction.requestedBy = req.user._id;
-    await transaction.save();
+    if (targetTransaction) {
+      targetTransaction.status = "pending-refund";
+      targetTransaction.refundReason = reason;
+      targetTransaction.requestedBy = req.user?._id;
+      await targetTransaction.save();
+    }
 
-    const targetUserId = transaction.user || transaction.userId;
+    // Tura wa SuperAdmin Sanarwa ta Musamman
+    if (Notification) {
+      await Notification.create({
+        title: "DISPUTE / REFUND ESCALATION",
+        message: `Dispute logged: ${reason} | Amount: ₦${amount || targetTransaction?.amount || 0} | Ref: ${reference || targetTransaction?.reference || "N/A"}`,
+        category: "REFUND",
+        priority: "HIGH",
+        targetRole: "superadmin",
+        isBroadcast: false,
+        createdAt: new Date(),
+      }).catch(() => {});
+    }
 
-    // Rubuta Activity Log
-    await Activity.create({
-      staffId: req.user._id,
-      action: "REFUND_REQUEST",
-      details: `Requested refund for TX: ${transactionId}. Reason: ${reason}`,
-      targetUser: targetUserId || null,
+    if (Activity && req.user?._id) {
+      await Activity.create({
+        staffId: req.user._id,
+        user: req.user._id,
+        action: "REFUND_REQUEST",
+        details: `Dispute logged for TX: ${reference || transactionId || "Manual"}. Reason: ${reason}`,
+        targetUser: targetUserId || null,
+      }).catch(() => {});
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Refund dispute dispatched successfully to SuperAdmin queue.",
+      data: targetTransaction,
     });
-
-    res.status(200).json({ success: true, message: "Refund request logged successfully", data: transaction });
   } catch (error) {
     console.error("Request Refund Error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Refund failed", error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Refund escalation failed",
+      error: error.message,
+    });
   }
 };
 
 /**
- * @desc    Get Refund Status
- * @route   GET /api/v1/admin/refund-status/:transactionId
- * @access  Private/Admin
- */
-exports.getRefundStatus = async (req, res) => {
-  try {
-    const { transactionId } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(transactionId)) {
-      return res.status(400).json({ success: false, message: "Invalid Transaction ID format" });
-    }
-
-    const transaction = await Transaction.findById(transactionId).select(
-      "status refundReason createdAt requestedBy reference amount type",
-    );
-
-    if (!transaction) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Transaction not found" });
-    }
-
-    res.status(200).json({ success: true, data: transaction });
-  } catch (error) {
-    console.error("Get Refund Status Error:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-/**
- * @desc    TRACE SERVICE REQUEST (Expanded for All Services)
- * @route   GET /api/v1/admin/trace/:type/:identifier
- * @access  Private/Admin
+ * @desc    TRACE SERVICE REQUEST (BVN, NIMC, Data, VTU, Bills)
+ * @route   GET /api/v1/support/trace/:type/:identifier ko /api/v1/admin/trace/:type/:identifier
+ * @access  Private/Admin/Support
  */
 exports.traceServiceRequest = async (req, res) => {
   try {
     const { type, identifier } = req.params;
-    let result;
 
     if (!type || !identifier) {
       return res.status(400).json({ success: false, message: "Provide service type and identifier" });
     }
 
     const serviceType = type.toLowerCase().trim();
-    const cleanIdentifier = identifier.trim();
+    const cleanId = identifier.trim();
+    let result = [];
 
-    // Identity Services Tracing (BVN)
-    if (serviceType === "bvn") {
+    // 1. Identity Services: BVN
+    if (serviceType === "bvn" && BVNRequest) {
       result = await BVNRequest.find({
         $or: [
-          { bvnNumber: cleanIdentifier },
-          { phoneNumber: cleanIdentifier },
-          { transactionId: cleanIdentifier },
+          { bvnNumber: cleanId },
+          { phoneNumber: cleanId },
+          { transactionId: cleanId },
+          { reference: cleanId },
         ],
       })
-        .populate("user", "surname firstName email phone")
+        .populate("user", "surname firstName name email phone")
         .lean();
-    } 
-    // Identity Services Tracing (NIMC)
-    else if (serviceType === "nimc") {
+    }
+
+    // 2. Identity Services: NIMC
+    else if ((serviceType === "nimc" || serviceType === "nin") && NIMCRequest) {
       result = await NIMCRequest.find({
         $or: [
-          { ninNumber: cleanIdentifier },
-          { phoneNumber: cleanIdentifier },
-          { transactionId: cleanIdentifier },
+          { ninNumber: cleanId },
+          { phoneNumber: cleanId },
+          { transactionId: cleanId },
+          { reference: cleanId },
         ],
       })
-        .populate("user", "surname firstName email phone")
+        .populate("user", "surname firstName name email phone")
         .lean();
     }
-    // VTU, Data, Cable, Electricity, & Other Transactions
-    else if (["data", "vtu", "airtime", "cable", "electricity", "utility"].includes(serviceType)) {
+
+    // 3. VTU, Data, Cable, Electricity, ko dukkan Services a Transaction Model
+    if (result.length === 0) {
+      const searchRegex = new RegExp(cleanId, "i");
       result = await Transaction.find({
         $or: [
-          { type: serviceType },
-          { category: serviceType },
-        ],
-        $and: [
-          {
-            $or: [
-              { reference: cleanIdentifier },
-              { transactionId: cleanIdentifier },
-              { "details.recipient": cleanIdentifier },
-              { "details.smartCard": cleanIdentifier },
-              { "details.phone": cleanIdentifier },
-              { "details.meterNo": cleanIdentifier },
-            ],
-          },
+          { reference: cleanId },
+          { transactionId: cleanId },
+          { recipient: cleanId },
+          { "details.phone": cleanId },
+          { "details.recipient": cleanId },
+          { "details.smartCard": cleanId },
+          { "details.meterNo": cleanId },
+          { description: searchRegex },
         ],
       })
-        .populate("user", "surname firstName email phone")
+        .populate("user", "surname firstName name email phone")
+        .sort({ createdAt: -1 })
+        .limit(25)
         .lean();
-    } else {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid service type specified for tracing" });
     }
 
-    if (!result || result.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: `No ${serviceType.toUpperCase()} records found for identifier: ${cleanIdentifier}`,
-      });
-    }
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       service: serviceType.toUpperCase(),
       count: result.length,
       data: result,
+      results: result,
     });
   } catch (error) {
     console.error("Trace Service Request Error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Error tracing service request",
       error: error.message,

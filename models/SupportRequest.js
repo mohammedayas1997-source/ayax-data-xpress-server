@@ -29,11 +29,16 @@ const SupportRequestSchema = new mongoose.Schema(
       index: true,
     },
 
-    // 3. User & Staff Relations
+    // 3. User & Staff Relations (Supports both userId & user aliases)
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      index: true,
+    },
+
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
       index: true,
     },
 
@@ -51,24 +56,16 @@ const SupportRequestSchema = new mongoose.Schema(
     // 4. Ticket Classification & Priority
     category: {
       type: String,
-      enum: [
-        "DATA_DELIVERY",
-        "AIRTIME_FAILED",
-        "ELECTRICITY_TOKEN",
-        "NIN_VERIFICATION",
-        "BVN_ISSUE",
-        "WALLET_FUNDING",
-        "ACCOUNT_ISSUE",
-        "GENERAL_INQUIRY",
-      ],
       default: "GENERAL_INQUIRY",
+      uppercase: true,
+      trim: true,
       index: true,
     },
 
     priority: {
       type: String,
-      enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
-      default: "MEDIUM",
+      enum: ["LOW", "NORMAL", "MEDIUM", "HIGH", "URGENT"],
+      default: "NORMAL",
       index: true,
     },
 
@@ -85,7 +82,7 @@ const SupportRequestSchema = new mongoose.Schema(
       default: "",
     },
 
-    // Conversation thread between customer and admin
+    // Conversation thread between customer, support, and admin
     messages: [
       {
         sender: {
@@ -95,8 +92,8 @@ const SupportRequestSchema = new mongoose.Schema(
         },
         senderRole: {
           type: String,
-          enum: ["USER", "AGENT", "ADMIN", "SUPERADMIN"],
           default: "USER",
+          uppercase: true,
         },
         message: {
           type: String,
@@ -123,15 +120,15 @@ const SupportRequestSchema = new mongoose.Schema(
     // 6. Resolution & Status Lifecycle
     status: {
       type: String,
-      enum: ["pending", "in_progress", "resolved", "rejected", "closed"],
+      enum: ["pending", "in_progress", "resolved", "rejected", "closed", "pending-refund"],
       default: "pending",
       index: true,
     },
 
     resolutionAction: {
       type: String,
-      enum: ["NONE", "WALLET_REFUNDED", "TOKEN_REISSUED", "MANUAL_DISPATCH", "INFO_PROVIDED"],
       default: "NONE",
+      uppercase: true,
     },
 
     refundAmount: {
@@ -146,14 +143,23 @@ const SupportRequestSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
-// Generate unique ticket identifier before creation
+// Auto-populate ticketId da daidaita user & userId kafin ajiye
 SupportRequestSchema.pre("save", function (next) {
   if (!this.ticketId) {
     this.ticketId = `TKT-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
   }
+  
+  if (this.user && !this.userId) {
+    this.userId = this.user;
+  } else if (this.userId && !this.user) {
+    this.user = this.userId;
+  }
+
   if (this.isModified("status") && (this.status === "resolved" || this.status === "closed") && !this.resolvedAt) {
     this.resolvedAt = new Date();
   }
@@ -162,9 +168,11 @@ SupportRequestSchema.pre("save", function (next) {
 
 // Composite indexes for fast query resolution and filter matrices
 SupportRequestSchema.index({ userId: 1, createdAt: -1 });
+SupportRequestSchema.index({ user: 1, createdAt: -1 });
 SupportRequestSchema.index({ status: 1, priority: 1, createdAt: -1 });
 SupportRequestSchema.index({ category: 1, status: 1 });
 SupportRequestSchema.index({ transactionId: 1, userId: 1 });
+SupportRequestSchema.index({ transactionReference: 1 });
 SupportRequestSchema.index({ assignedTo: 1, status: 1 });
 
 module.exports =
