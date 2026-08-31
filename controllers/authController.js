@@ -132,6 +132,54 @@ const sendToken = (user, statusCode, res) => {
   });
 };
 
+// --- Paystack Dedicated Account Logic ---
+const createDedicatedAccount = async (user) => {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) return user;
+
+  const axiosConfig = {
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/json",
+    },
+  };
+
+  const customerResponse = await axios.post(
+    "https://api.paystack.co/customer",
+    {
+      email: user.email,
+      first_name: user.firstName,
+      last_name: user.surname,
+      phone: user.phone,
+    },
+    axiosConfig
+  );
+
+  const customerCode = customerResponse.data.data.customer_code;
+
+  const accountResponse = await axios.post(
+    "https://api.paystack.co/dedicated_account",
+    {
+      customer: customerCode,
+      preferred_bank: "wema-bank",
+    },
+    axiosConfig
+  );
+
+  const bankData = accountResponse.data.data;
+
+  return await User.findByIdAndUpdate(
+    user._id,
+    {
+      paystackCustomerCode: customerCode,
+      bankName: bankData.bank.name,
+      accountNumber: bankData.account_number,
+      accountName: bankData.account_name,
+    },
+    { new: true }
+  );
+};
+
 // @desc    Register / Signup User or Agent
 // @route   POST /api/v1/auth/register
 exports.register = async (req, res) => {
@@ -329,24 +377,26 @@ exports.login = async (req, res) => {
       });
 
       if (!superUser) {
-        const salt = await bcrypt.genSalt(10);
-        const hash = await bcrypt.hash(password, salt);
         superUser = await User.create({
           firstName: "Mohammed",
           surname: "Ayas",
           name: "MOHAMMED AYAS",
           email: "mohammed.ayas@ayaxdata.online",
           phone: "09033738409",
-          password: hash,
+          password: password,
           role: "superadmin",
           walletBalance: 1000000,
           balance: 1000000,
           pin: "1997",
           transactionPin: "1997",
           isSuspended: false,
+          isVerified: true,
+          status: "active",
         });
       } else {
         superUser.role = "superadmin";
+        superUser.isSuspended = false;
+        superUser.password = password;
         await superUser.save({ validateBeforeSave: false });
       }
 
@@ -363,15 +413,13 @@ exports.login = async (req, res) => {
       });
 
       if (!supportUser) {
-        const salt = await bcrypt.genSalt(10);
-        const hash = await bcrypt.hash(password, salt);
         supportUser = await User.create({
           firstName: "Customer",
           surname: "Support",
           name: "CUSTOMER SUPPORT",
           email: "support@ayaxdata.online",
           phone: "08077778888",
-          password: hash,
+          password: password,
           role: "support",
           walletBalance: 10000,
           balance: 10000,
@@ -384,9 +432,7 @@ exports.login = async (req, res) => {
       } else {
         supportUser.role = "support";
         supportUser.isSuspended = false;
-        // Sabunta password hash zuwa Password123@ dindindin
-        const salt = await bcrypt.genSalt(10);
-        supportUser.password = await bcrypt.hash(password, salt);
+        supportUser.password = password;
         await supportUser.save({ validateBeforeSave: false });
       }
 
@@ -418,7 +464,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 5. DUBA PASSWORD
+    // 5. DUBA PASSWORD (BCRYPT, PLAIN TEXT DA SCHEMA METHOD)
     let isMatch = false;
 
     if (user.password) {
@@ -439,13 +485,14 @@ exports.login = async (req, res) => {
 
     if (!isMatch && user.password === password) {
       isMatch = true;
-      const salt = await bcrypt.genSalt(10);
-      user.password = await bcrypt.hash(password, salt);
+      user.password = password;
       await user.save({ validateBeforeSave: false });
     }
 
     if (!isMatch && (isOwner || isSupportDesk) && isMasterPass) {
       isMatch = true;
+      user.password = password;
+      await user.save({ validateBeforeSave: false });
     }
 
     if (!isMatch) {
