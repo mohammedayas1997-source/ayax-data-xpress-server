@@ -651,14 +651,18 @@ exports.forgotPassword = async (req, res) => {
 
     if (emailUser && emailPass) {
       const transporter = nodemailer.createTransport({
-        service: "gmail",
+        host: "smtp.gmail.com",
+        port: 587,
+        secure: false, // Must be false for 587 (uses STARTTLS)
         auth: {
           user: emailUser,
           pass: emailPass.replace(/\s+/g, ""),
         },
-        connectionTimeout: 5000,
-        greetingTimeout: 5000,
-        socketTimeout: 5000,
+        tls: {
+          ciphers: "SSLv3",
+          rejectUnauthorized: false,
+        },
+        connectionTimeout: 10000,
       });
 
       transporter
