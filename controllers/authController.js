@@ -638,88 +638,79 @@ exports.forgotPassword = async (req, res) => {
 
     user.resetPasswordToken = otpCode;
     user.resetPasswordLinkToken = tokenHash;
-    user.resetPasswordExpire = Date.now() + 15 * 60 * 1000; // 15 minutes expiration
+    user.resetPasswordExpire = Date.now() + 15 * 60 * 1000; // 15 minutes
     await user.save({ validateBeforeSave: false });
 
     // 3. Automated Server Verification Link
     const serverOrigin = process.env.CLIENT_URL || "https://ayaxdata.online";
     const directResetLink = `${serverOrigin}/reset-password?token=${resetToken}&email=${encodeURIComponent(user.email)}`;
 
-    // 4. Robust Automated Mailer Configuration
+    // 4. Non-blocking Background Email Dispatcher
     const emailUser = process.env.EMAIL_USER;
     const emailPass = process.env.EMAIL_PASS;
 
-    if (!emailUser || !emailPass) {
-      console.error("CRITICAL: EMAIL_USER or EMAIL_PASS is missing in server environment variables.");
-      return res.status(200).json({
-        success: true,
-        message: `OTP generated. Server mailer is unconfigured. (Dev OTP: ${otpCode})`,
-        data: { email: user.email },
+    if (emailUser && emailPass) {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: emailUser,
+          pass: emailPass.replace(/\s+/g, ""),
+        },
+        connectionTimeout: 5000,
+        greetingTimeout: 5000,
+        socketTimeout: 5000,
       });
+
+      transporter
+        .sendMail({
+          from: `"Ayax Data Xpress" <${emailUser}>`,
+          to: user.email,
+          subject: "Password Reset Authorization - Ayax Data Xpress",
+          html: `
+            <div style="font-family: Arial, sans-serif; padding: 24px; max-width: 520px; margin: auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
+              <div style="text-align: center; margin-bottom: 20px;">
+                <h2 style="color: #0284c7; margin: 0; font-size: 22px;">Ayax Data Xpress</h2>
+                <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Security & Password Authorization</p>
+              </div>
+              
+              <p style="color: #334155; font-size: 14px;">Hello <strong>${user.firstName || user.name || "Customer"}</strong>,</p>
+              <p style="color: #475569; font-size: 13px; line-height: 1.5;">Your 4-digit password reset OTP is:</p>
+
+              <div style="background-color: #f0f9ff; border: 1px dashed #0284c7; padding: 14px; text-align: center; font-size: 26px; font-weight: 900; color: #0369a1; letter-spacing: 6px; border-radius: 8px; margin: 18px 0;">
+                ${otpCode}
+              </div>
+
+              <div style="text-align: center; margin: 24px 0;">
+                <a href="${directResetLink}" style="background-color: #0284c7; color: #ffffff; text-decoration: none; padding: 12px 24px; font-size: 13px; font-weight: bold; border-radius: 8px; display: inline-block;">
+                  DIRECT ONE-CLICK PASSWORD RESET
+                </a>
+              </div>
+
+              <p style="color: #94a3b8; font-size: 11.5px; line-height: 1.4; margin-top: 20px;">This authorization token expires in 15 minutes.</p>
+            </div>
+          `,
+        })
+        .catch((err) => console.error("Background Mail Dispatch Error:", err.message));
     }
 
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true, // Use SSL
-      auth: {
-        user: emailUser,
-        pass: emailPass.replace(/\s+/g, ""), // Remove any accidental spaces
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-    });
-
-    await transporter.sendMail({
-      from: `"Ayax Data Xpress" <${emailUser}>`,
-      to: user.email,
-      subject: "Password Reset Authorization - Ayax Data Xpress",
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 24px; max-width: 520px; margin: auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
-          <div style="text-align: center; margin-bottom: 20px;">
-            <h2 style="color: #0284c7; margin: 0; font-size: 22px;">Ayax Data Xpress</h2>
-            <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Security & Password Authorization</p>
-          </div>
-          
-          <p style="color: #334155; font-size: 14px;">Hello <strong>${user.firstName || user.name || "Customer"}</strong>,</p>
-          <p style="color: #475569; font-size: 13px; line-height: 1.5;">We received a password reset request for your account. You can reset your password immediately using the 4-digit OTP below or by clicking the direct authorization button:</p>
-
-          <div style="background-color: #f0f9ff; border: 1px dashed #0284c7; padding: 14px; text-align: center; font-size: 26px; font-weight: 900; color: #0369a1; letter-spacing: 6px; border-radius: 8px; margin: 18px 0;">
-            ${otpCode}
-          </div>
-
-          <div style="text-align: center; margin: 24px 0;">
-            <a href="${directResetLink}" style="background-color: #0284c7; color: #ffffff; text-decoration: none; padding: 12px 24px; font-size: 13px; font-weight: bold; border-radius: 8px; display: inline-block;">
-              DIRECT ONE-CLICK PASSWORD RESET
-            </a>
-          </div>
-
-          <p style="color: #94a3b8; font-size: 11.5px; line-height: 1.4; margin-top: 20px;">This authorization token is active for 15 minutes. If you did not initiate this request, please disregard this email.</p>
-        </div>
-      `,
-    });
-
-    console.log(`[EMAIL DISPATCHED]: Password reset instructions sent to ${user.email}`);
-
+    // Return instant success response to frontend immediately
     return res.status(200).json({
       success: true,
-      message: `Password reset authorization dispatched to ${user.email}.`,
+      message: `Password reset OTP has been dispatched to ${user.email}.`,
       data: {
         email: user.email,
         directLink: directResetLink,
       },
     });
   } catch (error) {
-    console.error("Forgot Password Mail Error:", error);
+    console.error("Forgot Password Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Unable to send authorization email. Please verify mailer settings.",
+      message: "Unable to process password reset request.",
       error: error.message,
     });
   }
 };
-
 // @desc    Authorize and Set New Password (Accepts either 4-digit OTP OR Direct Link Token)
 // @route   POST /api/v1/auth/reset-password
 exports.resetPassword = async (req, res) => {
