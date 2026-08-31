@@ -6,7 +6,7 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const Notification = require("../models/Notification");
 
-// DYNAMIC MODEL LOADERS (Domin kariya daga missing files)
+// DYNAMIC MODEL LOADERS (Protects against missing models)
 let NIMCRequest;
 try {
   NIMCRequest = require("../models/NIMCRequest");
@@ -61,6 +61,70 @@ const getHeaders = () => ({
   "x-api-key": AYAX_API_KEY,
   Authorization: `Bearer ${AYAX_API_KEY}`,
 });
+
+// ROLE-BASED WELCOME NOTIFICATION GENERATOR
+const getWelcomeMessageByRole = (user) => {
+  const role = String(user.role || "user").toLowerCase().trim();
+  const name = user.firstName || user.name || "Member";
+  const state = user.state || "Nigeria";
+  const lga = user.lga ? `(${user.lga} LGA)` : "";
+
+  switch (role) {
+    case "national_sales_director":
+    case "super_leader":
+      return {
+        title: "Executive Welcome: National Sales Directorate 👑",
+        message: `Welcome, ${name}! Your executive portal as National Sales Director (NSD) has been initialized. You have overarching authority to supervise State Managers, allocate state quotas, and oversee nationwide VTU & identity operations.`,
+        category: "APPOINTMENT",
+      };
+
+    case "state_manager":
+    case "leader":
+      return {
+        title: "Executive Appointment: State Management Directorate 🏛️",
+        message: `Welcome, ${name}! You have been appointed as the official State Manager (SM) for ${state} State. Your command console is live to monitor Field Supervisors, track retail agents, and drive regional sales quotas.`,
+        category: "APPOINTMENT",
+      };
+
+    case "supervisor":
+    case "field_supervisor":
+      return {
+        title: "Field Appointment: Field Operations Supervisor 👔",
+        message: `Welcome, ${name}! Your Field Supervisor portal for ${state} ${lga} is now active. You can now onboard, verify, and mentor retail agents, track daily bundle allocations, and supervise regional distribution.`,
+        category: "APPOINTMENT",
+      };
+
+    case "agent":
+      return {
+        title: "Welcome to Ayax Retail Agent Network 🏪",
+        message: `Welcome on board, Agent ${name}! Your merchant terminal is active. Enjoy exclusive wholesale prices on Data bundles, Airtime VTU, Electricity Tokens, Cable TV, and NIMC/BVN validation services. Start vending and maximize your daily commissions!`,
+        category: "WELCOME_AGENT",
+      };
+
+    case "support":
+    case "customer_service":
+    case "customer_care":
+      return {
+        title: "Ayax Support Desk: Terminal Access Granted 🎧",
+        message: `Welcome, ${name}! Your customer resolution and support terminal is provisioned. You can investigate transaction logs, trace NIMC/BVN queries, and escalate customer disputes directly to administration.`,
+        category: "SYSTEM_ACCESS",
+      };
+
+    case "admin":
+      return {
+        title: "Operations Command: Admin Console Active 🛡️",
+        message: `Welcome, ${name}! Your Operations Administrator account is live. You have elevated access to oversee daily platform operations, service uptime, and support investigations.`,
+        category: "ADMIN_ACCESS",
+      };
+
+    default: // Normal Customer / User
+      return {
+        title: "Welcome to Ayax Data Xpress 🚀",
+        message: `Welcome, ${name}! Your digital wallet and service portal are fully operational. Enjoy instant, automated delivery for ultra-cheap Data, VTU Airtime, Utility bills, and Identity verification 24/7. Fund your wallet to get started!`,
+        category: "WELCOME",
+      };
+  }
+};
 
 // Helper for In-App Notifications
 const sendNotification = async (
@@ -323,6 +387,38 @@ exports.createUser = async (req, res) => {
       },
     });
 
+    // Automated Welcome Notification based on Assigned Role
+    const welcome = getWelcomeMessageByRole(newUser);
+    const welcomeNotifObj = {
+      title: welcome.title,
+      message: welcome.message,
+      category: welcome.category,
+      date: new Date(),
+      createdAt: new Date(),
+      isRead: false,
+      read: false,
+    };
+
+    if (!newUser.notifications) newUser.notifications = [];
+    newUser.notifications.unshift(welcomeNotifObj);
+    await newUser.save({ validateBeforeSave: false });
+
+    if (Notification) {
+      await Notification.create({
+        recipient: newUser._id,
+        user: newUser._id,
+        userId: newUser._id,
+        title: welcome.title,
+        message: welcome.message,
+        category: welcome.category,
+        type: "appointment",
+        isBroadcast: false,
+        isGeneral: false,
+        target: "specific_users",
+        createdAt: new Date(),
+      }).catch(() => {});
+    }
+
     if (Activity && req.user?._id) {
       await Activity.create({
         user: req.user._id,
@@ -448,6 +544,9 @@ exports.getRefundRequests = async (req, res) => {
   }
 };
 
+// =========================================================================
+// STRICT DIRECT REFUND APPROVAL (TARGET USER ONLY)
+// =========================================================================
 exports.approveRefund = async (req, res) => {
   try {
     const { transactionId, reference, beneficiary, refundAmount, reason } = req.body;
@@ -462,6 +561,7 @@ exports.approveRefund = async (req, res) => {
       });
     }
 
+    // 1. Identify the intended beneficiary account
     const targetUserIdentifier = beneficiary || targetTx?.user;
     const user = await findUserByIdentifier(targetUserIdentifier);
 
@@ -482,13 +582,33 @@ exports.approveRefund = async (req, res) => {
       });
     }
 
+    // 2. Increment wallet balance for the beneficiary only
     const oldBal = Number(user.walletBalance ?? user.balance ?? 0);
     const newBal = Number((oldBal + amount).toFixed(2));
 
     user.walletBalance = newBal;
     user.balance = newBal;
+
+    // 3. Append notification strictly into this user's notifications array
+    const refundNotifObj = {
+      title: "Refund Approved & Credited 💳",
+      message: `Your refund claim of ₦${amount.toLocaleString()} for transaction (${targetTx?.reference || "Disputed Service"}) has been approved. New Wallet Balance: ₦${newBal.toLocaleString()}`,
+      category: "REFUND",
+      date: new Date(),
+      createdAt: new Date(),
+      isRead: false,
+      read: false,
+    };
+
+    if (!user.notifications) user.notifications = [];
+    user.notifications.unshift(refundNotifObj);
+    if (user.notifications.length > 100) {
+      user.notifications = user.notifications.slice(0, 100);
+    }
+
     await user.save({ validateBeforeSave: false });
 
+    // 4. Update the transaction status
     if (targetTx) {
       targetTx.status = "refunded";
       targetTx.isRefunded = true;
@@ -498,6 +618,7 @@ exports.approveRefund = async (req, res) => {
       await targetTx.save({ validateBeforeSave: false });
     }
 
+    // 5. Create refund transaction record
     const refCode = `REFUND-${Date.now()}`;
     await Transaction.create({
       user: user._id,
@@ -515,6 +636,25 @@ exports.approveRefund = async (req, res) => {
       requestedBy: superAdminId,
     });
 
+    // 6. Persist to Notification Collection for the specific user
+    if (Notification) {
+      await Notification.create({
+        recipient: user._id,
+        user: user._id,
+        userId: user._id,
+        title: "Refund Approved & Credited 💳",
+        message: `Your refund claim of ₦${amount.toLocaleString()} for transaction (${targetTx?.reference || "Disputed Service"}) has been approved. New Wallet Balance: ₦${newBal.toLocaleString()}`,
+        category: "REFUND",
+        type: "refund",
+        isBroadcast: false,
+        isGeneral: false,
+        target: "specific_users",
+        targetRole: undefined,
+        createdAt: new Date(),
+      }).catch(() => {});
+    }
+
+    // 7. Log administrative activity
     if (Activity && superAdminId) {
       await Activity.create({
         user: superAdminId,
@@ -522,23 +662,17 @@ exports.approveRefund = async (req, res) => {
         actorRole: "SUPERADMIN",
         action: "REFUND_APPROVED",
         category: "FINANCIAL",
-        details: `Approved refund of ₦${amount.toLocaleString()} to ${user.phone || user.email}`,
+        details: `Approved refund of ₦${amount.toLocaleString()} strictly to user ${user.phone || user.email}`,
         targetUser: user._id,
       }).catch(() => {});
     }
 
-    await sendNotification(
-      user._id,
-      "Refund Approved & Credited 💳",
-      `Your refund claim of ₦${amount.toLocaleString()} has been approved. New Wallet Balance: ₦${newBal.toLocaleString()}`,
-      "REFUND"
-    );
-
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `₦${amount.toLocaleString()} successfully credited back to ${user.phone || user.email}.`,
+      message: `₦${amount.toLocaleString()} successfully refunded exclusively to ${user.phone || user.email}.`,
       newBalance: newBal,
+      targetUser: user.phone || user.email,
     });
   } catch (error) {
     console.error("approveRefund Error:", error);
@@ -550,6 +684,8 @@ exports.approveRefund = async (req, res) => {
     });
   }
 };
+
+exports.processRefundSuperAdminOnly = exports.approveRefund;
 
 // =========================================================================
 // 5. ALL COMPANY TRANSACTIONS (AUDIT TRAIL)
@@ -752,7 +888,7 @@ exports.adjustUserWallet = async (req, res) => {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Provide a valid user identifier (Phone, Email, or ID) and positive amount.",
+        message: "Provide a valid user identifier (Phone, Email, or ID) and positive numeric amount.",
       });
     }
 
@@ -806,7 +942,7 @@ exports.adjustUserWallet = async (req, res) => {
 
     await sendNotification(
       user._id,
-      action === "credit" ? "Wallet Credited by Admin 💰" : "Wallet Debited by Admin ⚠️",
+      action === "credit" ? "Wallet Credited by Admin" : "Wallet Debited by Admin",
       `Your wallet balance has been ${action === "credit" ? "credited" : "debited"} with ₦${numericAmount.toLocaleString()}. Reason: ${reason || "Administrative balance sync"}. New Balance: ₦${newBal.toLocaleString()}`,
       "FINANCIAL"
     );
@@ -828,8 +964,6 @@ exports.adjustUserWallet = async (req, res) => {
     });
   }
 };
-
-exports.processRefundSuperAdminOnly = exports.approveRefund;
 
 // =========================================================================
 // 8. ROLE MANAGEMENT & SECURITY OVERRIDES
@@ -893,7 +1027,7 @@ exports.changeUserRole = async (req, res) => {
 
     await sendNotification(
       user._id,
-      "Account Role Updated 🎖️",
+      "Account Role Updated",
       `Your platform account role has been updated from ${String(previousRole).toUpperCase()} to ${normalizedRole.toUpperCase()}.`,
       "SYSTEM"
     );
@@ -971,7 +1105,7 @@ exports.forceResetUserSecurity = async (req, res) => {
 
     await sendNotification(
       user._id,
-      "Security Credentials Reset 🔐",
+      "Security Credentials Reset",
       "Your account credentials have been updated by administration.",
       "SECURITY"
     );
@@ -1091,7 +1225,7 @@ exports.assignTarget = async (req, res) => {
 
     await sendNotification(
       user._id,
-      "Monthly Targets Assigned 🎯",
+      "Monthly Targets Assigned",
       `Your performance quota for ${user.targets.currentMonth || "this month"} is set: ${user.targets.dataGoal}GB Data & ${user.targets.agentGoal} Agents goal.`,
       "TARGET"
     );
@@ -1119,69 +1253,105 @@ exports.assignTarget = async (req, res) => {
 
 exports.broadcastNotification = async (req, res) => {
   try {
-    const { title, message, targetType, targetUserId, recipientId, category } = req.body;
+    const { title, message, body, audience = "all", recipientId, targetUserId, category = "ADMIN_BROADCAST" } = req.body;
     const superAdminId = req.user?._id || req.user?.id;
 
-    if (!title || !message) {
+    const finalTitle = String(title || "").trim();
+    const finalMessage = String(message || body || "").trim();
+    const targetSingle = recipientId || targetUserId;
+
+    if (!finalTitle || !finalMessage) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Notification title and body message are required.",
+        message: "Title and Message are required.",
       });
     }
 
-    const singleTarget = targetUserId || recipientId;
+    const notifObj = {
+      title: finalTitle,
+      message: finalMessage,
+      category: String(category).toUpperCase(),
+      date: new Date(),
+      createdAt: new Date(),
+      isRead: false,
+      read: false,
+    };
 
-    if (singleTarget && targetType !== "all") {
-      const user = await findUserByIdentifier(singleTarget);
+    if (audience === "single" || (targetSingle && audience !== "all")) {
+      const user = await findUserByIdentifier(targetSingle);
       if (!user) {
         return res.status(404).json({
           success: false,
           status: "failed",
-          message: "Designated recipient not found.",
+          message: `Target user account not found (${targetSingle}).`,
         });
       }
 
-      await sendNotification(
-        user._id,
-        title.trim(),
-        message.trim(),
-        category || "ADMIN_BROADCAST"
-      );
+      if (!user.notifications) user.notifications = [];
+      user.notifications.unshift(notifObj);
+      if (user.notifications.length > 100) user.notifications = user.notifications.slice(0, 100);
+      await user.save({ validateBeforeSave: false });
+
+      if (Notification) {
+        await Notification.create({
+          recipient: user._id,
+          user: user._id,
+          title: finalTitle,
+          message: finalMessage,
+          category: String(category).toUpperCase(),
+          isBroadcast: false,
+          target: "specific_users",
+        }).catch(() => {});
+      }
 
       return res.status(200).json({
         success: true,
         status: "success",
-        message: `Notification delivered directly to ${user.phone || user.email}.`,
+        message: `Notification delivered directly to ${user.name || user.phone}.`,
+        targetUser: user.phone || user.email,
       });
+    }
+
+    let userFilter = { isSuspended: { $ne: true } };
+    let targetLabel = "All Users";
+
+    if (audience === "agents") {
+      userFilter.role = "agent";
+      targetLabel = "All Agents";
+    } else if (audience === "supervisors") {
+      userFilter.role = { $in: ["supervisor", "field_supervisor"] };
+      targetLabel = "All Supervisors";
+    } else if (audience === "state_managers" || audience === "scm") {
+      userFilter.role = { $in: ["state_manager", "leader"] };
+      targetLabel = "All State Managers (SCM/SM)";
+    } else if (audience === "nsd") {
+      userFilter.role = { $in: ["national_sales_director", "super_leader"] };
+      targetLabel = "All National Sales Directors (NSD)";
+    } else if (audience === "users") {
+      userFilter.role = "user";
+      targetLabel = "All Customers";
     }
 
     if (Notification) {
       await Notification.create({
-        title: title.trim(),
-        message: message.trim(),
-        category: String(category || "BROADCAST").toUpperCase(),
+        title: finalTitle,
+        message: finalMessage,
+        category: String(category).toUpperCase(),
+        target: audience === "all" ? "all" : audience,
+        targetRole: audience === "all" ? undefined : audience,
         isBroadcast: true,
-        target: "all",
-        createdAt: new Date(),
       }).catch(() => {});
     }
 
     const updateResult = await User.updateMany(
-      { isSuspended: { $ne: true } },
+      userFilter,
       {
         $push: {
           notifications: {
-            $each: [
-              {
-                title: title.trim(),
-                message: message.trim(),
-                category: category || "BROADCAST",
-                date: new Date(),
-                isRead: false,
-              },
-            ],
+            $each: [notifObj],
             $position: 0,
+            $slice: 100,
           },
         },
       }
@@ -1194,22 +1364,23 @@ exports.broadcastNotification = async (req, res) => {
         actorRole: "SUPERADMIN",
         action: "BROADCAST_NOTIFICATION_DISPATCHED",
         category: "COMMUNICATION",
-        details: `Broadcast alert: "${title}" delivered to ${updateResult.modifiedCount} accounts`,
+        details: `Dispatched "${finalTitle}" to [${targetLabel}]. Reached ${updateResult.modifiedCount} accounts.`,
       }).catch(() => {});
     }
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Broadcast delivered successfully to ${updateResult.modifiedCount} active users.`,
+      message: `Notification successfully dispatched to ${targetLabel} (${updateResult.modifiedCount} accounts).`,
       dispatchedCount: updateResult.modifiedCount,
+      audience: targetLabel,
     });
   } catch (error) {
     console.error("broadcastNotification Error:", error);
     return res.status(500).json({
       success: false,
       status: "failed",
-      message: "Failed to dispatch broadcast notification.",
+      message: "Failed to dispatch notification.",
       error: error.message,
     });
   }
