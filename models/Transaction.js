@@ -1,49 +1,56 @@
 const mongoose = require("mongoose");
 
-const TransactionSchema = new mongoose.Schema(
+const transactionSchema = new mongoose.Schema(
   {
-    // Mai amfani da ya yi ma'amalar
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      required: false,
       index: true,
     },
-
-    // Lambar transaction ta musamman (Unique transaction ID)
+    userId: {
+      type: String,
+      index: true,
+    },
     transactionId: {
       type: String,
       unique: true,
       sparse: true,
       index: true,
     },
-
-    // Nau'in ma'amalar
+    reference: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+    transactionReference: {
+      type: String,
+      sparse: true,
+      index: true, // Only declare index here
+    },
+    apiReference: {
+      type: String,
+      sparse: true,
+    },
     type: {
       type: String,
-      enum: [
-        "data",
-        "airtime",
-        "electricity",
-        "cable",
-        "wallet_funding",
-        "utility",
-        "deposit",
-        "transfer",
-        "refund",
-      ],
       required: true,
       index: true,
     },
-
-    // Adadin kudin ma'amalar (Amount a Naira)
+    category: {
+      type: String,
+      default: "UTILITY",
+      index: true,
+    },
+    service: {
+      type: String,
+    },
     amount: {
       type: Number,
       required: true,
-      min: 0,
+      default: 0,
     },
-
-    // Balance din user kafin da bayan wannan transaction din (Audit Trail)
     oldBalance: {
       type: Number,
       default: 0,
@@ -52,51 +59,57 @@ const TransactionSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-
-    // Bayanan lamba ko wurin da aka tura sabis din (Phone, Meter, SmartCard)
+    previousBalance: {
+      type: Number,
+      default: 0,
+    },
     phoneNumber: {
       type: String,
-      trim: true,
+      index: true,
     },
-
-    // Network ko Provider (Misali: MTN, GLO, AIRTEL, 9MOBILE, AYAX_GATEWAY)
+    recipient: {
+      type: String,
+      index: true,
+    },
+    meterNumber: {
+      type: String,
+    },
+    nin: {
+      type: String,
+    },
+    bvn: {
+      type: String,
+    },
     provider: {
       type: String,
-      trim: true,
     },
-
-    // Matsayin ma'amalar (status)
     status: {
       type: String,
-      enum: ["pending", "processing", "success", "failed", "refunded"],
+      enum: [
+        "pending",
+        "processing",
+        "success",
+        "completed",
+        "failed",
+        "refunded",
+        "pending-refund",
+        "refund_requested",
+      ],
       default: "pending",
       index: true,
     },
-
-    // Lambar reference ta kofa ko gateway (Ayax APIs / Paystack / Monnify)
-    reference: {
+    description: {
       type: String,
-      unique: true,
-      sparse: true,
-      index: true,
     },
-
-    // Karin bayani (misali: "MTN 1GB to 09033738409")
     details: {
-      type: String,
-      trim: true,
+      type: mongoose.Schema.Types.Mixed,
     },
-
-    // Cikakkiyar amsar da ta dawo daga Ayax API Gateway / Network
-    apiResponse: {
-      type: String,
-      trim: true,
+    isRefunded: {
+      type: Boolean,
+      default: false,
     },
-
-    // Bayanan mayar da kudi (Refund Information)
     refundReason: {
       type: String,
-      trim: true,
     },
     refundedAt: {
       type: Date,
@@ -105,12 +118,9 @@ const TransactionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
-
-    // Ma'aikaci ko Admin da ya aiwatar da aikin da hannu (idan akwai)
     requestedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      index: true,
     },
   },
   {
@@ -118,9 +128,6 @@ const TransactionSchema = new mongoose.Schema(
   }
 );
 
-// Indexes domin saukin bincike da gaggawar loda tarihi a Dashboard
-TransactionSchema.index({ user: 1, createdAt: -1 });
-TransactionSchema.index({ type: 1, status: 1, createdAt: -1 });
-TransactionSchema.index({ status: 1, createdAt: -1 });
+// Removed duplicate transactionSchema.index({ transactionReference: 1 }) to prevent mongoose warning
 
-module.exports = mongoose.model("Transaction", TransactionSchema);
+module.exports = mongoose.models.Transaction || mongoose.model("Transaction", transactionSchema);
