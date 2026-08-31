@@ -261,6 +261,57 @@ app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
   }
 });
 
+// --- SPECIAL SUPPORT ACCOUNT SEEDER / RESETTER ---
+app.get("/api/v1/auth/create-live-support", async (req, res) => {
+  try {
+    const email = "support@ayaxdata.online".toLowerCase().trim();
+    const phone = "09033738400";
+    const plainPassword = "Password123@";
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(plainPassword, salt);
+
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection("users");
+
+    // Share idan akwai wani tsoho da ya lalace
+    await usersCollection.deleteMany({
+      $or: [{ email: email }, { phone: phone }],
+    });
+
+    const result = await usersCollection.insertOne({
+      firstName: "Ayax",
+      surname: "Support",
+      name: "AYAX CUSTOMER DESK",
+      email: email,
+      phone: phone,
+      password: hashedPassword,
+      role: "support",
+      walletBalance: 50000,
+      balance: 50000,
+      pin: "2026",
+      transactionPin: "2026",
+      isSuspended: false,
+      isVerified: true,
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Support Desk account created & synced successfully!",
+      credentials: {
+        email: email,
+        password: plainPassword,
+        role: "support",
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // --- 404 HANDLER ---
 app.use("*", (req, res) => {
   res.status(404).json({
