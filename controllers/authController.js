@@ -5,6 +5,10 @@ const axios = require("axios");
 const nodemailer = require("nodemailer");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
+const { Resend } = require("resend");
+
+const resendApiKey = process.env.RESEND_API_KEY || "";
+const resend = resendApiKey ? new Resend(resendApiKey) : null;
 
 // DYNAMIC/SAFE MODEL IMPORTS
 let Activity;
@@ -596,8 +600,6 @@ exports.login = async (req, res) => {
 
 exports.supervisorLogin = exports.login;
 
-
-
 // @desc    Initiate Automated Forgot Password (OTP & Direct Magic Link)
 // @route   POST /api/v1/auth/forgot-password
 exports.forgotPassword = async (req, res) => {
@@ -645,24 +647,67 @@ exports.forgotPassword = async (req, res) => {
     const serverOrigin = process.env.CLIENT_URL || "https://ayaxdata.online";
     const directResetLink = `${serverOrigin}/reset-password?token=${resetToken}&email=${encodeURIComponent(user.email)}`;
 
-    // 4. Non-blocking Background Email Dispatcher
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; padding: 24px; max-width: 520px; margin: auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h2 style="color: #0284c7; margin: 0; font-size: 22px;">Ayax Data Xpress</h2>
+          <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Security & Password Authorization</p>
+        </div>
+        
+        <p style="color: #334155; font-size: 14px;">Hello <strong>${user.firstName || user.name || "Customer"}</strong>,</p>
+        <p style="color: #475569; font-size: 13px; line-height: 1.5;">Your 4-digit password reset OTP is:</p>
+
+        <div style="background-color: #f0f9ff; border: 1px dashed #0284c7; padding: 14px; text-align: center; font-size: 26px; font-weight: 900; color: #0369a1; letter-spacing: 6px; border-radius: 8px; margin: 18px 0;">
+          ${otpCode}
+        </div>
+
+        <div style="text-align: center; margin: 24px 0;">
+          <a href="${directResetLink}" style="background-color: #0284c7; color: #ffffff; text-decoration: none; padding: 12px 24px; font-size: 13px; font-weight: bold; border-radius: 8px; display: inline-block;">
+            DIRECT ONE-CLICK PASSWORD RESET
+          </a>
+        </div>
+
+        <p style="color: #94a3b8; font-size: 11.5px; line-height: 1.4; margin-top: 20px;">This authorization token expires in 15 minutes.</p>
+      </div>
+    `;
+
+    // 4. Dispatch Email via Resend HTTP API (Zero Port Blocking)
+    let emailDispatched = false;
+
+    if (resend) {
+      resend.emails
+        .send({
+          from: process.env.EMAIL_FROM || "Ayax Data Xpress <onboarding@resend.dev>",
+          to: user.email,
+          subject: "Password Reset Authorization - Ayax Data Xpress",
+          html: emailHtml,
+        })
+        .then(() => {
+          console.log(`[RESEND SUCCESS]: OTP delivered to ${user.email}`);
+        })
+        .catch((err) => {
+          console.error("Resend API Error:", err.message);
+        });
+      emailDispatched = true;
+    }
+
+    // 5. Fallback via Nodemailer (if Resend is not set)
     const emailUser = process.env.EMAIL_USER;
     const emailPass = process.env.EMAIL_PASS;
 
-    if (emailUser && emailPass) {
+    if (!emailDispatched && emailUser && emailPass) {
       const transporter = nodemailer.createTransport({
         host: "smtp.gmail.com",
         port: 587,
-        secure: false, // Must be false for 587 (uses STARTTLS)
+        secure: false,
         auth: {
           user: emailUser,
           pass: emailPass.replace(/\s+/g, ""),
         },
         tls: {
-          ciphers: "SSLv3",
           rejectUnauthorized: false,
         },
-        connectionTimeout: 10000,
+        connectionTimeout: 5000,
       });
 
       transporter
@@ -670,31 +715,9 @@ exports.forgotPassword = async (req, res) => {
           from: `"Ayax Data Xpress" <${emailUser}>`,
           to: user.email,
           subject: "Password Reset Authorization - Ayax Data Xpress",
-          html: `
-            <div style="font-family: Arial, sans-serif; padding: 24px; max-width: 520px; margin: auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
-              <div style="text-align: center; margin-bottom: 20px;">
-                <h2 style="color: #0284c7; margin: 0; font-size: 22px;">Ayax Data Xpress</h2>
-                <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Security & Password Authorization</p>
-              </div>
-              
-              <p style="color: #334155; font-size: 14px;">Hello <strong>${user.firstName || user.name || "Customer"}</strong>,</p>
-              <p style="color: #475569; font-size: 13px; line-height: 1.5;">Your 4-digit password reset OTP is:</p>
-
-              <div style="background-color: #f0f9ff; border: 1px dashed #0284c7; padding: 14px; text-align: center; font-size: 26px; font-weight: 900; color: #0369a1; letter-spacing: 6px; border-radius: 8px; margin: 18px 0;">
-                ${otpCode}
-              </div>
-
-              <div style="text-align: center; margin: 24px 0;">
-                <a href="${directResetLink}" style="background-color: #0284c7; color: #ffffff; text-decoration: none; padding: 12px 24px; font-size: 13px; font-weight: bold; border-radius: 8px; display: inline-block;">
-                  DIRECT ONE-CLICK PASSWORD RESET
-                </a>
-              </div>
-
-              <p style="color: #94a3b8; font-size: 11.5px; line-height: 1.4; margin-top: 20px;">This authorization token expires in 15 minutes.</p>
-            </div>
-          `,
+          html: emailHtml,
         })
-        .catch((err) => console.error("Background Mail Dispatch Error:", err.message));
+        .catch((err) => console.error("SMTP Dispatch Error:", err.message));
     }
 
     // Return instant success response to frontend immediately
@@ -715,6 +738,7 @@ exports.forgotPassword = async (req, res) => {
     });
   }
 };
+
 // @desc    Authorize and Set New Password (Accepts either 4-digit OTP OR Direct Link Token)
 // @route   POST /api/v1/auth/reset-password
 exports.resetPassword = async (req, res) => {
