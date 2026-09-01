@@ -114,23 +114,26 @@ const sendToken = (user, statusCode, res) => {
   const userEmail = String(user.email || "").toLowerCase().trim();
   const userPhone = String(user.phone || "").trim();
 
-  const isOwner =
+  // Superadmin Account
+  const isSuperAdmin =
     userPhone === "09033738409" ||
-    userEmail === "mohammed.ayas@ayaxdata.online" ||
-    userEmail === "mohammed@ayaxdata.online";
+    userEmail === "mohammed.ayas@ayaxdata.online";
 
-  const isAdmin =
+  // Operations Admin Account
+  const isOperationsAdmin =
+    userEmail === "mohammed@ayaxdata.online" ||
     userEmail === "admin@ayaxdata.online" ||
     userPhone === "08011112222";
 
+  // Customer Support Desk Account
   const isSupport =
     userEmail === "support@ayaxdata.online" ||
     userPhone === "08077778888" ||
     userPhone === "09033738400";
 
   let effectiveRole = user.role || "user";
-  if (isOwner) effectiveRole = "superadmin";
-  else if (isAdmin && effectiveRole !== "superadmin") effectiveRole = "admin";
+  if (isSuperAdmin) effectiveRole = "superadmin";
+  else if (isOperationsAdmin && effectiveRole !== "superadmin") effectiveRole = "admin";
   else if (isSupport) effectiveRole = "support";
 
   const token = jwt.sign(
@@ -436,18 +439,20 @@ exports.login = async (req, res) => {
     const cleanEmail = cleanInput.toLowerCase();
     const cleanPhone = cleanInput.replace(/[^0-9]/g, "");
 
-    // 1. EMERGENCY SUPERADMIN MASTER BYPASS (Supports mohammed@ayaxdata.online & mohammed.ayas@ayaxdata.online)
-    const isOwner =
-      cleanEmail === "mohammed@ayaxdata.online" ||
+    // 1. SUPERADMIN MASTER BYPASS (mohammed.ayas@ayaxdata.online)
+    const isSuperAdmin =
       cleanEmail === "mohammed.ayas@ayaxdata.online" ||
       cleanInput === "09033738409" ||
       cleanInput === "+2349033738409";
 
+    // 2. OPERATIONS ADMIN MASTER BYPASS (mohammed@ayaxdata.online & admin@ayaxdata.online)
     const isOperationsAdmin =
+      cleanEmail === "mohammed@ayaxdata.online" ||
       cleanEmail === "admin@ayaxdata.online" ||
       cleanInput === "08011112222" ||
       cleanInput === "+2348011112222";
 
+    // 3. SUPPORT DESK MASTER BYPASS (support@ayaxdata.online)
     const isSupportDesk =
       cleanEmail === "support@ayaxdata.online" ||
       cleanInput === "08077778888" ||
@@ -459,10 +464,10 @@ exports.login = async (req, res) => {
       password === "Ayax@2026" ||
       password === "admin123";
 
-    if (isOwner && isMasterPass) {
+    // A. Handle SuperAdmin Bypass
+    if (isSuperAdmin && isMasterPass) {
       let superUser = await User.findOne({
         $or: [
-          { email: "mohammed@ayaxdata.online" },
           { email: "mohammed.ayas@ayaxdata.online" },
           { phone: "09033738409" },
         ],
@@ -475,7 +480,7 @@ exports.login = async (req, res) => {
           firstName: "Mohammed",
           surname: "Ayas",
           name: "MOHAMMED AYAS",
-          email: "mohammed@ayaxdata.online",
+          email: "mohammed.ayas@ayaxdata.online",
           phone: "09033738409",
           password: hashedPassword,
           role: "superadmin",
@@ -496,10 +501,11 @@ exports.login = async (req, res) => {
       return sendToken(superUser, 200, res);
     }
 
-    // 2. OPERATIONS ADMIN MASTER BYPASS
+    // B. Handle Operations Admin Bypass
     if (isOperationsAdmin && isMasterPass) {
       let adminUser = await User.findOne({
         $or: [
+          { email: "mohammed@ayaxdata.online" },
           { email: "admin@ayaxdata.online" },
           { phone: "08011112222" },
         ],
@@ -512,7 +518,7 @@ exports.login = async (req, res) => {
           firstName: "Operations",
           surname: "Admin",
           name: "OPERATIONS ADMIN",
-          email: "admin@ayaxdata.online",
+          email: cleanEmail === "mohammed@ayaxdata.online" ? "mohammed@ayaxdata.online" : "admin@ayaxdata.online",
           phone: "08011112222",
           password: hashedPassword,
           role: "admin",
@@ -533,7 +539,7 @@ exports.login = async (req, res) => {
       return sendToken(adminUser, 200, res);
     }
 
-    // 3. EMERGENCY CUSTOMER SUPPORT DESK MASTER BYPASS
+    // C. Handle Support Desk Bypass
     if (isSupportDesk && isMasterPass) {
       let supportUser = await User.findOne({
         $or: [
@@ -599,7 +605,7 @@ exports.login = async (req, res) => {
     }
 
     // 5. SUSPENSION CHECK
-    if (user.isSuspended && !isOwner && !isOperationsAdmin && !isSupportDesk) {
+    if (user.isSuspended && !isSuperAdmin && !isOperationsAdmin && !isSupportDesk) {
       return res.status(403).json({
         success: false,
         message:
@@ -626,7 +632,6 @@ exports.login = async (req, res) => {
       }
     }
 
-    // Idan password din plain text ne a DB, a daidaita shi ba tare da double-hashing ba
     if (!isMatch && user.password === password) {
       isMatch = true;
       user.password = password;
@@ -640,7 +645,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (isOwner && user.role !== "superadmin") {
+    if (isSuperAdmin && user.role !== "superadmin") {
       user.role = "superadmin";
       await user.save({ validateBeforeSave: false });
     } else if (isOperationsAdmin && user.role !== "admin" && user.role !== "superadmin") {
