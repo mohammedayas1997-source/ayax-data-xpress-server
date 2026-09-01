@@ -20,23 +20,27 @@ try {
   Notification = null;
 }
 
-// 1. Ayax API Gateway Base Configuration
-const RAW_URL =
-  process.env.AYAX_API_BASE_URL ||
-  process.env.MARKETPLACE_API_URL ||
-  "https://ayax-api-marketplace.onrender.com";
+// Ayax Standard API Headers Generator
+const getHeaders = () => {
+  const activeKey = String(
+    process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
+  ).trim();
 
-const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": activeKey,
+    Authorization: `Bearer ${activeKey}`,
+  };
+};
 
-// ✅ Daidai (Dogaro da Render Environment kawai):
-const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
-// Ayax Standard API Headers
-const getHeaders = () => ({
-  "Content-Type": "application/json",
-  "x-api-key": AYAX_API_KEY,
-  Authorization: `Bearer ${AYAX_API_KEY}`,
-});
+const getBaseUrl = () => {
+  const rawUrl =
+    process.env.AYAX_API_BASE_URL ||
+    process.env.MARKETPLACE_API_URL ||
+    "https://www.ayaxapis.com";
+  const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+  return `${cleanBase}/api/v1`;
+};
 
 // Helper don tura sanarwa ga User
 const sendNotification = async (userId, title, message, category = "IDENTITY") => {
@@ -100,7 +104,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
 
-    // Sabunta asalin transaction din zuwa refunded
     await Transaction.findOneAndUpdate(
       { reference },
       {
@@ -117,7 +120,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
       { status: "rejected", adminComment: reason }
     );
 
-    // Kirkiro sabon explicit REFUND ledger record a History
     const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     await Transaction.create({
       user: userId,
@@ -158,7 +160,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
 
 /**
  * 1. SUBMIT NIMC / NIN APPLICATION OR VERIFICATION REQUEST
- * Handles: Live charging, validation, PIN authentication, Ayax Gateway dispatch & Instant refund
  * @route POST /api/v1/nimc/submit-request (or /api/v1/nimc/request-modification)
  */
 exports.submitNIMCRequest = async (req, res) => {
@@ -239,7 +240,7 @@ exports.submitNIMCRequest = async (req, res) => {
     if (pricing && pricing.amount > 0) {
       amountToCharge = Number(pricing.amount);
     } else if (amountToCharge <= 0) {
-      amountToCharge = 150; // Default fallback price
+      amountToCharge = 150;
     }
 
     // C. Verify Wallet Balance
@@ -307,11 +308,12 @@ exports.submitNIMCRequest = async (req, res) => {
     });
 
     // G. Dispatch Live Processing to Ayax NIMC Gateway
+    const baseUrl = getBaseUrl();
     let ayaxResponse;
     const candidateEndpoints = [
-      `${AYAX_API_BASE_URL}/identity/nimc/process`,
-      `${AYAX_API_BASE_URL}/identity/nin/verify`,
-      `${AYAX_API_BASE_URL}/nimc/verify`,
+      `${baseUrl}/identity/nimc/process`,
+      `${baseUrl}/identity/nin/verify`,
+      `${baseUrl}/nimc/verify`,
     ];
 
     try {
@@ -419,7 +421,6 @@ exports.submitNIMCRequest = async (req, res) => {
       const reason =
         apiError.response?.data?.message || apiError.message || "Provider communication timed out";
 
-      // INSTANT AUTO-REFUND
       const refundBal = await executeAutoRefund(
         userId,
         amountToCharge,
@@ -449,7 +450,7 @@ exports.submitNIMCRequest = async (req, res) => {
 };
 
 /**
- * 2. LIVE VERIFY NIMC DIRECTLY (SEARCH WITHOUT REQUIRING MANUAL SLIP)
+ * 2. LIVE VERIFY NIMC DIRECTLY
  * @route POST /api/v1/nimc/verify
  */
 exports.verifyNIMC = async (req, res) => {
@@ -479,8 +480,9 @@ exports.verifyNIMC = async (req, res) => {
       payload.nin = searchValue;
     }
 
+    const baseUrl = getBaseUrl();
     const response = await axios.post(
-      `${AYAX_API_BASE_URL}/identity/nin/verify`,
+      `${baseUrl}/identity/nin/verify`,
       payload,
       {
         headers: getHeaders(),
@@ -628,7 +630,6 @@ exports.approveRequest = async (req, res) => {
 
     await request.save();
 
-    // Update corresponding transaction ledger
     if (request.reference) {
       await Transaction.findOneAndUpdate(
         { reference: request.reference },

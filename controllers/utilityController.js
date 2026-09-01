@@ -18,24 +18,27 @@ try {
   Notification = null;
 }
 
-// 1. Ayax API Gateway Base Configuration
-const RAW_URL =
-  process.env.AYAX_API_BASE_URL ||
-  process.env.MARKETPLACE_API_URL ||
-  "https://ayax-api-marketplace.onrender.com";
+// Dynamic Header & Base URL Generator
+const getHeaders = () => {
+  const activeKey = String(
+    process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
+  ).trim();
 
-const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": activeKey,
+    Authorization: `Bearer ${activeKey}`,
+  };
+};
 
-// ✅ Daidai (Dogaro da Render Environment kawai):
-const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
-
-// Helper for HTTP Headers
-const getHeaders = () => ({
-  "Content-Type": "application/json",
-  "x-api-key": AYAX_API_KEY,
-  Authorization: `Bearer ${AYAX_API_KEY}`,
-});
+const getBaseUrl = () => {
+  const rawUrl =
+    process.env.AYAX_API_BASE_URL ||
+    process.env.MARKETPLACE_API_URL ||
+    "https://www.ayaxapis.com";
+  const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+  return `${cleanBase}/api/v1`;
+};
 
 // Helper for Real-time in-app notifications
 const sendNotification = async (userId, title, message, category = "UTILITIES") => {
@@ -108,7 +111,6 @@ const executeAutoRefund = async ({
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
 
-    // Sabunta asalin transaction din zuwa refunded
     await Transaction.findOneAndUpdate(
       { reference },
       {
@@ -120,7 +122,6 @@ const executeAutoRefund = async ({
       }
     );
 
-    // Kirkiro sabon explicit REFUND ledger record a History
     const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     await Transaction.create({
       user: userId,
@@ -168,7 +169,6 @@ const executeAutoRefund = async ({
 /**
  * @desc    Verify Electricity Meter Number
  * @route   POST /api/v1/bills/electricity/verify
- * @access  Private (User/Agent)
  */
 exports.verifyMeter = async (req, res) => {
   try {
@@ -185,8 +185,9 @@ exports.verifyMeter = async (req, res) => {
       });
     }
 
+    const baseUrl = getBaseUrl();
     const response = await axios.post(
-      `${AYAX_API_BASE_URL}/bills/electricity/verify`,
+      `${baseUrl}/bills/electricity/verify`,
       {
         disco: finalDisco,
         serviceId: finalDisco,
@@ -251,7 +252,6 @@ exports.verifyMeter = async (req, res) => {
 /**
  * @desc    Purchase Electricity Token
  * @route   POST /api/v1/bills/electricity/buy
- * @access  Private (User/Agent)
  */
 exports.buyElectricity = async (req, res) => {
   try {
@@ -335,7 +335,6 @@ exports.buyElectricity = async (req, res) => {
       });
     }
 
-    // 1. Deduct funds from user wallet (Atomic Debit)
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       {
@@ -353,7 +352,6 @@ exports.buyElectricity = async (req, res) => {
     const reference = `AYAX-ELEC-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     const transactionId = `TXN-${Date.now()}`;
 
-    // 2. Create pending transaction
     await Transaction.create({
       user: userId,
       userId: userId,
@@ -374,11 +372,11 @@ exports.buyElectricity = async (req, res) => {
       details: `Electricity payment for ${finalMeterNo} (${finalDisco.toUpperCase()})`,
     });
 
-    // 3. Dispatch Live Purchase to Ayax Gateway
+    const baseUrl = getBaseUrl();
     let response;
     try {
       response = await axios.post(
-        `${AYAX_API_BASE_URL}/bills/electricity/buy`,
+        `${baseUrl}/bills/electricity/buy`,
         {
           disco: finalDisco,
           meterNo: finalMeterNo,
@@ -398,7 +396,6 @@ exports.buyElectricity = async (req, res) => {
 
       const errMsg = apiError.response?.data?.message || "Electricity gateway timed out";
 
-      // INSTANT AUTO-REFUND
       const refundBal = await executeAutoRefund({
         userId,
         amountNum,
@@ -480,7 +477,6 @@ exports.buyElectricity = async (req, res) => {
         newBalance: newBal,
       });
     } else {
-      // Gateway Refusal & Automated Refund
       const failureReason = resData?.message || "Ayax provider declined the transaction";
 
       const refundBal = await executeAutoRefund({
@@ -520,14 +516,14 @@ exports.buyElectricity = async (req, res) => {
 /**
  * @desc    Get Available Cable TV Plans/Bouquets
  * @route   GET /api/v1/bills/cable/plans
- * @access  Private (User/Agent)
  */
 exports.getCablePlans = async (req, res) => {
   try {
     const { provider, serviceId } = req.query;
     const targetProvider = String(provider || serviceId || "").toLowerCase();
 
-    const response = await axios.get(`${AYAX_API_BASE_URL}/bills/cable/plans`, {
+    const baseUrl = getBaseUrl();
+    const response = await axios.get(`${baseUrl}/bills/cable/plans`, {
       headers: getHeaders(),
       params: { provider: targetProvider },
       timeout: 25000,
@@ -557,7 +553,6 @@ exports.getCablePlans = async (req, res) => {
 /**
  * @desc    Verify Smartcard / IUC Number
  * @route   POST /api/v1/bills/cable/verify
- * @access  Private (User/Agent)
  */
 exports.verifySmartCard = async (req, res) => {
   try {
@@ -573,8 +568,9 @@ exports.verifySmartCard = async (req, res) => {
       });
     }
 
+    const baseUrl = getBaseUrl();
     const response = await axios.post(
-      `${AYAX_API_BASE_URL}/bills/cable/verify`,
+      `${baseUrl}/bills/cable/verify`,
       {
         provider: finalProvider,
         service: finalProvider,
@@ -638,7 +634,6 @@ exports.verifySmartCard = async (req, res) => {
 /**
  * @desc    Subscribe / Renew Cable TV Subscription
  * @route   POST /api/v1/bills/cable/buy
- * @access  Private (User/Agent)
  */
 exports.buyCableSubscription = async (req, res) => {
   try {
@@ -656,7 +651,7 @@ exports.buyCableSubscription = async (req, res) => {
       phoneNumber,
       pin,
       transactionPin,
-      subscriptionType, // "change" or "renew"
+      subscriptionType,
     } = req.body;
 
     const finalProvider = String(provider || service || "").toLowerCase().trim();
@@ -725,7 +720,6 @@ exports.buyCableSubscription = async (req, res) => {
       });
     }
 
-    // 1. Deduct funds from user wallet (Atomic Debit)
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       {
@@ -743,7 +737,6 @@ exports.buyCableSubscription = async (req, res) => {
     const reference = `AYAX-CABLE-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     const transactionId = `TXN-${Date.now()}`;
 
-    // 2. Create pending transaction
     await Transaction.create({
       user: userId,
       userId: userId,
@@ -765,11 +758,11 @@ exports.buyCableSubscription = async (req, res) => {
       details: `Cable Subscription (${planName || finalPlanCode}) for IUC ${finalCardNo} (${finalProvider.toUpperCase()})`,
     });
 
-    // 3. Dispatch Live Subscription to Ayax Cable Gateway
+    const baseUrl = getBaseUrl();
     let response;
     try {
       response = await axios.post(
-        `${AYAX_API_BASE_URL}/bills/cable/buy`,
+        `${baseUrl}/bills/cable/buy`,
         {
           provider: finalProvider,
           smartCardNo: finalCardNo,
@@ -791,7 +784,6 @@ exports.buyCableSubscription = async (req, res) => {
 
       const errMsg = apiError.response?.data?.message || "Cable gateway timed out";
 
-      // INSTANT AUTO-REFUND
       const refundBal = await executeAutoRefund({
         userId,
         amountNum,
@@ -861,7 +853,6 @@ exports.buyCableSubscription = async (req, res) => {
         newBalance: newBal,
       });
     } else {
-      // Gateway Refusal & Automated Refund
       const failureReason = resData?.message || "Ayax provider declined cable activation";
 
       const refundBal = await executeAutoRefund({

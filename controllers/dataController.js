@@ -2,7 +2,18 @@ const axios = require("axios");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const bcrypt = require("bcryptjs");
-const DataPlan = require("../models/DataPlan");
+
+// Dynamic DataPlan Model Loader
+let DataPlan;
+try {
+  DataPlan = require("../models/DataPlan");
+} catch (e) {
+  try {
+    DataPlan = require("../models/Plan");
+  } catch (err) {
+    DataPlan = null;
+  }
+}
 
 // Dynamic imports don kare server daga crashing idan babu models
 let Activity;
@@ -18,9 +29,6 @@ try {
 } catch (e) {
   Notification = null;
 }
-
-// ✅ Daidai (Dogaro da Render Environment kawai):
-const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
 
 // Helper don tura Notification a Database da App
 const sendNotification = async (userId, title, message, category = "DATA") => {
@@ -84,7 +92,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
 
-    // Sabunta asalin transaction din zuwa refunded
     await Transaction.findOneAndUpdate(
       { reference },
       {
@@ -96,7 +103,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
       }
     );
 
-    // Ƙirƙirar sabon record na REFUND a transaction history
     const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     await Transaction.create({
       user: userId,
@@ -124,7 +130,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
     await sendNotification(
       userId,
       "Data Refund Credited 💰",
-      `Your ₦${amountNum.toLocaleString()} has been refunded back to your wallet because ${finalNetwork.toUpperCase()} Data delivery to ${targetPhone} failed. Reason: ${reason}`,
+      `Your ₦${amountNum.toLocaleString()} has been refunded back to your wallet. Reason: ${reason}`,
       "REFUND"
     );
 
@@ -135,22 +141,21 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
 };
 
 /**
- * @desc    Sayen Data Bundle (VTU) via Ayax API Marketplace tare da Auto-Refund
+ * @desc    Sayen Data Bundle (VTU) via Ayax Gateway tare da Auto-Refund
  * @route   POST /api/v1/vtu/buy-data (ko /api/v1/data/buy)
  * @access  Private (User)
  */
 exports.buyData = async (req, res) => {
   try {
-    const { network, phone, phoneNumber, phoneNo, planCode, planId, amount, transactionPin, pin } = req.body;
+    const { network, phone, phoneNumber, phoneNo, planCode, planId, plan, amount, transactionPin, pin } = req.body;
     const userId = req.user?._id || req.user?.id;
 
     const targetPhone = String(phoneNumber || phone || phoneNo || "").trim();
     const finalNetwork = String(network || "").trim().toUpperCase();
-    const cleanPlanCode = String(planCode || planId || "1000").trim();
+    const cleanPlanCode = String(planCode || planId || plan || "1000").trim();
     const amountNum = Number(amount);
     const userPin = String(transactionPin || pin || "").trim();
 
-    // 1. Validation
     if (!finalNetwork || !targetPhone || !cleanPlanCode) {
       return res.status(400).json({
         success: false,
@@ -178,7 +183,7 @@ exports.buyData = async (req, res) => {
       return res.status(404).json({ success: false, message: "User account not found." });
     }
 
-    // 2. Tabbatar da PIN
+    // Tabbatar da PIN
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
 
@@ -204,7 +209,7 @@ exports.buyData = async (req, res) => {
       });
     }
 
-    // 3. Duba Wallet Balance
+    // Duba Wallet Balance
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
 
     if (currentBal < amountNum) {
@@ -214,7 +219,7 @@ exports.buyData = async (req, res) => {
       });
     }
 
-    // 4. Atomic Debit daga Wallet
+    // Atomic Debit daga Wallet
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       {
@@ -232,7 +237,6 @@ exports.buyData = async (req, res) => {
     const transactionId = `DATA${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
     const reference = `AYAX-DATA-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
-    // 5. Ajiye Transaction History a matsayin 'pending'
     await Transaction.create({
       user: userId,
       userId: userId,
@@ -251,11 +255,11 @@ exports.buyData = async (req, res) => {
       details: `${finalNetwork} (${cleanPlanCode}) Data Bundle for ${targetPhone}`,
     });
 
-    // 6. Saita URL da API Key a Runtime
-    const activeApiKey = (process.env.AYAX_API_KEY || FALLBACK_API_KEY).trim();
-    const rawBaseUrl = process.env.AYAX_API_BASE_URL || "https://ayax-api-marketplace.onrender.com";
-    const cleanBaseUrl = rawBaseUrl.replace(/\/+$/, "").replace(/\/api\/v1\/?$/, "");
+    // Haɗa ainihin Gateway Base URL (tare da fallback zuwa www.ayaxapis.com)
+    const rawBaseUrl = process.env.AYAX_API_BASE_URL || "https://www.ayaxapis.com";
+    const cleanBaseUrl = rawBaseUrl.replace(/\/+$/, "");
     const targetUrl = `${cleanBaseUrl}/api/v1/data/purchase`;
+    const activeApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
 
     let response;
     try {
@@ -266,6 +270,7 @@ exports.buyData = async (req, res) => {
           phone: targetPhone,
           phoneNumber: targetPhone,
           planCode: cleanPlanCode,
+          planId: cleanPlanCode,
           amount: amountNum,
           reference: reference,
         },
@@ -279,7 +284,7 @@ exports.buyData = async (req, res) => {
         }
       );
     } catch (apiError) {
-      console.error("Ayax Data API Error:", apiError.response?.data || apiError.message);
+      console.error("Ayax Gateway Data Error:", apiError.response?.data || apiError.message);
 
       const errMsg =
         apiError.response?.data?.message ||
@@ -287,7 +292,6 @@ exports.buyData = async (req, res) => {
         apiError.message ||
         "Gateway connection error";
 
-      // INSTANT AUTO-REFUND
       const refundBalance = await executeAutoRefund(
         userId,
         amountNum,
@@ -302,7 +306,7 @@ exports.buyData = async (req, res) => {
         success: false,
         status: "failed",
         refunded: true,
-        message: `Provider Error (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet instantly.`,
+        message: `Provider Error (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
         newBalance: refundBalance,
       });
     }
@@ -357,7 +361,6 @@ exports.buyData = async (req, res) => {
         newBalance: newBal,
       });
     } else {
-      // INSTANT AUTO-REFUND idan provider ya ki amincewa da siyan
       const failReason = resData.message || resData.error || "Provider declined data transaction";
 
       const refundBalance = await executeAutoRefund(
@@ -388,21 +391,32 @@ exports.buyData = async (req, res) => {
   }
 };
 
-// @desc    Get All Active Data Plans for Users & Agents
+// @desc    Get All Active Data Plans
 // @route   GET /api/v1/data/plans OR GET /api/v1/plans
 // @access  Public / Protected
 exports.getDataPlans = async (req, res) => {
   try {
     const { network } = req.query;
-    let query = { isActive: { $ne: false } };
+    let query = { status: { $ne: "disabled" }, isActive: { $ne: false } };
 
     if (network) {
       query.network = String(network).toUpperCase().trim();
     }
 
-    const plans = await DataPlan.find(query)
-      .sort({ network: 1, userPrice: 1 })
-      .lean();
+    let plans = [];
+    if (DataPlan) {
+      plans = await DataPlan.find(query).sort({ network: 1, userPrice: 1 }).lean();
+    }
+
+    if (!plans || plans.length === 0) {
+      plans = [
+        { id: "mtn_sme_1gb", network: "MTN", planType: "SME", plan: "1.0 GB", validity: "30 Days", costPrice: 245, userPrice: 285, agentPrice: 265, supervisorPrice: 255, apiPrice: 250, status: "active" },
+        { id: "mtn_cg_1gb", network: "MTN", planType: "Corporate Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 255, userPrice: 295, agentPrice: 280, supervisorPrice: 270, apiPrice: 265, status: "active" },
+        { id: "airtel_cg_1gb", network: "AIRTEL", planType: "Corporate Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 240, userPrice: 280, agentPrice: 265, supervisorPrice: 255, apiPrice: 250, status: "active" },
+        { id: "glo_data_1gb", network: "GLO", planType: "Data Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 220, userPrice: 265, agentPrice: 250, supervisorPrice: 240, apiPrice: 235, status: "active" },
+        { id: "9mobile_sme_1gb", network: "9MOBILE", planType: "SME", plan: "1.0 GB", validity: "30 Days", costPrice: 180, userPrice: 230, agentPrice: 210, supervisorPrice: 200, apiPrice: 195, status: "active" },
+      ];
+    }
 
     return res.status(200).json({
       success: true,

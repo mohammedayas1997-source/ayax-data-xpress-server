@@ -18,24 +18,27 @@ try {
   Notification = null;
 }
 
-// 1. Ayax API Gateway Base Configuration
-const RAW_URL =
-  process.env.AYAX_API_BASE_URL ||
-  process.env.MARKETPLACE_API_URL ||
-  "https://ayax-api-marketplace.onrender.com";
+// Ayax Standard API Headers Generator
+const getHeaders = () => {
+  const activeKey = String(
+    process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
+  ).trim();
 
-const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": activeKey,
+    Authorization: `Bearer ${activeKey}`,
+  };
+};
 
-// ✅ Daidai (Dogaro da Render Environment kawai):
-const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
-
-// Ayax Standard API Headers
-const getHeaders = () => ({
-  "Content-Type": "application/json",
-  "x-api-key": AYAX_API_KEY,
-  Authorization: `Bearer ${AYAX_API_KEY}`,
-});
+const getBaseUrl = () => {
+  const rawUrl =
+    process.env.AYAX_API_BASE_URL ||
+    process.env.MARKETPLACE_API_URL ||
+    "https://www.ayaxapis.com";
+  const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+  return `${cleanBase}/api/v1`;
+};
 
 // Helper don tura Notification
 const sendNotification = async (userId, title, message, category = "UTILITIES") => {
@@ -99,7 +102,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalDisco, final
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
 
-    // Sabunta asalin transaction ɗin zuwa refunded
     await Transaction.findOneAndUpdate(
       { reference },
       {
@@ -111,7 +113,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalDisco, final
       }
     );
 
-    // Ƙirƙirar explicit REFUND record a Transaction History
     const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     await Transaction.create({
       user: userId,
@@ -170,12 +171,13 @@ exports.verifyMeter = async (req, res) => {
 
   try {
     const userId = req.user ? req.user._id || req.user.id : null;
+    const baseUrl = getBaseUrl();
 
     let response;
     const candidateEndpoints = [
-      `${AYAX_API_BASE_URL}/bills/electricity/verify`,
-      `${AYAX_API_BASE_URL}/electricity/verify`,
-      `${AYAX_API_BASE_URL}/vtu/electricity/verify`,
+      `${baseUrl}/bills/electricity/verify`,
+      `${baseUrl}/electricity/verify`,
+      `${baseUrl}/vtu/electricity/verify`,
     ];
 
     for (const endpoint of candidateEndpoints) {
@@ -375,7 +377,6 @@ exports.buyElectricity = async (req, res) => {
     const transactionId = `ELEC${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
     const reference = `AYAX-ELEC-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
-    // Ajiye Pending Transaction Record a History
     await Transaction.create({
       user: userId,
       userId: userId,
@@ -396,12 +397,12 @@ exports.buyElectricity = async (req, res) => {
       details: `${finalDisco.toUpperCase()} Electricity Token for Meter ${finalMeterNo}`,
     });
 
-    // Dispatch Purchase zuwa Ayax Electricity Gateway
+    const baseUrl = getBaseUrl();
     let response;
     const candidatePurchaseEndpoints = [
-      `${AYAX_API_BASE_URL}/bills/electricity/buy`,
-      `${AYAX_API_BASE_URL}/electricity/buy`,
-      `${AYAX_API_BASE_URL}/vtu/electricity/pay`,
+      `${baseUrl}/bills/electricity/buy`,
+      `${baseUrl}/electricity/buy`,
+      `${baseUrl}/vtu/electricity/pay`,
     ];
 
     try {
@@ -443,7 +444,6 @@ exports.buyElectricity = async (req, res) => {
         apiError.message ||
         "Electricity gateway timed out";
 
-      // INSTANT AUTO-REFUND
       const refundBal = await executeAutoRefund(
         userId,
         amountNum,
@@ -531,7 +531,6 @@ exports.buyElectricity = async (req, res) => {
         newBalance: newBal,
       });
     } else {
-      // INSTANT AUTO-REFUND idan gateway ya mayar da decline
       const failureReason = resData?.message || resData?.error || "Ayax provider declined transaction";
 
       const refundBal = await executeAutoRefund(
