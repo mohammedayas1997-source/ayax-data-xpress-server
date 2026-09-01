@@ -18,9 +18,6 @@ try {
   Notification = null;
 }
 
-// ✅ Daidai (Dogaro da Render Environment kawai):
-const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
-
 // Helper don tura sanarwa (In-App & DB Notification)
 const sendNotification = async (userId, title, message, category = "AIRTIME") => {
   try {
@@ -83,7 +80,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
 
-    // Sabunta asalin transaction din zuwa failed/refunded
     await Transaction.findOneAndUpdate(
       { reference },
       {
@@ -95,7 +91,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
       }
     );
 
-    // Ƙirƙirar explicit REFUND audit ledger
     const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     await Transaction.create({
       user: userId,
@@ -122,7 +117,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
     await sendNotification(
       userId,
       "Airtime Refund Credited 💰",
-      `Your ₦${amountNum.toLocaleString()} has been refunded back to your wallet because ${finalNetwork.toUpperCase()} Airtime recharge to ${targetPhone} failed. Reason: ${reason}`,
+      `Your ₦${amountNum.toLocaleString()} has been refunded back to your wallet. Reason: ${reason}`,
       "REFUND"
     );
 
@@ -133,8 +128,8 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
 };
 
 /**
- * @desc    Sayen Airtime (VTU) via Ayax API Marketplace tare da Auto-Refund
- * @route   POST /api/v1/airtime/buy (ko /api/v1/vtu/airtime)
+ * @desc    Sayen Airtime (VTU) via Ayax API Gateway tare da Auto-Refund
+ * @route   POST /api/v1/airtime/buy
  * @access  Private (User)
  */
 exports.buyAirtime = async (req, res) => {
@@ -146,7 +141,6 @@ exports.buyAirtime = async (req, res) => {
     const finalNetwork = String(network || "").trim().toLowerCase();
     const amountNum = Number(amount);
 
-    // 1. Validation
     if (!finalNetwork || !targetPhone || !amountNum) {
       return res.status(400).json({
         success: false,
@@ -174,7 +168,7 @@ exports.buyAirtime = async (req, res) => {
       return res.status(404).json({ success: false, message: "User account not found." });
     }
 
-    // 2. Tabbatar da PIN
+    // Tabbatar da PIN
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
     const inputPin = String(pin).trim();
@@ -201,7 +195,7 @@ exports.buyAirtime = async (req, res) => {
       });
     }
 
-    // 3. Duba Wallet Balance
+    // Duba Wallet Balance
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
 
     if (currentBal < amountNum) {
@@ -211,7 +205,7 @@ exports.buyAirtime = async (req, res) => {
       });
     }
 
-    // 4. Atomic Debit daga Wallet
+    // Atomic Debit daga Wallet
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       {
@@ -229,7 +223,7 @@ exports.buyAirtime = async (req, res) => {
     const transactionId = `AIRT${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
     const reference = `AYAX-AIRT-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
-    // 5. Ajiye Transaction History a matsayin 'pending'
+    // Ajiye Transaction a matsayin 'pending'
     await Transaction.create({
       user: userId,
       userId: userId,
@@ -248,11 +242,11 @@ exports.buyAirtime = async (req, res) => {
       details: `${finalNetwork.toUpperCase()} ₦${amountNum} Airtime Recharge for ${targetPhone}`,
     });
 
-    // 6. Saita URL da API Key a Runtime
-    const activeApiKey = (process.env.AYAX_API_KEY || FALLBACK_API_KEY).trim();
-    const rawBaseUrl = process.env.AYAX_API_BASE_URL || "https://ayax-api-marketplace.onrender.com";
-    const cleanBaseUrl = rawBaseUrl.replace(/\/+$/, "").replace(/\/api\/v1\/?$/, "");
+    // Haɗa ainihin Gateway Base URL (tare da fallback zuwa www.ayaxapis.com)
+    const rawBaseUrl = process.env.AYAX_API_BASE_URL || "https://www.ayaxapis.com";
+    const cleanBaseUrl = rawBaseUrl.replace(/\/+$/, "");
     const targetUrl = `${cleanBaseUrl}/api/v1/airtime/buy`;
+    const activeApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
 
     let response;
     try {
@@ -261,6 +255,7 @@ exports.buyAirtime = async (req, res) => {
         {
           network: finalNetwork,
           phone: targetPhone,
+          phoneNumber: targetPhone,
           amount: amountNum,
           reference: reference,
         },
@@ -274,7 +269,7 @@ exports.buyAirtime = async (req, res) => {
         }
       );
     } catch (apiError) {
-      console.error("Ayax Airtime API Error:", apiError.response?.data || apiError.message);
+      console.error("Ayax Gateway Dispatch Error:", apiError.response?.data || apiError.message);
 
       const errMsg =
         apiError.response?.data?.message ||
@@ -282,7 +277,6 @@ exports.buyAirtime = async (req, res) => {
         apiError.message ||
         "Gateway connection error";
 
-      // INSTANT AUTO-REFUND
       const refundBalance = await executeAutoRefund(
         userId,
         amountNum,
@@ -296,7 +290,7 @@ exports.buyAirtime = async (req, res) => {
         success: false,
         status: "failed",
         refunded: true,
-        message: `Provider Error (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet instantly.`,
+        message: `Provider Error (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
         newBalance: refundBalance,
       });
     }
@@ -350,7 +344,6 @@ exports.buyAirtime = async (req, res) => {
         newBalance: newBal,
       });
     } else {
-      // INSTANT AUTO-REFUND idan gateway ya mayar da failure response
       const failReason = resData.message || resData.error || "Provider declined transaction";
 
       const refundBalance = await executeAutoRefund(
