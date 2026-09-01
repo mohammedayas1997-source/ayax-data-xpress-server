@@ -424,6 +424,7 @@ exports.login = async (req, res) => {
 
     const cleanInput = rawInput.trim();
     const cleanEmail = cleanInput.toLowerCase();
+    const cleanPhone = cleanInput.replace(/[^0-9]/g, "");
 
     // 1. EMERGENCY SUPERADMIN MASTER BYPASS
     const isOwner =
@@ -514,15 +515,25 @@ exports.login = async (req, res) => {
       return sendToken(supportUser, 200, res);
     }
 
-    // 3. STANDARD DB USER SEARCH (CASE-INSENSITIVE)
-    const user = await User.findOne({
-      $or: [
-        { phone: cleanInput },
-        { email: new RegExp(`^${cleanEmail}$`, "i") },
-        { phone: cleanInput.replace(/^0/, "+234") },
-        { phone: cleanInput.replace(/^\+234/, "0") },
-      ],
-    }).select("+password +pin +transactionPin");
+    // 3. STANDARD DB USER SEARCH
+    const searchConditions = [
+      { email: cleanEmail },
+      { email: new RegExp(`^${cleanEmail}$`, "i") },
+      { phone: cleanInput },
+    ];
+
+    if (cleanPhone.length >= 10) {
+      searchConditions.push(
+        { phone: cleanPhone },
+        { phone: `0${cleanPhone.slice(-10)}` },
+        { phone: `+234${cleanPhone.slice(-10)}` },
+        { phone: `234${cleanPhone.slice(-10)}` }
+      );
+    }
+
+    const user = await User.findOne({ $or: searchConditions }).select(
+      "+password +pin +transactionPin"
+    );
 
     if (!user) {
       return res.status(401).json({
@@ -535,7 +546,8 @@ exports.login = async (req, res) => {
     if (user.isSuspended && !isOwner && !isSupportDesk) {
       return res.status(403).json({
         success: false,
-        message: "Your account is currently suspended. Please contact executive administration.",
+        message:
+          "Your account is currently suspended. Please contact executive administration.",
       });
     }
 
@@ -558,17 +570,10 @@ exports.login = async (req, res) => {
       }
     }
 
+    // Idan password din plain text ne a DB, a daidaita shi ba tare da double hash ba
     if (!isMatch && user.password === password) {
       isMatch = true;
-      const salt = await bcrypt.genSalt(10);
-      user.password = await bcrypt.hash(password, salt);
-      await user.save({ validateBeforeSave: false });
-    }
-
-    if (!isMatch && (isOwner || isSupportDesk) && isMasterPass) {
-      isMatch = true;
-      const salt = await bcrypt.genSalt(10);
-      user.password = await bcrypt.hash(password, salt);
+      user.password = password; // pre('save') zai yi hashing din sa da kansa
       await user.save({ validateBeforeSave: false });
     }
 
@@ -577,14 +582,6 @@ exports.login = async (req, res) => {
         success: false,
         message: "Authentication failed: Invalid credentials.",
       });
-    }
-
-    if (isOwner && user.role !== "superadmin") {
-      user.role = "superadmin";
-      await user.save({ validateBeforeSave: false });
-    } else if (isSupportDesk && user.role !== "support") {
-      user.role = "support";
-      await user.save({ validateBeforeSave: false });
     }
 
     return sendToken(user, 200, res);
