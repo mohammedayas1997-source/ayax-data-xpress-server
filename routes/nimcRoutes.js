@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyTransactionPin } = require("../middleware/verifyPin");
+
 // 1. Dynamic Authentication Middleware Loader
 let authMiddleware;
 try {
@@ -43,29 +44,39 @@ router.get(
 // ==========================================
 // 2. USER ROUTES (Submissions, Direct Search, & History)
 // ==========================================
-// Live verification lookup
+// Live verification lookup (Baya bukatar PIN)
 router.post(
   "/verify",
   protect,
   safe(nimcController.verifyNIMC || nimcController.verify, "verifyNIMC")
 );
 
-// Submit new application / modification
+// Submit new application / modification (Tare da PIN Check)
 router.post(
   "/submit",
   protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+router.post(
+  "/submit-request",
+  protect,
+  verifyTransactionPin,
   safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
 );
 
 router.post(
   "/request-modification",
   protect,
+  verifyTransactionPin,
   safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
 );
 
 router.put(
   "/submit",
   protect,
+  verifyTransactionPin,
   safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
 );
 
@@ -127,16 +138,12 @@ router.put(
   safe(nimcController.approveRequest, "approveRequest")
 );
 
-
 router.patch(
   "/admin/reject/:id",
   protect,
   authorize("admin", "superadmin"),
   safe(nimcController.rejectRequest || nimcController.rejectNIMCRequest, "rejectRequest")
 );
-
-router.post("/submit-request", protect, verifyTransactionPin, submitNIMCRequest);
-router.post("/request-modification", protect, verifyTransactionPin, submitNIMCRequest);
 
 router.post(
   "/admin/set-price",
