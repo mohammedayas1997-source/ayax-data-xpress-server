@@ -19,9 +19,8 @@ try {
   Notification = null;
 }
 
-// Live API Key Backup
-const FALLBACK_API_KEY =
-  "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
+// ✅ Daidai (Dogaro da Render Environment kawai):
+const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
 
 // Helper don tura Notification a Database da App
 const sendNotification = async (userId, title, message, category = "DATA") => {

@@ -276,12 +276,20 @@ app.get("/api/v1/user/profile", async (req, res) => {
   }
 });
 
-// --- SUPERADMIN GENERATOR ENDPOINT ---
+// --- SECURE SEEDER ENDPOINTS (DISABLED IN PRODUCTION) ---
 app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
+  // Toshe wannan kofar idan server na kan Render / Production
+  if (process.env.NODE_ENV === "production" && req.query.secret !== process.env.ADMIN_SEED_SECRET) {
+    return res.status(403).json({
+      success: false,
+      message: "Forbidden: Seeder endpoints are strictly disabled in production.",
+    });
+  }
+
   try {
     const email = "mohammed.ayas@ayaxdata.online".toLowerCase().trim();
     const phone = "09033738409";
-    const plainPassword = "Password123@";
+    const plainPassword = process.env.DEFAULT_ADMIN_PASSWORD || "SecureAyaxAdmin2026!#";
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(plainPassword, salt);
@@ -314,24 +322,25 @@ app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
       success: true,
       message: "SuperAdmin created successfully!",
       insertedId: result.insertedId,
-      credentials: {
-        email: email,
-        phone: phone,
-        password: plainPassword,
-        role: "superadmin",
-      },
+      credentials: { email, phone, role: "superadmin" },
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// --- SPECIAL SUPPORT ACCOUNT SEEDER / RESETTER ---
 app.get("/api/v1/auth/create-live-support", async (req, res) => {
+  if (process.env.NODE_ENV === "production" && req.query.secret !== process.env.ADMIN_SEED_SECRET) {
+    return res.status(403).json({
+      success: false,
+      message: "Forbidden: Seeder endpoints are strictly disabled in production.",
+    });
+  }
+
   try {
     const email = "support@ayaxdata.online".toLowerCase().trim();
     const phone = "09033738400";
-    const plainPassword = "Password123@";
+    const plainPassword = process.env.DEFAULT_SUPPORT_PASSWORD || "SupportAyax2026!#";
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(plainPassword, salt);
@@ -365,11 +374,7 @@ app.get("/api/v1/auth/create-live-support", async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Support Desk account created & synced successfully!",
-      credentials: {
-        email: email,
-        password: plainPassword,
-        role: "support",
-      },
+      credentials: { email, role: "support" },
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
