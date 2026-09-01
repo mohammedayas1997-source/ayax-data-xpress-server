@@ -1,6 +1,10 @@
 ﻿require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const mongoSanitize = require("express-mongo-sanitize");
+const hpp = require("hpp");
 const connectDB = require("./config/db");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
@@ -8,7 +12,18 @@ const bcrypt = require("bcryptjs");
 
 const app = express();
 
-// --- PERMISSIVE & SECURE CORS CONFIGURATION ---
+// --- 1. TRUST PROXY (REQUIRED FOR RENDER & RATE LIMITING) ---
+app.set("trust proxy", 1);
+
+// --- 2. SECURITY HEADERS (HELMET) ---
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    contentSecurityPolicy: false,
+  })
+);
+
+// --- 3. PERMISSIVE & SECURE CORS CONFIGURATION ---
 const allowedOrigins = [
   "https://www.ayaxdata.online",
   "https://ayaxdata.online",
@@ -47,20 +62,73 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
-// 1. Apply CORS & Preflight Handlers
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// --- BODY PARSER WITH RAW BODY FOR WEBHOOKS ---
+// --- 4. BODY PARSER WITH RAW BODY FOR WEBHOOKS ---
 app.use(
   express.json({
-    limit: "50mb",
+    limit: "10mb",
     verify: (req, res, buf) => {
       req.rawBody = buf;
     },
   })
 );
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
+
+// --- 5. DATA SANITIZATION (PREVENT NOSQL INJECTION & HTTP POLLUTION) ---
+app.use(mongoSanitize());
+app.use(hpp());
+
+// --- 6. RATE LIMITING (DDOS & BRUTE-FORCE PROTECTION) ---
+
+// Global API Limiter
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many requests from this IP. Please try again after 15 minutes.",
+  },
+});
+app.use("/api/", globalLimiter);
+
+// Auth Rate Limiter (Login, Forgot Password & OTP)
+const authLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Security Notice: Too many authentication attempts. Please try again after 10 minutes.",
+  },
+});
+app.use("/api/v1/auth/login", authLimiter);
+app.use("/api/v1/auth/forgot-password", authLimiter);
+app.use("/api/v1/auth/reset-password", authLimiter);
+
+// Purchase Rate Limiter (Data, Airtime, Utilities, NIN)
+const purchaseLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Transaction rate limit reached. Please wait a minute before making another purchase.",
+  },
+});
+app.use("/api/v1/airtime/buy", purchaseLimiter);
+app.use("/api/v1/vtu/buy-data", purchaseLimiter);
+app.use("/api/v1/data/buy", purchaseLimiter);
+app.use("/api/v1/bills/electricity/buy", purchaseLimiter);
+app.use("/api/v1/bills/cable/buy", purchaseLimiter);
+app.use("/api/v1/nimc/submit-request", purchaseLimiter);
+app.use("/api/v1/bvn/verify", purchaseLimiter);
+app.use("/api/v1/validation/submit", purchaseLimiter);
 
 // --- ROOT & HEALTH CHECK ROUTES ---
 app.get("/", (req, res) => {
@@ -149,11 +217,8 @@ if (notificationRoutes) {
 // Hierarchy & Role Routes
 app.use("/api/v1/agent", agentRoutes);
 app.use("/api/v1/leader", leaderRoutes);
-
-// GYARA: Sanya duka biyun (/supervisor da /supervisors) don kada kiran app ya taba samun 404
 app.use("/api/v1/supervisor", supervisorRoutes);
 app.use("/api/v1/supervisors", supervisorRoutes);
-
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
 app.use("/api/v1/super-leader", require("./routes/superLeaderRoutes"));
@@ -274,7 +339,6 @@ app.get("/api/v1/auth/create-live-support", async (req, res) => {
     const db = mongoose.connection.db;
     const usersCollection = db.collection("users");
 
-    // Share idan akwai wani tsoho da ya lalace
     await usersCollection.deleteMany({
       $or: [{ email: email }, { phone: phone }],
     });
