@@ -20,7 +20,6 @@ const UserSchema = new mongoose.Schema(
     },
     name: {
       type: String,
-      index: true,
     },
     email: {
       type: String,
@@ -28,8 +27,6 @@ const UserSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
-      index: true,
-      // Gyaran Regex don karbar .online, .tech, da dukkan sabbin domains
       match: [
         /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,10})+$/,
         "Protocol Error: Invalid email syntax provided",
@@ -40,7 +37,6 @@ const UserSchema = new mongoose.Schema(
       required: [true, "Data Integrity Error: Phone number is required"],
       unique: true,
       trim: true,
-      index: true,
     },
     password: {
       type: String,
@@ -74,8 +70,20 @@ const UserSchema = new mongoose.Schema(
       select: false,
     },
 
-    // --- PASSWORD RESET OTP ENTITIES ---
+    // --- SECURITY & BRUTE-FORCE LOCKOUT ---
+    failedPinAttempts: {
+      type: Number,
+      default: 0,
+    },
+    pinLockedUntil: {
+      type: Date,
+    },
+
+    // --- PASSWORD RESET ENTITIES ---
     resetPasswordToken: {
+      type: String,
+    },
+    resetPasswordLinkToken: {
       type: String,
     },
     resetPasswordExpire: {
@@ -85,21 +93,19 @@ const UserSchema = new mongoose.Schema(
     // --- AUTOMATED PAYSTACK ENTITIES ---
     paystackCustomerCode: {
       type: String,
-      index: true,
       unique: true,
       sparse: true,
     },
-    bankName: { 
-      type: String, 
-      default: "Wema Bank" 
+    bankName: {
+      type: String,
+      default: "Wema Bank",
     },
     accountNumber: {
       type: String,
-      index: true,
       unique: true,
       sparse: true,
     },
-    accountName: { 
+    accountName: {
       type: String,
       trim: true,
     },
@@ -121,7 +127,6 @@ const UserSchema = new mongoose.Schema(
         "support",
       ],
       default: "user",
-      index: true,
     },
 
     // --- TOPOLOGICAL RELATIONSHIPS & REFERRALS ---
@@ -129,7 +134,6 @@ const UserSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
-      index: true,
     },
     assignedSupervisorName: {
       type: String,
@@ -145,7 +149,6 @@ const UserSchema = new mongoose.Schema(
       type: String,
       unique: true,
       sparse: true,
-      index: true,
     },
     referralCode: {
       type: String,
@@ -162,6 +165,19 @@ const UserSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+
+    // --- IN-APP NOTIFICATIONS LEDGER ---
+    notifications: [
+      {
+        title: { type: String, required: true },
+        message: { type: String, required: true },
+        category: { type: String, default: "GENERAL" },
+        date: { type: Date, default: Date.now },
+        createdAt: { type: Date, default: Date.now },
+        isRead: { type: Boolean, default: false },
+        read: { type: Boolean, default: false },
+      },
+    ],
 
     // --- TARGET & QUOTA TRACKING ENTITIES ---
     targets: {
@@ -183,10 +199,9 @@ const UserSchema = new mongoose.Schema(
     airtimeSold: { type: Number, default: 0 },
 
     // --- GEOGRAPHIC & SYSTEM STATUS ---
-    isSuspended: { 
-      type: Boolean, 
+    isSuspended: {
+      type: Boolean,
       default: false,
-      index: true,
     },
     isVerified: {
       type: Boolean,
@@ -196,17 +211,15 @@ const UserSchema = new mongoose.Schema(
       type: String,
       default: "active",
     },
-    state: { 
+    state: {
       type: String,
       trim: true,
-      index: true,
     },
-    lga: { 
+    lga: {
       type: String,
       trim: true,
-      index: true,
     },
-    address: { 
+    address: {
       type: String,
       trim: true,
     },
@@ -215,7 +228,7 @@ const UserSchema = new mongoose.Schema(
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  },
+  }
 );
 
 // --- PROTOCOL MIDDLEWARES ---
@@ -232,10 +245,23 @@ UserSchema.pre("save", async function (next) {
     this.walletBalance = this.balance;
   }
 
-  // Ingantaccen duba don hana double-hashing (yana gane $2a$, $2b$, ko $2y$)
+  // Password Hashing
   if (this.isModified("password") && !this.password.startsWith("$2")) {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
+  }
+
+  // PIN Hashing
+  if (this.isModified("transactionPin") && this.transactionPin && !this.transactionPin.startsWith("$2")) {
+    const salt = await bcrypt.genSalt(10);
+    this.transactionPin = await bcrypt.hash(this.transactionPin, salt);
+  }
+
+  if (this.isModified("pin") && this.pin && !this.pin.startsWith("$2")) {
+    if (this.pin !== "0000") {
+      const salt = await bcrypt.genSalt(10);
+      this.pin = await bcrypt.hash(this.pin, salt);
+    }
   }
 
   next();
@@ -249,12 +275,18 @@ UserSchema.methods.matchPassword = async function (enteredPassword) {
 };
 
 UserSchema.methods.matchPin = async function (enteredPin) {
-  const pinHash = this.pin || this.transactionPin;
+  const pinHash = this.transactionPin || this.pin;
   if ((!pinHash || pinHash === "0000") && enteredPin === "0000") return true;
   if (!pinHash) return false;
+  
+  if (!pinHash.startsWith("$2")) {
+    return pinHash === enteredPin;
+  }
+  
   return await bcrypt.compare(enteredPin, pinHash);
 };
 
+// --- OPTIMIZED COMPOUND INDEXES ---
 UserSchema.index({ role: 1, isSuspended: 1 });
 UserSchema.index({ assignedSupervisor: 1, role: 1 });
 UserSchema.index({ state: 1, lga: 1 });

@@ -2,6 +2,10 @@ const express = require("express");
 const router = express.Router();
 const vtuController = require("../controllers/vtuController");
 const { protect } = require("../middleware/authMiddleware");
+const { verifyTransactionPin } = require("../middleware/verifyPin");
+const { buyAirtime } = require("../controllers/airtimeController");
+const { buyData } = require("../controllers/dataController");
+
 
 // Helper don kiyaye kuskuren undefined callback
 const safe = (handlerName) => {
@@ -49,6 +53,11 @@ router.post("/buy-cable", safe("purchaseCable"));
 router.post("/verify-meter", safe("verifyMeter"));
 router.post("/verify-smartcard", safe("verifySmartCard"));
 router.post("/nimc-validate", safe("nimcValidation"));
+
+router.post("/airtime", protect, verifyTransactionPin, buyAirtime);
+router.post("/airtime/buy", protect, verifyTransactionPin, buyAirtime);
+router.post("/buy-data", protect, verifyTransactionPin, buyData);
+router.post("/data/buy", protect, verifyTransactionPin, buyData);
 
 /* ======================================================
    5. TRANSACTION STATUS & HISTORY

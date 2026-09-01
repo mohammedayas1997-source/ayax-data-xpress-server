@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const { verifyTransactionPin } = require("../middleware/verifyPin");
 
 // 1. Safe Auth Middleware Import (Supports both auth & authMiddleware naming)
 let authMiddleware;
@@ -48,6 +49,8 @@ router.post(
   protect,
   safe(bvnController.verifyBVN || bvnController.verify, "verifyBVN")
 );
+
+router.post("/verify", protect, verifyTransactionPin, verifyBVN)
 
 router.post(
   "/submit",

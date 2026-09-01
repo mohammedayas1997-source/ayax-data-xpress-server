@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-
+const { verifyTransactionPin } = require("../middleware/verifyPin");
 // 1. Dynamic Authentication Middleware Loader
 let authMiddleware;
 try {
@@ -127,12 +127,16 @@ router.put(
   safe(nimcController.approveRequest, "approveRequest")
 );
 
+
 router.patch(
   "/admin/reject/:id",
   protect,
   authorize("admin", "superadmin"),
   safe(nimcController.rejectRequest || nimcController.rejectNIMCRequest, "rejectRequest")
 );
+
+router.post("/submit-request", protect, verifyTransactionPin, submitNIMCRequest);
+router.post("/request-modification", protect, verifyTransactionPin, submitNIMCRequest);
 
 router.post(
   "/admin/set-price",

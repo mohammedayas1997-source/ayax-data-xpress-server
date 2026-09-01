@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const { verifyTransactionPin } = require("../middleware/verifyPin");
 
 // 1. Dynamic Authentication Middleware Loader
 let authMiddleware;
@@ -66,6 +67,9 @@ router.get(
   protect,
   safe(ninController.getMyValidationRequests || ninController.getUserValidations, "getMyValidationRequests")
 );
+
+router.post("/submit", protect, verifyTransactionPin, submitValidation);
+router.post("/validate", protect, verifyTransactionPin, submitValidation);
 
 // ==========================================
 // 2. ADMIN / SUPERADMIN MANAGEMENT ROUTES
