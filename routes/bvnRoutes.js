@@ -44,23 +44,25 @@ router.get(
 // ==========================================
 // 2. USER ROUTES (Verification & Requests)
 // ==========================================
+// Live verification lookup da PIN authentication
 router.post(
   "/verify",
   protect,
+  verifyTransactionPin,
   safe(bvnController.verifyBVN || bvnController.verify, "verifyBVN")
 );
-
-router.post("/verify", protect, verifyTransactionPin, verifyBVN)
 
 router.post(
   "/submit",
   protect,
+  verifyTransactionPin,
   safe(bvnController.submitBVNRequest || bvnController.requestBVNModification, "submitBVNRequest")
 );
 
 router.post(
   "/request",
   protect,
+  verifyTransactionPin,
   safe(bvnController.submitBVNRequest || bvnController.requestBVNModification, "submitBVNRequest")
 );
 
