@@ -73,9 +73,18 @@ router.get(
 );
 
 // ==========================================
-// 3. USER, AGENT & SUPERVISOR MANAGEMENT
+// 3. USER, CADRE HIERARCHY & DIRECTIVES
 // ==========================================
 router.get("/users", safe(adminController.getAllUsers, "getAllUsers"));
+router.post(
+  "/users/create",
+  safe(adminController.createUserByAdmin, "createUserByAdmin")
+);
+router.put(
+  "/users/:id/status",
+  safe(adminController.updateUserStatusByAdmin, "updateUserStatusByAdmin")
+);
+
 router.get(
   "/supervisors",
   safe(adminController.getSupervisors, "getSupervisors")
@@ -90,6 +99,10 @@ router.post(
   "/assign-target",
   safe(adminController.assignTarget, "assignTarget")
 );
+router.post(
+  "/targets/assign",
+  safe(adminController.assignTarget, "assignTarget")
+);
 
 router.patch(
   "/suspend-user/:id",
@@ -101,7 +114,35 @@ router.put(
 );
 
 // ==========================================
-// 4. REFUND PROCESSING & SETTLEMENT
+// 4. SUPER ADMIN TARIFFS & MULTI-TIER PRICING
+// ==========================================
+router.get(
+  "/pricing/plans",
+  safe(adminController.getDataPlans, "getDataPlans")
+);
+router.post(
+  "/pricing/update-tier",
+  safe(adminController.updateTierPricing, "updateTierPricing")
+);
+router.post(
+  "/pricing/update",
+  safe(adminController.updateTierPricing, "updateTierPricing")
+);
+router.post(
+  "/pricing/create-plan",
+  safe(adminController.createDataPlan, "createDataPlan")
+);
+
+// ==========================================
+// 5. BROADCAST & PUSH NOTIFICATIONS
+// ==========================================
+router.post(
+  "/notifications/broadcast",
+  safe(adminController.broadcastNotification, "broadcastNotification")
+);
+
+// ==========================================
+// 6. REFUND PROCESSING & SETTLEMENT
 // ==========================================
 router.get(
   "/pending-refunds",
@@ -122,7 +163,7 @@ router.patch(
 );
 
 // ==========================================
-// 5. FORENSIC AUDIT TRAIL & ACTIVITIES
+// 7. FORENSIC AUDIT TRAIL & ACTIVITIES
 // ==========================================
 router.get(
   "/activities",
@@ -134,7 +175,7 @@ router.get(
 );
 
 // ==========================================
-// 6. NIMC REQUESTS & VERIFICATIONS
+// 8. NIMC REQUESTS & VERIFICATIONS
 // ==========================================
 router.get(
   "/nimc-requests",
@@ -160,7 +201,7 @@ router.get(
 );
 
 // ==========================================
-// 7. BVN REQUESTS & VERIFICATIONS
+// 9. BVN REQUESTS & VERIFICATIONS
 // ==========================================
 router.get(
   "/bvn-requests",
@@ -186,14 +227,15 @@ router.get(
 );
 
 // ==========================================
-// 8. DATA PLANS & VTU TARIFFS
+// 10. LEGACY DATA PLANS INTEGRATION
 // ==========================================
 router.get(
   "/plans",
   safe(
     dataPlanController.getAdminPlans ||
       dataPlanController.getActivePlans ||
-      dataPlanController.getPlans,
+      dataPlanController.getPlans ||
+      adminController.getDataPlans,
     "getAdminPlans"
   )
 );
@@ -201,7 +243,9 @@ router.get(
 router.post(
   "/set-plan",
   safe(
-    dataPlanController.setPlanPrice || dataPlanController.createPlan,
+    dataPlanController.setPlanPrice ||
+      dataPlanController.createPlan ||
+      adminController.updateTierPricing,
     "setPlanPrice"
   )
 );
@@ -219,7 +263,9 @@ router.patch(
 router.put(
   "/plans/:id",
   safe(
-    dataPlanController.setPlanPrice || dataPlanController.updatePlan,
+    dataPlanController.setPlanPrice ||
+      dataPlanController.updatePlan ||
+      adminController.updateTierPricing,
     "updatePlan"
   )
 );
