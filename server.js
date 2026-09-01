@@ -381,6 +381,43 @@ app.get("/api/v1/auth/create-live-support", async (req, res) => {
   }
 });
 
+app.get("/api/v1/auth/reset-operations-admin", async (req, res) => {
+  try {
+    const plainPassword = "Password123@";
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(plainPassword, salt);
+
+    const pinSalt = await bcrypt.genSalt(10);
+    const hashedPin = await bcrypt.hash("2026", pinSalt);
+
+    const user = await User.findOneAndUpdate(
+      { email: "admin@ayaxdata.online" },
+      {
+        password: hashedPassword,
+        pin: hashedPin,
+        transactionPin: hashedPin,
+        isSuspended: false,
+        isVerified: true,
+        status: "active",
+      },
+      { new: true, upsert: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Operations Admin password reset successfully!",
+      credentials: {
+        email: "admin@ayaxdata.online",
+        phone: "08011112222",
+        password: plainPassword,
+        pin: "2026",
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // --- 404 HANDLER ---
 app.use("*", (req, res) => {
   res.status(404).json({
