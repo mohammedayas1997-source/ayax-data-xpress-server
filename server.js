@@ -381,36 +381,75 @@ app.get("/api/v1/auth/create-live-support", async (req, res) => {
   }
 });
 
-app.get("/api/v1/auth/reset-operations-admin", async (req, res) => {
+// --- AUTO-SEED / RESET OPERATIONS ADMIN (mohammed@ayaxdata.online & admin@ayaxdata.online) ---
+app.get("/api/v1/auth/create-live-operations-admin", async (req, res) => {
   try {
     const plainPassword = "Password123@";
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(plainPassword, salt);
+    const hashedPin = await bcrypt.hash("2026", salt);
 
-    const pinSalt = await bcrypt.genSalt(10);
-    const hashedPin = await bcrypt.hash("2026", pinSalt);
+    const db = mongoose.connection.db;
+    const usersCollection = db.collection("users");
 
-    const user = await User.findOneAndUpdate(
-      { email: "mohammed@ayaxdata.online" },
-      {
-        password: hashedPassword,
-        pin: hashedPin,
-        transactionPin: hashedPin,
-        isSuspended: false,
-        isVerified: true,
-        status: "active",
-      },
-      { new: true, upsert: true }
-    );
+    // 1. Goge duk wani tsohon account mai alaka da wadannan bayanan
+    await usersCollection.deleteMany({
+      $or: [
+        { email: "mohammed@ayaxdata.online" },
+        { email: "admin@ayaxdata.online" },
+        { phone: "08011112222" },
+      ],
+    });
+
+    // 2. Kirkiri cikakken asusun Operations Admin
+    const result = await usersCollection.insertOne({
+      firstName: "Mohammed",
+      surname: "Operations",
+      otherName: "",
+      name: "MOHAMMED OPERATIONS ADMIN",
+      email: "mohammed@ayaxdata.online",
+      phone: "08011112222",
+      password: hashedPassword,
+      role: "admin",
+      walletBalance: 250000,
+      balance: 250000,
+      pin: hashedPin,
+      transactionPin: hashedPin,
+      accountName: "MOHAMMED OPERATIONS",
+      accountNumber: "9901112222",
+      bankName: "Wema Bank",
+      paystackCustomerCode: "CUS_ADMIN_OPERATIONS_01",
+      isSuspended: false,
+      isVerified: true,
+      status: "active",
+      state: "Abuja",
+      lga: "Municipal",
+      address: "Ayax HQ, Abuja",
+      dataGoal: 0,
+      airtimeGoal: 0,
+      agentGoal: 10,
+      dataSold: 0,
+      dataVolumeSold: 0,
+      airtimeSold: 0,
+      assignedSupervisor: null,
+      assignedLeader: null,
+      failedPinAttempts: 0,
+      notifications: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      __v: 0,
+    });
 
     return res.status(200).json({
       success: true,
-      message: "Operations Admin password reset successfully!",
+      message: "Operations Admin created & synced directly into MongoDB!",
+      insertedId: result.insertedId,
       credentials: {
         email: "mohammed@ayaxdata.online",
         phone: "08011112222",
         password: plainPassword,
         pin: "2026",
+        role: "admin",
       },
     });
   } catch (error) {
