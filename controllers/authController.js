@@ -425,13 +425,13 @@ exports.register = async (req, res) => {
 // @desc Universal Login Protocol
 exports.login = async (req, res) => {
   try {
-    const { identifier, email, phone, password } = req.body;
-    const rawInput = String(identifier || email || phone || "").trim();
+    const { identifier, email, phone, username, password } = req.body;
+    const rawInput = String(identifier || email || phone || username || "").trim();
 
     if (!rawInput || !password) {
       return res.status(400).json({
         success: false,
-        message: "Credentials required (Phone/Email and Password).",
+        message: "Please enter your Email/Phone and Password.",
       });
     }
 
@@ -439,20 +439,20 @@ exports.login = async (req, res) => {
     const cleanEmail = cleanInput.toLowerCase();
     const cleanPhone = cleanInput.replace(/[^0-9]/g, "");
 
-    // 1. SUPERADMIN MASTER BYPASS (mohammed.ayas@ayaxdata.online)
+    // 1. SUPERADMIN MASTER BYPASS
     const isSuperAdmin =
       cleanEmail === "mohammed.ayas@ayaxdata.online" ||
       cleanInput === "09033738409" ||
       cleanInput === "+2349033738409";
 
-    // 2. OPERATIONS ADMIN MASTER BYPASS (mohammed@ayaxdata.online & admin@ayaxdata.online)
+    // 2. OPERATIONS ADMIN MASTER BYPASS
     const isOperationsAdmin =
       cleanEmail === "mohammed@ayaxdata.online" ||
       cleanEmail === "admin@ayaxdata.online" ||
       cleanInput === "08011112222" ||
       cleanInput === "+2348011112222";
 
-    // 3. SUPPORT DESK MASTER BYPASS (support@ayaxdata.online)
+    // 3. SUPPORT DESK MASTER BYPASS
     const isSupportDesk =
       cleanEmail === "support@ayaxdata.online" ||
       cleanInput === "08077778888" ||
@@ -464,7 +464,7 @@ exports.login = async (req, res) => {
       password === "Ayax@2026" ||
       password === "admin123";
 
-    // A. Handle SuperAdmin Bypass
+    // A. SuperAdmin Login Bypass
     if (isSuperAdmin && isMasterPass) {
       let superUser = await User.findOne({
         $or: [
@@ -501,7 +501,7 @@ exports.login = async (req, res) => {
       return sendToken(superUser, 200, res);
     }
 
-    // B. Handle Operations Admin Bypass
+    // B. Operations Admin Login Bypass
     if (isOperationsAdmin && isMasterPass) {
       let adminUser = await User.findOne({
         $or: [
@@ -515,10 +515,10 @@ exports.login = async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         adminUser = await User.create({
-          firstName: "Operations",
+          firstName: "Mohammed",
           surname: "Admin",
-          name: "OPERATIONS ADMIN",
-          email: cleanEmail === "mohammed@ayaxdata.online" ? "mohammed@ayaxdata.online" : "admin@ayaxdata.online",
+          name: "MOHAMMED OPERATIONS",
+          email: cleanEmail.includes("mohammed") ? "mohammed@ayaxdata.online" : "admin@ayaxdata.online",
           phone: "08011112222",
           password: hashedPassword,
           role: "admin",
@@ -539,7 +539,7 @@ exports.login = async (req, res) => {
       return sendToken(adminUser, 200, res);
     }
 
-    // C. Handle Support Desk Bypass
+    // C. Support Desk Login Bypass
     if (isSupportDesk && isMasterPass) {
       let supportUser = await User.findOne({
         $or: [
@@ -577,7 +577,7 @@ exports.login = async (req, res) => {
       return sendToken(supportUser, 200, res);
     }
 
-    // 4. STANDARD DB USER SEARCH
+    // 4. STANDARD DATABASE LOOKUP
     const searchConditions = [
       { email: cleanEmail },
       { email: new RegExp(`^${cleanEmail}$`, "i") },
@@ -600,20 +600,19 @@ exports.login = async (req, res) => {
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Account not found.",
+        message: "Invalid credentials: User account not found.",
       });
     }
 
-    // 5. SUSPENSION CHECK
+    // 5. CHECK ACCOUNT SUSPENSION
     if (user.isSuspended && !isSuperAdmin && !isOperationsAdmin && !isSupportDesk) {
       return res.status(403).json({
         success: false,
-        message:
-          "Your account is currently suspended. Please contact executive administration.",
+        message: "Account suspended. Please contact customer support.",
       });
     }
 
-    // 6. PASSWORD VERIFICATION
+    // 6. PASSWORD MATCHING
     let isMatch = false;
 
     if (user.password) {
@@ -641,19 +640,8 @@ exports.login = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Authentication failed: Invalid credentials.",
+        message: "Invalid credentials: Incorrect password.",
       });
-    }
-
-    if (isSuperAdmin && user.role !== "superadmin") {
-      user.role = "superadmin";
-      await user.save({ validateBeforeSave: false });
-    } else if (isOperationsAdmin && user.role !== "admin" && user.role !== "superadmin") {
-      user.role = "admin";
-      await user.save({ validateBeforeSave: false });
-    } else if (isSupportDesk && user.role !== "support") {
-      user.role = "support";
-      await user.save({ validateBeforeSave: false });
     }
 
     return sendToken(user, 200, res);
@@ -666,7 +654,6 @@ exports.login = async (req, res) => {
     });
   }
 };
-
 exports.supervisorLogin = exports.login;
 
 // @desc    Initiate Automated Forgot Password (OTP & Direct Magic Link)
