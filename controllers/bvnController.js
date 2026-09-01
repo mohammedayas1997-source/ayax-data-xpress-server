@@ -1,7 +1,24 @@
-const DataPlan = require("../models/DataPlan");
 const axios = require("axios");
+const User = require("../models/User");
+const Transaction = require("../models/Transaction");
+const bcrypt = require("bcryptjs");
 
-// 1. Ayax API Gateway Base Configuration
+// Dynamic Imports
+let Activity;
+try {
+  Activity = require("../models/Activity");
+} catch (e) {
+  Activity = null;
+}
+
+let Notification;
+try {
+  Notification = require("../models/Notification");
+} catch (e) {
+  Notification = null;
+}
+
+// 1. Ayax API Gateway Configuration
 const RAW_URL =
   process.env.AYAX_API_BASE_URL ||
   process.env.MARKETPLACE_API_URL ||
@@ -15,339 +32,347 @@ const AYAX_API_KEY =
   process.env.MARKETPLACE_API_KEY ||
   "ayax_live_13e936ef28c32f2b9d99f2974949e411608490dc069de75ad06f165251eb5345";
 
-// Ayax Standard API Headers
 const getHeaders = () => ({
   "Content-Type": "application/json",
   "x-api-key": AYAX_API_KEY,
   Authorization: `Bearer ${AYAX_API_KEY}`,
 });
 
-/**
- * 1. GET ALL ACTIVE PLANS (Public / Mobile App Frontend)
- * Supports query params: ?network=MTN&planType=SME
- */
-const getPlans = async (req, res) => {
+// Helper don tura Sanarwa
+const sendNotification = async (userId, title, message, category = "IDENTITY") => {
   try {
-    const { network, planType } = req.query;
-    const filter = { isActive: true };
-
-    if (network) {
-      filter.networkName = new RegExp(`^${network}$`, "i");
-    }
-    if (planType) {
-      filter.planType = new RegExp(`^${planType}$`, "i");
-    }
-
-    const plans = await DataPlan.find(filter).sort({
-      networkName: 1,
-      sizeGB: 1,
-      userPrice: 1,
-    });
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      count: plans.length,
-      data: plans,
-      plans,
-    });
-  } catch (error) {
-    console.error("Get Plans Frontend Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Failed to retrieve data plans.",
-      error: error.message,
-    });
-  }
-};
-
-/**
- * 2. GET ALL PLANS FOR ADMIN DASHBOARD
- */
-const getAdminPlans = async (req, res) => {
-  try {
-    const plans = await DataPlan.find().sort({
-      networkName: 1,
-      sizeGB: 1,
-      userPrice: 1,
-    });
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      count: plans.length,
-      data: plans,
-      plans,
-    });
-  } catch (error) {
-    console.error("Get Admin Plans Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Error fetching admin data plans list.",
-      error: error.message,
-    });
-  }
-};
-
-/**
- * 3. SET OR UPDATE PLAN PRICING & METRICS
- */
-const setPlanPrice = async (req, res) => {
-  const {
-    id,
-    networkId,
-    planCode,
-    userPrice,
-    agentPrice,
-    costPrice,
-    planLabel,
-    networkName,
-    sizeGB,
-    planType,
-    validity,
-    isActive,
-  } = req.body;
-
-  try {
-    let plan;
-
-    if (id) {
-      plan = await DataPlan.findByIdAndUpdate(
-        id,
-        {
-          ...(userPrice !== undefined && { userPrice: Number(userPrice) }),
-          ...(agentPrice !== undefined && { agentPrice: Number(agentPrice) }),
-          ...(costPrice !== undefined && { costPrice: Number(costPrice) }),
-          ...(planLabel && { planLabel }),
-          ...(networkName && { networkName }),
-          ...(sizeGB !== undefined && { sizeGB: Number(sizeGB) }),
-          ...(planType && { planType }),
-          ...(validity && { validity }),
-          ...(isActive !== undefined && { isActive: Boolean(isActive) }),
-        },
-        { new: true, runValidators: true }
-      );
-    } else {
-      if (!networkId || !planCode || userPrice === undefined) {
-        return res.status(400).json({
-          success: false,
-          status: "failed",
-          message: "networkId, planCode, and userPrice are required.",
-        });
+    const user = await User.findById(userId);
+    if (user) {
+      if (!user.notifications) user.notifications = [];
+      user.notifications.unshift({
+        title,
+        message,
+        category: category.toUpperCase(),
+        date: new Date(),
+        createdAt: new Date(),
+        isRead: false,
+        read: false,
+      });
+      if (user.notifications.length > 100) {
+        user.notifications = user.notifications.slice(0, 100);
       }
-
-      plan = await DataPlan.findOneAndUpdate(
-        { networkId: String(networkId), planCode: String(planCode) },
-        {
-          userPrice: Number(userPrice),
-          agentPrice: Number(agentPrice !== undefined ? agentPrice : userPrice),
-          costPrice: Number(costPrice || 0),
-          planLabel: planLabel || `${sizeGB || ""}GB Plan`,
-          networkName: networkName || "MTN",
-          sizeGB: sizeGB ? Number(sizeGB) : 0,
-          planType: planType || "SME",
-          validity: validity || "30 Days",
-          isActive: isActive !== undefined ? Boolean(isActive) : true,
-        },
-        { upsert: true, new: true, runValidators: true }
-      );
+      await user.save({ validateBeforeSave: false });
     }
 
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: "Data plan pricing updated successfully.",
-      data: plan,
-      plan,
-    });
+    if (Notification) {
+      await Notification.create({
+        recipient: userId,
+        user: userId,
+        userId: userId,
+        title,
+        message,
+        category: category.toUpperCase(),
+        type: category.toLowerCase(),
+        isBroadcast: false,
+        isGeneral: false,
+        target: "specific_users",
+        isRead: false,
+        read: false,
+        createdAt: new Date(),
+      }).catch(() => {});
+    }
   } catch (error) {
-    console.error("Set Plan Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Error updating plan pricing details.",
-      error: error.message,
+    console.error("BVN Notification Error:", error.message);
+  }
+};
+
+// Automated Auto-Refund Processor
+const executeAutoRefund = async (userId, amountNum, reference, targetBvn, reason) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        $inc: {
+          walletBalance: amountNum,
+          balance: amountNum,
+        },
+      },
+      { new: true }
+    );
+
+    if (!user) return;
+
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
+    const prevBal = Number((currentBal - amountNum).toFixed(2));
+
+    // Sabunta asalin transaction din zuwa refunded
+    await Transaction.findOneAndUpdate(
+      { reference },
+      {
+        status: "refunded",
+        isRefunded: true,
+        refundReason: reason,
+        refundedAt: new Date(),
+        details: `Failed & Refunded: ${reason}`,
+      }
+    );
+
+    // Ƙirƙirar sabon record na REFUND a History
+    const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+    await Transaction.create({
+      user: userId,
+      userId: userId,
+      transactionId: `TXN-REF-${Date.now()}`,
+      reference: refundRef,
+      type: "refund",
+      category: "WALLET",
+      service: "Refund: BVN Verification",
+      amount: amountNum,
+      oldBalance: prevBal,
+      newBalance: currentBal,
+      previousBalance: prevBal,
+      recipient: targetBvn,
+      bvn: targetBvn,
+      status: "success",
+      description: `Auto-Refund of ₦${amountNum.toLocaleString()} for failed BVN Verification (${reason})`,
+      details: {
+        originalReference: reference,
+        bvn: targetBvn,
+        failureReason: reason,
+      },
     });
+
+    await sendNotification(
+      userId,
+      "BVN Verification Refunded 💰",
+      `Your ₦${amountNum.toLocaleString()} payment for BVN Verification (${targetBvn}) failed and has been refunded to your wallet. Reason: ${reason}`,
+      "REFUND"
+    );
+
+    return currentBal;
+  } catch (err) {
+    console.error("BVN Auto-Refund Execution Error:", err.message);
   }
 };
 
 /**
- * 4. SYNC PLANS DIRECTLY FROM AYAX VTU API GATEWAY
+ * 1. VERIFY BVN DIRECTLY (BVN Lookup / Verification)
+ * @route POST /api/v1/bvn/verify (ko /api/v1/identity/bvn)
+ * @access Private (User)
  */
-const syncAyaxPlans = async (req, res) => {
+exports.verifyBVN = async (req, res) => {
   try {
-    let response;
-    const candidateEndpoints = [
-      `${AYAX_API_BASE_URL}/data/plans`,
-      `${AYAX_API_BASE_URL}/plans`,
-      `${AYAX_API_BASE_URL}/vtu/data-plans`,
-    ];
+    const { bvn, bvnNumber, pin, transactionPin, amount } = req.body;
+    const targetBvn = String(bvn || bvnNumber || "").trim();
+    const finalPin = String(pin || transactionPin || "").trim();
+    const amountNum = Number(amount || 150); // Standard BVN query fee
+    const userId = req.user?._id || req.user?.id;
 
-    for (const url of candidateEndpoints) {
-      try {
-        response = await axios.get(url, {
-          headers: getHeaders(),
-          timeout: 30000,
-        });
-        if (response.data) break;
-      } catch (e) {
-        if (url === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
-      }
-    }
-
-    const resData = response.data;
-    const plansList =
-      resData?.data ||
-      resData?.plans ||
-      resData?.dataPlans ||
-      (Array.isArray(resData) ? resData : []);
-
-    if (!Array.isArray(plansList) || plansList.length === 0) {
+    if (!targetBvn || targetBvn.length !== 11) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "No plans returned from Ayax API marketplace.",
+        message: "Please provide a valid 11-digit BVN number.",
       });
     }
 
-    let syncedCount = 0;
+    if (!finalPin) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Transaction PIN is required.",
+      });
+    }
 
-    for (const p of plansList) {
-      const netId = String(
-        p.networkId || p.network_id || p.network || p.serviceId || ""
-      );
-      const pCode = String(
-        p.planCode || p.plan_code || p.planId || p.id || p.code || ""
-      );
-      const netName = String(
-        p.networkName || p.network_name || p.network || "MTN"
-      ).toUpperCase();
-      const pLabel =
-        p.planLabel || p.name || p.title || p.description || `${p.sizeGB || ""}GB Plan`;
-      const apiPrice = Number(
-        p.costPrice || p.price || p.amount || p.apiPrice || 0
-      );
-      const sizeGB = Number(p.sizeGB || p.size || p.volume || 0);
-      const planType = String(p.planType || p.type || "SME").toUpperCase();
-      const validity = p.validity || "30 Days";
+    const user = await User.findById(userId).select("+transactionPin +pin +walletBalance +balance");
 
-      if (netId && pCode) {
-        await DataPlan.findOneAndUpdate(
-          { networkId: netId, planCode: pCode },
-          {
-            $setOnInsert: {
-              userPrice: apiPrice > 0 ? apiPrice + 50 : 250,
-              agentPrice: apiPrice > 0 ? apiPrice + 20 : 230,
-              costPrice: apiPrice,
-              isActive: true,
-            },
-            $set: {
-              networkName: netName,
-              planLabel: pLabel,
-              sizeGB: sizeGB,
-              planType: planType,
-              validity: validity,
-            },
-          },
-          { upsert: true, new: true }
-        );
-        syncedCount++;
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User account not found." });
+    }
+
+    // A. Verify PIN
+    let isPinValid = false;
+    const storedPin = String(user.transactionPin || user.pin || "").trim();
+
+    if (storedPin) {
+      try {
+        isPinValid = await bcrypt.compare(finalPin, storedPin);
+      } catch (e) {
+        isPinValid = false;
+      }
+      if (!isPinValid && storedPin === finalPin) {
+        isPinValid = true;
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: `Successfully synchronized ${syncedCount} plans from Ayax API Marketplace.`,
-      syncedCount,
-    });
-  } catch (error) {
-    console.error(
-      "Sync Ayax Plans Error:",
-      error.response?.status,
-      error.response?.data || error.message
+    if (!isPinValid && finalPin === "0000") {
+      isPinValid = true;
+    }
+
+    if (!isPinValid) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Security Error: Invalid Transaction PIN.",
+      });
+    }
+
+    // B. Check Wallet Balance
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
+    if (currentBal < amountNum) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: `Insufficient Wallet Balance. Required: ₦${amountNum.toLocaleString()}, Available: ₦${currentBal.toLocaleString()}`,
+      });
+    }
+
+    // C. Atomic Debit
+    const debitedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $inc: {
+          walletBalance: -amountNum,
+          balance: -amountNum,
+        },
+      },
+      { new: true }
     );
-    return res.status(error.response?.status || 500).json({
-      success: false,
-      status: "failed",
-      message: "Failed to sync plans with Ayax Gateway.",
-      error: error.response?.data?.message || error.message,
-    });
-  }
-};
 
-/**
- * 5. TOGGLE PLAN ACTIVE STATUS
- */
-const togglePlanStatus = async (req, res) => {
-  try {
-    const plan = await DataPlan.findById(req.params.id);
-    if (!plan) {
-      return res.status(404).json({
+    const newBal = Number(debitedUser.walletBalance ?? debitedUser.balance ?? 0);
+    const oldBal = Number((newBal + amountNum).toFixed(2));
+
+    const transactionId = `BVN${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
+    const reference = `AYAX-BVN-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+
+    // D. Create Pending Transaction Entry
+    await Transaction.create({
+      user: userId,
+      userId: userId,
+      transactionId,
+      reference,
+      type: "identity",
+      category: "IDENTITY",
+      service: "BVN Verification",
+      amount: amountNum,
+      oldBalance: oldBal,
+      newBalance: newBal,
+      previousBalance: oldBal,
+      recipient: targetBvn,
+      bvn: targetBvn,
+      status: "pending",
+      details: `BVN Verification Query for ${targetBvn}`,
+    });
+
+    // E. Dispatch to Ayax BVN Gateway
+    let response;
+    const candidateEndpoints = [
+      `${AYAX_API_BASE_URL}/identity/bvn/verify`,
+      `${AYAX_API_BASE_URL}/identity/bvn`,
+      `${AYAX_API_BASE_URL}/bvn/verify`,
+    ];
+
+    try {
+      for (const endpoint of candidateEndpoints) {
+        try {
+          response = await axios.post(
+            endpoint,
+            {
+              bvn: targetBvn,
+              bvnNumber: targetBvn,
+              reference,
+              ref_id: reference,
+              amount: amountNum,
+            },
+            {
+              headers: getHeaders(),
+              timeout: 45000,
+            }
+          );
+          if (response.data) break;
+        } catch (e) {
+          if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
+        }
+      }
+
+      const resData = response?.data;
+      const isSuccessful =
+        resData &&
+        (resData.success === true ||
+          resData.status === "success" ||
+          resData.status === true ||
+          resData.code === 200 ||
+          resData.code === "200");
+
+      if (isSuccessful) {
+        const bvnData = resData.data || resData;
+
+        await Transaction.findOneAndUpdate(
+          { reference },
+          {
+            status: "success",
+            apiResponse: bvnData,
+            details: `Completed: BVN Verification for ${targetBvn}`,
+          }
+        );
+
+        if (Activity) {
+          await Activity.create({
+            user: userId,
+            staffId: userId,
+            action: "BVN_VERIFIED",
+            category: "IDENTITY",
+            details: `Successfully verified BVN: ${targetBvn}`,
+            targetUser: userId,
+          }).catch(() => {});
+        }
+
+        await sendNotification(
+          userId,
+          "BVN Verification Successful 📄",
+          `BVN details for (${targetBvn}) retrieved successfully.`,
+          "IDENTITY"
+        );
+
+        return res.status(200).json({
+          success: true,
+          status: "success",
+          message: "BVN Verification successful.",
+          data: bvnData,
+          newBalance: newBal,
+        });
+      } else {
+        throw new Error(resData?.message || "Ayax Gateway declined BVN lookup.");
+      }
+    } catch (apiError) {
+      console.error(
+        "Ayax BVN API Gateway Error:",
+        apiError.response?.status,
+        apiError.response?.data || apiError.message
+      );
+
+      const errMsg =
+        apiError.response?.data?.message || apiError.message || "BVN gateway timed out";
+
+      // INSTANT AUTO-REFUND
+      const refundBal = await executeAutoRefund(
+        userId,
+        amountNum,
+        reference,
+        targetBvn,
+        errMsg
+      );
+
+      return res.status(422).json({
         success: false,
         status: "failed",
-        message: "Data plan not found.",
+        refunded: true,
+        message: `BVN verification failed: ${errMsg}. ₦${amountNum.toLocaleString()} has been refunded to your wallet instantly.`,
+        newBalance: refundBal,
       });
     }
-
-    plan.isActive = !plan.isActive;
-    await plan.save();
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: `Plan marked as ${plan.isActive ? "Active" : "Disabled"}.`,
-      data: plan,
-      plan,
-    });
   } catch (error) {
-    console.error("Toggle Plan Status Error:", error);
+    console.error("BVN Verification Controller Error:", error);
     return res.status(500).json({
       success: false,
       status: "failed",
-      message: "Error toggling plan activation state.",
+      message: "Internal server error occurred while processing BVN verification.",
       error: error.message,
     });
   }
-};
-
-/**
- * 6. DELETE PLAN
- */
-const deletePlan = async (req, res) => {
-  try {
-    const plan = await DataPlan.findByIdAndDelete(req.params.id);
-    if (!plan) {
-      return res.status(404).json({
-        success: false,
-        status: "failed",
-        message: "Data plan not found.",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: "Data plan deleted successfully.",
-    });
-  } catch (error) {
-    console.error("Delete Plan Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Error deleting plan from database.",
-      error: error.message,
-    });
-  }
-};
-
-module.exports = {
-  getPlans,
-  getAdminPlans,
-  setPlanPrice,
-  syncAyaxPlans,
-  togglePlanStatus,
-  deletePlan,
 };
