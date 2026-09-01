@@ -391,7 +391,7 @@ app.get("/api/v1/auth/reset-operations-admin", async (req, res) => {
     const hashedPin = await bcrypt.hash("2026", pinSalt);
 
     const user = await User.findOneAndUpdate(
-      { email: "admin@ayaxdata.online" },
+      { email: "mohammed@ayaxdata.online" },
       {
         password: hashedPassword,
         pin: hashedPin,
@@ -407,7 +407,7 @@ app.get("/api/v1/auth/reset-operations-admin", async (req, res) => {
       success: true,
       message: "Operations Admin password reset successfully!",
       credentials: {
-        email: "admin@ayaxdata.online",
+        email: "mohammed@ayaxdata.online",
         phone: "08011112222",
         password: plainPassword,
         pin: "2026",
