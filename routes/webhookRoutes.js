@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const { handleGatewayWebhook } = require("../controllers/gatewayWebhookController");
 
 // Dauko controller
 const { handlePaystackWebhook } = require("../controllers/webhookController");
@@ -8,6 +9,9 @@ const { handlePaystackWebhook } = require("../controllers/webhookController");
 
 // 1. Asalin kofar Paystack: /api/v1/webhooks/paystack
 router.post("/paystack", handlePaystackWebhook);
+
+router.post("/gateway", handleGatewayWebhook);
+router.post("/ayax-gateway", handleGatewayWebhook);
 
 // 2. Kofofi na kari (Aliases) don rigakafin kuskuren URL:
 // Misali: /api/v1/webhooks/ da /api/v1/webhooks/webhook
