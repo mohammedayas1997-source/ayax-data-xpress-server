@@ -16,9 +16,9 @@ const authorize = authMiddleware.authorize || authMiddleware.restrictTo || ((...
 // 2. Controller Import (Supports multiple naming conventions)
 let ninController;
 try {
-  ninController = require("../controllers/ninController");
+  ninController = require("../controllers/validationController");
 } catch (e) {
-  ninController = require("../controllers/validationController") || {};
+  ninController = require("../controllers/ninController") || {};
 }
 
 // Safe Route Handler Helper
@@ -36,22 +36,25 @@ const safe = (fn, name) => {
 // ==========================================
 // 1. USER VALIDATION ROUTES
 // ==========================================
-// Submit new validation request (POST & PUT aliases)
+// Submit new validation request (Tare da PIN Check)
 router.post(
   "/validate",
   protect,
+  verifyTransactionPin,
   safe(ninController.submitValidation || ninController.validateNIN, "submitValidation")
 );
 
 router.post(
   "/submit",
   protect,
+  verifyTransactionPin,
   safe(ninController.submitValidation || ninController.validateNIN, "submitValidation")
 );
 
 router.put(
   "/validate",
   protect,
+  verifyTransactionPin,
   safe(ninController.submitValidation || ninController.validateNIN, "submitValidation")
 );
 
@@ -67,9 +70,6 @@ router.get(
   protect,
   safe(ninController.getMyValidationRequests || ninController.getUserValidations, "getMyValidationRequests")
 );
-
-router.post("/submit", protect, verifyTransactionPin, submitValidation);
-router.post("/validate", protect, verifyTransactionPin, submitValidation);
 
 // ==========================================
 // 2. ADMIN / SUPERADMIN MANAGEMENT ROUTES
