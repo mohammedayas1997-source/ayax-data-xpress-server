@@ -67,6 +67,22 @@ router.post("/pay", protect, verifyTransactionPin, safe(nimcController.submitNIM
 router.get("/my-requests", protect, safe(nimcController.getMyNIMCRequests, "getMyNIMCRequests"));
 router.get("/history", protect, safe(nimcController.getMyNIMCRequests, "getMyNIMCRequests"));
 
+
+// 1. Karbar /verify-and-charge da frontend ke kira
+router.post(
+  "/verify-and-charge",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+// 2. Karbar Admin Price Update
+router.post(
+  "/admin/update-price",
+  protect,
+  authorize("admin", "superadmin"),
+  safe(nimcController.setNIMCPrice, "setNIMCPrice")
+);
 // ==========================================
 // 3. ADMIN ROUTES
 // ==========================================
@@ -78,5 +94,24 @@ router.patch("/admin/approve/:id", protect, authorize("admin", "superadmin"), sa
 router.put("/admin/approve/:id", protect, authorize("admin", "superadmin"), safe(nimcController.approveRequest, "approveRequest"));
 router.patch("/admin/reject/:id", protect, authorize("admin", "superadmin"), safe(nimcController.rejectRequest, "rejectRequest"));
 router.post("/admin/set-price", protect, authorize("admin", "superadmin"), safe(nimcController.setNIMCPrice, "setNIMCPrice"));
+
+// Pricing da NINValidation.js ke kira a layi na 82: GET /nin/prices
+router.get("/prices", safe(nimcController.getNIMCPrices, "getNIMCPrices"));
+
+// Validation Submit da NINValidation.js ke kira a layi na 187: POST /nin/validate
+router.post(
+  "/validate",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+// Admin price update da NINValidation.js ke kira: POST /admin/nin/update-price
+router.post(
+  "/update-price",
+  protect,
+  authorize("admin", "superadmin"),
+  safe(nimcController.setNIMCPrice, "setNIMCPrice")
+);
 
 module.exports = router;

@@ -197,10 +197,14 @@ const User = require("./models/User");
 app.use("/api/v1/auth", authRoutes);
 if (validationRoutes) {
   app.use("/api/v1/validation", validationRoutes);
+  app.use("/api/v1/nin", validationRoutes);
   app.use("/api/v1/vtu/validation", validationRoutes);
 }
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/nimc", nimcRoutes);
+app.use("/api/v1/nin", nimcRoutes); // ✅ Don karbar GET /nin/prices da POST /nin/validate
+app.use("/api/v1/validation", nimcRoutes); // ✅ Don karbar duk wani kiran validation
+app.use("/api/v1/admin/nin", nimcRoutes); // ✅ Don karbar POST /admin/nin/update-price
 app.use("/api/v1/vtu/nimc", nimcRoutes);
 app.use("/api/v1/bvn", bvnRoutes);
 app.use("/api/v1/webhooks", webhookRoutes);
