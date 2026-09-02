@@ -27,7 +27,6 @@ const RAW_URL =
 const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
 const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
 
-// ✅ Daidai (Dogaro da Render Environment kawai):
 const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
 
 const getHeaders = () => ({
@@ -98,7 +97,6 @@ const executeAutoRefund = async (userId, amountNum, reference, targetBvn, reason
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
 
-    // Sabunta asalin transaction din zuwa refunded
     await Transaction.findOneAndUpdate(
       { reference },
       {
@@ -110,7 +108,6 @@ const executeAutoRefund = async (userId, amountNum, reference, targetBvn, reason
       }
     );
 
-    // Ƙirƙirar sabon record na REFUND a History
     const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     await Transaction.create({
       user: userId,
@@ -149,8 +146,8 @@ const executeAutoRefund = async (userId, amountNum, reference, targetBvn, reason
 };
 
 /**
- * 1. VERIFY BVN DIRECTLY (BVN Lookup / Verification)
- * @route POST /api/v1/bvn/verify (ko /api/v1/identity/bvn)
+ * 1. VERIFY BVN DIRECTLY
+ * @route POST /api/v1/bvn/verify (or /api/v1/bvn/verify-and-generate)
  * @access Private (User)
  */
 exports.verifyBVN = async (req, res) => {
@@ -166,14 +163,11 @@ exports.verifyBVN = async (req, res) => {
       amount,
     } = req.body;
 
-    // 1. Tattaro lambar ko ta wane suna frontend ya turo ta
     const rawBvn = String(
       bvn || bvnNumber || searchValue || identityNumber || number || ""
     ).trim();
 
-    // 2. Cire duk wani rubutu ko space, a bar lambobi zalla
     const targetBvn = rawBvn.replace(/\D/g, "");
-
     const finalPin = String(pin || transactionPin || "").trim();
     const amountNum = Number(amount || 150);
     const userId = req.user?._id || req.user?.id;
@@ -199,8 +193,6 @@ exports.verifyBVN = async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: "User account not found." });
     }
-
-    // Ci gaba da sauran code din...
 
     // A. Verify PIN
     let isPinValid = false;
@@ -276,15 +268,16 @@ exports.verifyBVN = async (req, res) => {
       details: `BVN Verification Query for ${targetBvn}`,
     });
 
-// E. Dispatch to Ayax BVN Gateway
+    // E. Dispatch to Ayax BVN Gateway (Updated Endpoints)
     try {
       let response;
       const candidateEndpoints = [
+        `${AYAX_API_BASE_URL}/verification/bvn`,
+        `${AYAX_API_BASE_URL}/verification/bvn-verify`,
+        `${AYAX_API_BASE_URL}/services/bvn`,
+        `${AYAX_API_BASE_URL}/identity-verification/bvn`,
+        `${AYAX_API_BASE_URL}/vtu/verification/bvn`,
         `${AYAX_API_BASE_URL}/identity/bvn/verify`,
-        `${AYAX_API_BASE_URL}/identity/bvn`,
-        `${AYAX_API_BASE_URL}/identity/verify`,
-        `${AYAX_API_BASE_URL}/vtu/bvn-verify`,
-        `${AYAX_API_BASE_URL}/bvn/verify`,
       ];
 
       let lastError = null;
@@ -296,8 +289,11 @@ exports.verifyBVN = async (req, res) => {
               bvn: targetBvn,
               bvnNumber: targetBvn,
               idNumber: targetBvn,
+              id: targetBvn,
+              number: targetBvn,
               searchValue: targetBvn,
-              searchType: "bvn",
+              service: "bvn",
+              serviceType: "bvn_verification",
               type: "bvn",
               reference,
               ref_id: reference,
@@ -381,7 +377,6 @@ exports.verifyBVN = async (req, res) => {
       const errMsg =
         apiError.response?.data?.message || apiError.message || "BVN gateway timed out";
 
-      // INSTANT AUTO-REFUND
       const refundBal = await executeAutoRefund(
         userId,
         amountNum,
