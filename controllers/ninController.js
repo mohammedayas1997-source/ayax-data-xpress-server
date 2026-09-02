@@ -161,7 +161,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalType, finalN
 /**
  * 1. SUBMIT NIN / IDENTITY VALIDATION REQUEST
  * @route POST /api/v1/validation/submit (ko /api/v1/nin/validate)
- * @access Private (User)
  */
 exports.submitValidation = async (req, res) => {
   try {
@@ -305,6 +304,7 @@ exports.submitValidation = async (req, res) => {
       `${baseUrl}/identity/validation/process`,
       `${baseUrl}/nin/validate`,
       `${baseUrl}/identity/nin/validate`,
+      `${baseUrl}/identity/nimc/process`,
     ];
 
     try {
@@ -316,6 +316,7 @@ exports.submitValidation = async (req, res) => {
               type: finalType,
               serviceId,
               nin: finalNin,
+              searchValue: finalNin,
               reference,
               ref_id: reference,
               amount: amountNum,
@@ -439,9 +440,70 @@ exports.submitValidation = async (req, res) => {
 };
 
 /**
- * 2. GET USER VALIDATION HISTORY
+ * 2. QUICK VALIDATION LOOKUP / VERIFY
+ * @route POST /api/v1/validation/verify
+ */
+exports.verifyValidation = async (req, res) => {
+  try {
+    const { nin, searchValue, searchType } = req.body;
+    const targetQuery = String(nin || searchValue || "").trim();
+
+    if (!targetQuery) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Identification number is required.",
+      });
+    }
+
+    const baseUrl = getBaseUrl();
+    const candidateEndpoints = [
+      `${baseUrl}/identity/nin/verify`,
+      `${baseUrl}/identity/validation/verify`,
+      `${baseUrl}/nin/validate`,
+    ];
+
+    let response;
+    for (const endpoint of candidateEndpoints) {
+      try {
+        response = await axios.post(
+          endpoint,
+          { nin: targetQuery, searchValue: targetQuery, searchType: searchType || "nin" },
+          { headers: getHeaders(), timeout: 30000 }
+        );
+        if (response.data) break;
+      } catch (e) {
+        if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
+      }
+    }
+
+    const resData = response.data;
+    if (resData && (resData.success === true || resData.status === "success" || resData.code === 200)) {
+      return res.status(200).json({
+        success: true,
+        status: "success",
+        data: resData.data || resData,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      status: "failed",
+      message: resData?.message || "Validation record not found.",
+    });
+  } catch (error) {
+    return res.status(error.response?.status || 500).json({
+      success: false,
+      status: "failed",
+      message: error.response?.data?.message || "Identity lookup failed.",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * 3. GET USER VALIDATION HISTORY
  * @route GET /api/v1/validation/my-requests
- * @access Private (User)
  */
 exports.getMyValidationRequests = async (req, res) => {
   try {
@@ -468,9 +530,8 @@ exports.getMyValidationRequests = async (req, res) => {
 };
 
 /**
- * 3. ADMIN: GET ALL VALIDATION REQUESTS (DASHBOARD)
+ * 4. ADMIN: GET ALL VALIDATION REQUESTS (DASHBOARD)
  * @route GET /api/v1/validation/admin/all
- * @access Private (Admin / Superadmin)
  */
 exports.getAllValidationRequests = async (req, res) => {
   try {
@@ -498,9 +559,8 @@ exports.getAllValidationRequests = async (req, res) => {
 };
 
 /**
- * 4. ADMIN: APPROVE / COMPLETE VALIDATION MANUALLY
+ * 5. ADMIN: APPROVE / COMPLETE VALIDATION MANUALLY
  * @route PATCH /api/v1/validation/admin/approve/:id
- * @access Private (Admin)
  */
 exports.approveValidation = async (req, res) => {
   try {

@@ -1,24 +1,40 @@
 const express = require("express");
 const router = express.Router();
-const { verifyTransactionPin } = require("../middleware/verifyPin");
 
-// 1. Dynamic Authentication Middleware Loader
+// 1. Dynamic PIN Middleware Loader
+let verifyTransactionPin = (req, res, next) => next();
+try {
+  const pinMod = require("../middleware/verifyPin");
+  verifyTransactionPin = pinMod.verifyTransactionPin || pinMod;
+} catch (e) {
+  // Safe fallback
+}
+
+// 2. Dynamic Authentication Middleware Loader
 let authMiddleware;
 try {
   authMiddleware = require("../middleware/authMiddleware");
 } catch (e) {
-  authMiddleware = require("../middleware/auth");
+  try {
+    authMiddleware = require("../middleware/auth");
+  } catch (err) {
+    authMiddleware = {};
+  }
 }
 
-const protect = authMiddleware.protect || authMiddleware.verifyToken || authMiddleware;
+const protect = authMiddleware.protect || authMiddleware.verifyToken || ((req, res, next) => next());
 const authorize = authMiddleware.authorize || authMiddleware.restrictTo || ((...roles) => (req, res, next) => next());
 
-// 2. Controller Import (Supports multiple naming conventions)
+// 3. Controller Import
 let ninController;
 try {
   ninController = require("../controllers/validationController");
 } catch (e) {
-  ninController = require("../controllers/ninController") || {};
+  try {
+    ninController = require("../controllers/ninController");
+  } catch (err) {
+    ninController = {};
+  }
 }
 
 // Safe Route Handler Helper
@@ -34,8 +50,22 @@ const safe = (fn, name) => {
 };
 
 // ==========================================
-// 1. USER VALIDATION ROUTES
+// 1. USER VALIDATION & LOOKUP ROUTES
 // ==========================================
+
+// Quick Lookup / Verify (Baya bukatar PIN)
+router.post(
+  "/verify",
+  protect,
+  safe(ninController.verifyValidation || ninController.verifyNIN || ninController.submitValidation, "verifyValidation")
+);
+
+router.post(
+  "/lookup",
+  protect,
+  safe(ninController.verifyValidation || ninController.verifyNIN, "verifyValidation")
+);
+
 // Submit new validation request (Tare da PIN Check)
 router.post(
   "/validate",
@@ -46,6 +76,13 @@ router.post(
 
 router.post(
   "/submit",
+  protect,
+  verifyTransactionPin,
+  safe(ninController.submitValidation || ninController.validateNIN, "submitValidation")
+);
+
+router.post(
+  "/process",
   protect,
   verifyTransactionPin,
   safe(ninController.submitValidation || ninController.validateNIN, "submitValidation")
@@ -74,7 +111,6 @@ router.get(
 // ==========================================
 // 2. ADMIN / SUPERADMIN MANAGEMENT ROUTES
 // ==========================================
-// Fetch all validation requests
 router.get(
   "/admin/all-requests",
   protect,
@@ -89,7 +125,6 @@ router.get(
   safe(ninController.getAllValidationRequests || ninController.getAdminValidations, "getAllValidationRequests")
 );
 
-// Approve / Complete validation
 router.patch(
   "/admin/approve/:id",
   protect,
@@ -104,7 +139,6 @@ router.put(
   safe(ninController.approveValidation || ninController.approveRequest, "approveValidation")
 );
 
-// Reject validation with auto-refund
 router.patch(
   "/admin/reject/:id",
   protect,

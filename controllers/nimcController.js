@@ -159,6 +159,44 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
 };
 
 /**
+ * 0. GET NIMC PRICING MATRIX (An saka wannan don cike layin da ke routes)
+ * @route GET /api/v1/nimc/prices OR /api/v1/nimc/pricing
+ */
+exports.getNIMCPrices = async (req, res) => {
+  try {
+    let prices = [];
+    if (NIMCPrice) {
+      prices = await NIMCPrice.find().lean();
+    }
+
+    if (!prices || prices.length === 0) {
+      prices = [
+        { serviceType: "nin_verification", name: "Standard NIN Verification", amount: 150, description: "Instant identity verification" },
+        { serviceType: "nin_slip_regular", name: "Regular NIN Slip", amount: 200, description: "Standard slip generation" },
+        { serviceType: "nin_slip_standard", name: "Standard NIN Slip", amount: 500, description: "Official coloured slip" },
+        { serviceType: "nin_slip_premium", name: "Premium NIN Slip", amount: 1000, description: "Official laminated format" },
+      ];
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      count: prices.length,
+      data: prices,
+      prices,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      status: "failed",
+      message: "Failed to load NIMC pricing",
+      error: error.message,
+    });
+  }
+};
+exports.getPrices = exports.getNIMCPrices;
+
+/**
  * 1. SUBMIT NIMC / NIN APPLICATION OR VERIFICATION REQUEST
  * @route POST /api/v1/nimc/submit-request (or /api/v1/nimc/request-modification)
  */
@@ -229,17 +267,21 @@ exports.submitNIMCRequest = async (req, res) => {
 
     // B. Calculate Cost via NIMCPrice Matrix or Fallback
     let amountToCharge = Number(amount || 0);
-    const pricing = await NIMCPrice.findOne({
-      $or: [
-        { serviceType: finalServiceType },
-        { serviceId: finalServiceType },
-        { name: finalServiceType },
-      ],
-    });
+    if (NIMCPrice) {
+      const pricing = await NIMCPrice.findOne({
+        $or: [
+          { serviceType: finalServiceType },
+          { serviceId: finalServiceType },
+          { name: finalServiceType },
+        ],
+      });
 
-    if (pricing && pricing.amount > 0) {
-      amountToCharge = Number(pricing.amount);
-    } else if (amountToCharge <= 0) {
+      if (pricing && pricing.amount > 0) {
+        amountToCharge = Number(pricing.amount);
+      }
+    }
+
+    if (amountToCharge <= 0) {
       amountToCharge = 150;
     }
 
@@ -293,19 +335,21 @@ exports.submitNIMCRequest = async (req, res) => {
     });
 
     // F. Create Initial NIMC Request Record
-    await NIMCRequest.create({
-      user: userId,
-      serviceType: finalServiceType,
-      ninNumber: finalNin,
-      trackingId: trackingId || null,
-      phoneNumber: phoneNumber || null,
-      searchValue: targetIdentifier,
-      formData: finalDetails,
-      amount: amountToCharge,
-      status: "pending",
-      transactionId,
-      reference,
-    });
+    if (NIMCRequest) {
+      await NIMCRequest.create({
+        user: userId,
+        serviceType: finalServiceType,
+        ninNumber: finalNin,
+        trackingId: trackingId || null,
+        phoneNumber: phoneNumber || null,
+        searchValue: targetIdentifier,
+        formData: finalDetails,
+        amount: amountToCharge,
+        status: "pending",
+        transactionId,
+        reference,
+      });
+    }
 
     // G. Dispatch Live Processing to Ayax NIMC Gateway
     const baseUrl = getBaseUrl();
@@ -370,17 +414,20 @@ exports.submitNIMCRequest = async (req, res) => {
           }
         );
 
-        const updatedRequest = await NIMCRequest.findOneAndUpdate(
-          { reference },
-          {
-            status: "completed",
-            resolvedAt: new Date(),
-            slipUrl: slipDocumentUrl,
-            pdfUrl: slipDocumentUrl,
-            details: resultPayload,
-          },
-          { new: true }
-        );
+        let updatedRequest = null;
+        if (NIMCRequest) {
+          updatedRequest = await NIMCRequest.findOneAndUpdate(
+            { reference },
+            {
+              status: "completed",
+              resolvedAt: new Date(),
+              slipUrl: slipDocumentUrl,
+              pdfUrl: slipDocumentUrl,
+              details: resultPayload,
+            },
+            { new: true }
+          );
+        }
 
         if (Activity) {
           await Activity.create({
@@ -396,7 +443,7 @@ exports.submitNIMCRequest = async (req, res) => {
         await sendNotification(
           userId,
           "NIMC Request Completed 🎉",
-          `Your ${finalServiceType} application for ID (${targetIdentifier || "N/A"}) has been successfully processed. You can download your slip in Application History.`,
+          `Your ${finalServiceType} application for ID (${targetIdentifier || "N/A"}) has been successfully processed.`,
           "IDENTITY"
         );
 
@@ -404,7 +451,7 @@ exports.submitNIMCRequest = async (req, res) => {
           success: true,
           status: "success",
           message: "NIMC Request processed successfully via Ayax APIs.",
-          data: updatedRequest,
+          data: updatedRequest || resultPayload,
           slipUrl: slipDocumentUrl,
           newBalance: newBal,
         });
@@ -450,14 +497,15 @@ exports.submitNIMCRequest = async (req, res) => {
 };
 
 /**
- * 2. LIVE VERIFY NIMC DIRECTLY
+ * 2. LIVE VERIFY NIMC DIRECTLY (Tare da Candidate Endpoints don gujewa 404)
  * @route POST /api/v1/nimc/verify
  */
 exports.verifyNIMC = async (req, res) => {
   try {
-    const { searchValue, searchType } = req.body;
+    const { searchValue, searchType, nin, phone, trackingId } = req.body;
+    const targetQuery = String(searchValue || nin || phone || trackingId || "").trim();
 
-    if (!searchValue) {
+    if (!targetQuery) {
       return res.status(400).json({
         success: false,
         status: "failed",
@@ -466,29 +514,36 @@ exports.verifyNIMC = async (req, res) => {
     }
 
     const payload = {
-      searchValue: String(searchValue).trim(),
+      searchValue: targetQuery,
       searchType: searchType || "nin",
+      nin: targetQuery,
     };
 
     if (searchType === "phone") {
-      payload.phone = searchValue;
+      payload.phone = targetQuery;
     } else if (searchType === "trackingId") {
-      payload.trackingId = searchValue;
-    } else if (searchType === "face") {
-      payload.image = searchValue;
-    } else {
-      payload.nin = searchValue;
+      payload.trackingId = targetQuery;
     }
 
     const baseUrl = getBaseUrl();
-    const response = await axios.post(
+    const candidateEndpoints = [
       `${baseUrl}/identity/nin/verify`,
-      payload,
-      {
-        headers: getHeaders(),
-        timeout: 30000,
+      `${baseUrl}/nimc/verify`,
+      `${baseUrl}/identity/nimc/verify`,
+    ];
+
+    let response;
+    for (const endpoint of candidateEndpoints) {
+      try {
+        response = await axios.post(endpoint, payload, {
+          headers: getHeaders(),
+          timeout: 30000,
+        });
+        if (response.data) break;
+      } catch (err) {
+        if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw err;
       }
-    );
+    }
 
     const resData = response.data;
     const isSuccessful =
@@ -531,9 +586,12 @@ exports.verifyNIMC = async (req, res) => {
 exports.getMyNIMCRequests = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
-    const requests = await NIMCRequest.find({ user: userId })
-      .sort({ createdAt: -1 })
-      .lean();
+    let requests = [];
+    if (NIMCRequest) {
+      requests = await NIMCRequest.find({ user: userId })
+        .sort({ createdAt: -1 })
+        .lean();
+    }
 
     return res.status(200).json({
       success: true,
@@ -558,10 +616,13 @@ exports.getMyNIMCRequests = async (req, res) => {
  */
 exports.getAllNIMCRequests = async (req, res) => {
   try {
-    const requests = await NIMCRequest.find()
-      .populate("user", "surname firstName fullName phone email walletBalance")
-      .sort({ createdAt: -1 })
-      .lean();
+    let requests = [];
+    if (NIMCRequest) {
+      requests = await NIMCRequest.find()
+        .populate("user", "surname firstName fullName phone email walletBalance")
+        .sort({ createdAt: -1 })
+        .lean();
+    }
 
     return res.status(200).json({
       success: true,
@@ -653,6 +714,33 @@ exports.approveRequest = async (req, res) => {
       status: "success",
       message: "Request completed and result slip attached successfully.",
       data: request,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 7. ADMIN: SET NIMC PRICING
+ * @route POST /api/v1/nimc/admin/set-price
+ */
+exports.setNIMCPrice = async (req, res) => {
+  try {
+    const { serviceType, name, amount, description } = req.body;
+    if (!serviceType || !amount) {
+      return res.status(400).json({ success: false, message: "Service type and amount are required." });
+    }
+
+    const priceRecord = await NIMCPrice.findOneAndUpdate(
+      { serviceType },
+      { name: name || serviceType, amount: Number(amount), description },
+      { upsert: true, new: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Price updated successfully.",
+      data: priceRecord,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
