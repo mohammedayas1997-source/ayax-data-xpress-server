@@ -276,18 +276,18 @@ exports.verifyBVN = async (req, res) => {
       details: `BVN Verification Query for ${targetBvn}`,
     });
 
-   // E. Dispatch to Ayax BVN Gateway
-    let response;
-    const candidateEndpoints = [
-      `${AYAX_API_BASE_URL}/identity/bvn/verify`,
-      `${AYAX_API_BASE_URL}/identity/nin/bvn-lookup`,
-      `${AYAX_API_BASE_URL}/identity/verify-bvn`,
-      `${AYAX_API_BASE_URL}/identity/verify`,
-      `${AYAX_API_BASE_URL}/vtu/verify-bvn`,
-      `${AYAX_API_BASE_URL}/bvn`,
-    ];
-
+// E. Dispatch to Ayax BVN Gateway
     try {
+      let response;
+      const candidateEndpoints = [
+        `${AYAX_API_BASE_URL}/identity/bvn/verify`,
+        `${AYAX_API_BASE_URL}/identity/bvn`,
+        `${AYAX_API_BASE_URL}/identity/verify`,
+        `${AYAX_API_BASE_URL}/vtu/bvn-verify`,
+        `${AYAX_API_BASE_URL}/bvn/verify`,
+      ];
+
+      let lastError = null;
       for (const endpoint of candidateEndpoints) {
         try {
           response = await axios.post(
@@ -305,14 +305,21 @@ exports.verifyBVN = async (req, res) => {
             },
             {
               headers: getHeaders(),
-              timeout: 45000,
+              timeout: 30000,
             }
           );
-          if (response.data) break;
-        } catch (e) {
-          // Idan kuskuren 404 ne, bar shi ya gwada na gaba
-          if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
+          if (response?.data) {
+            lastError = null;
+            break;
+          }
+        } catch (err) {
+          lastError = err;
+          console.log(`Failed endpoint [${endpoint}]:`, err.response?.data?.message || err.message);
         }
+      }
+
+      if (!response && lastError) {
+        throw lastError;
       }
 
       const resData = response?.data;
@@ -361,9 +368,9 @@ exports.verifyBVN = async (req, res) => {
           data: bvnData,
           newBalance: newBal,
         });
-      } else {
-        throw new Error(resData?.message || "Ayax Gateway declined BVN lookup.");
       }
+
+      throw new Error(resData?.message || "Ayax Gateway declined BVN lookup.");
     } catch (apiError) {
       console.error(
         "Ayax BVN API Gateway Error:",
