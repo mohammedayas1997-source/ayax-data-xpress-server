@@ -2,7 +2,7 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 /**
- * @desc    Protect Middleware - Tabbatar mai amfani ya yi login kuma token dinsa yana aiki
+ * @desc Protect Middleware - Tabbatar mai amfani ya yi login kuma token dinsa yana aiki
  */
 const protect = async (req, res, next) => {
   let token;
@@ -13,6 +13,8 @@ const protect = async (req, res, next) => {
     req.headers.authorization.startsWith("Bearer")
   ) {
     token = req.headers.authorization.split(" ")[1];
+  } else if (req.headers.token) {
+    token = req.headers.token;
   } else if (req.cookies && req.cookies.token) {
     token = req.cookies.token;
   }
@@ -31,7 +33,23 @@ const protect = async (req, res, next) => {
 
     const decoded = jwt.verify(token, jwtSecret);
 
-    const user = await User.findById(decoded.id || decoded._id).select("-password");
+    // ✅ Tabbatar da gano ID ta kowace hanya (id, _id, userId, ko sub)
+    const targetUserId =
+      decoded.id ||
+      decoded._id ||
+      decoded.userId ||
+      decoded.user?._id ||
+      decoded.user?.id ||
+      decoded.sub;
+
+    if (!targetUserId) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid session token: User ID missing in payload",
+      });
+    }
+
+    const user = await User.findById(targetUserId).select("-password");
 
     if (!user) {
       return res.status(401).json({
@@ -76,8 +94,7 @@ const protect = async (req, res, next) => {
 };
 
 /**
- * @desc    Authorize Middleware - Yanke ikon shiga bisa ga matsayi (Roles)
- * SuperAdmin yana da damar shiga ko ina, kuma Admin yana da damar shiga dukkan ayyukan gudanarwa.
+ * @desc Authorize Middleware
  */
 const authorize = (...roles) => {
   return (req, res, next) => {
@@ -93,14 +110,14 @@ const authorize = (...roles) => {
       req.user.phone === "09033738409" ||
       String(req.user.email).toLowerCase() === "mohammed.ayas@ayaxdata.online";
 
-    // SuperAdmin da Owner suna wucewa kowace kofa
     if (userRole === "superadmin" || isOwner) {
       return next();
     }
 
-    const normalizedAllowedRoles = roles.map((r) => String(r).toLowerCase().trim());
+    const normalizedAllowedRoles = roles.map((r) =>
+      String(r).toLowerCase().trim()
+    );
 
-    // Idan an nemi admin kuma mai shiga admin ne ko superadmin
     if (normalizedAllowedRoles.includes(userRole)) {
       return next();
     }
@@ -113,7 +130,7 @@ const authorize = (...roles) => {
 };
 
 /**
- * @desc    Admin Only Middleware - Domin Admin da SuperAdmin
+ * @desc Admin Only Middleware
  */
 const adminOnly = (req, res, next) => {
   if (!req.user) {
