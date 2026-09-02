@@ -6,6 +6,25 @@ const { verifyTransactionPin } = require("../middleware/verifyPin");
 const { buyAirtime } = require("../controllers/airtimeController");
 const { buyData } = require("../controllers/dataController");
 
+// Import Utility & NIMC Controllers kai tsaye
+let utilityController = {};
+try {
+  utilityController = require("../controllers/utilityController");
+} catch (e) {
+  try {
+    utilityController = require("../controllers/billsController");
+  } catch (err) {}
+}
+
+let nimcController = {};
+try {
+  nimcController = require("../controllers/nimcController");
+} catch (e) {}
+
+let validationController = {};
+try {
+  validationController = require("../controllers/validationController");
+} catch (e) {}
 
 // Helper don kiyaye kuskuren undefined callback
 const safe = (handlerName) => {
@@ -26,41 +45,80 @@ router.use(protect);
 /* ======================================================
    1. DATA SERVICES
 ====================================================== */
-router.post("/buy-data", safe("buyData"));
-router.post("/buy-data-custom", safe("buyData"));
-router.post("/data", safe("buyData"));
-router.post("/data/buy", safe("buyData"));
-router.post("/buy", safe("buyData"));
+router.post("/buy-data", verifyTransactionPin, buyData);
+router.post("/buy-data-custom", verifyTransactionPin, buyData);
+router.post("/data", verifyTransactionPin, buyData);
+router.post("/data/buy", verifyTransactionPin, buyData);
+router.post("/buy", verifyTransactionPin, buyData);
 
 /* ======================================================
    2. AIRTIME SERVICES
 ====================================================== */
-router.post("/buy-airtime", safe("buyAirtime"));
-router.post("/airtime", safe("buyAirtime"));
-router.post("/airtime/buy", safe("buyAirtime"));
+router.post("/buy-airtime", verifyTransactionPin, buyAirtime);
+router.post("/airtime", verifyTransactionPin, buyAirtime);
+router.post("/airtime/buy", verifyTransactionPin, buyAirtime);
 
 /* ======================================================
-   3. UTILITY BILLS (ELECTRICITY & CABLE)
+   3. CABLE TV (VALIDATION & PAYMENT DA FRONTEND KE KIRA)
 ====================================================== */
-router.post("/electricity", safe("purchaseElectricity"));
-router.post("/buy-electricity", safe("purchaseElectricity"));
-router.post("/cable", safe("purchaseCable"));
-router.post("/buy-cable", safe("purchaseCable"));
+// Validation Aliases
+const handleVerifySmartcard =
+  utilityController.verifySmartCard || safe("verifySmartCard");
+router.post("/validate-cable", handleVerifySmartcard);
+router.post("/cable/verify", handleVerifySmartcard);
+router.post("/verify-smartcard", handleVerifySmartcard);
+
+// Payment Aliases (PIN modal: POST /api/v1/vtu/pay-cable)
+const handleBuyCable =
+  utilityController.buyCableSubscription || safe("purchaseCable");
+router.post("/pay-cable", verifyTransactionPin, handleBuyCable);
+router.post("/cable/buy", verifyTransactionPin, handleBuyCable);
+router.post("/cable", verifyTransactionPin, handleBuyCable);
+router.post("/buy-cable", verifyTransactionPin, handleBuyCable);
+
+if (utilityController.getCablePlans) {
+  router.get("/cable/plans", utilityController.getCablePlans);
+}
 
 /* ======================================================
-   4. VERIFICATION & VALIDATION
+   4. ELECTRICITY BILLS
 ====================================================== */
-router.post("/verify-meter", safe("verifyMeter"));
-router.post("/verify-smartcard", safe("verifySmartCard"));
-router.post("/nimc-validate", safe("nimcValidation"));
+const handleVerifyMeter =
+  utilityController.verifyMeter || safe("verifyMeter");
+router.post("/validate-meter", handleVerifyMeter);
+router.post("/electricity/verify", handleVerifyMeter);
+router.post("/verify-meter", handleVerifyMeter);
 
-router.post("/airtime", protect, verifyTransactionPin, buyAirtime);
-router.post("/airtime/buy", protect, verifyTransactionPin, buyAirtime);
-router.post("/buy-data", protect, verifyTransactionPin, buyData);
-router.post("/data/buy", protect, verifyTransactionPin, buyData);
+const handleBuyElectricity =
+  utilityController.buyElectricity || safe("purchaseElectricity");
+router.post("/pay-electricity", verifyTransactionPin, handleBuyElectricity);
+router.post("/electricity/buy", verifyTransactionPin, handleBuyElectricity);
+router.post("/electricity", verifyTransactionPin, handleBuyElectricity);
+router.post("/buy-electricity", verifyTransactionPin, handleBuyElectricity);
 
 /* ======================================================
-   5. TRANSACTION STATUS & HISTORY
+   5. NIMC & IDENTITY VALIDATION ALIASES
+====================================================== */
+if (nimcController.verifyNIMC) {
+  router.post("/verify-nin", nimcController.verifyNIMC);
+  router.post("/validate-nin", nimcController.verifyNIMC);
+  router.post("/nin-verify", nimcController.verifyNIMC);
+}
+
+if (nimcController.submitNIMCRequest) {
+  router.post("/nimc/submit", verifyTransactionPin, nimcController.submitNIMCRequest);
+  router.post("/nimc-validate", verifyTransactionPin, nimcController.submitNIMCRequest);
+} else {
+  router.post("/nimc-validate", safe("nimcValidation"));
+}
+
+if (validationController.submitValidation) {
+  router.post("/validation/submit", verifyTransactionPin, validationController.submitValidation);
+  router.post("/validation/validate", verifyTransactionPin, validationController.submitValidation);
+}
+
+/* ======================================================
+   6. TRANSACTION STATUS & HISTORY
 ====================================================== */
 router.get("/transactions", safe("getTransactionHistory"));
 router.get("/status/:reference", safe("getTransactionStatus"));
