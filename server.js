@@ -198,6 +198,8 @@ app.use("/api/v1/virtual-account", virtualAccountRoutes);
 app.use("/api/v1/vtu", vtuRoutes);
 app.use("/api/v1/data", dataRoutes);
 app.use("/api/v1/airtime", vtuRoutes);
+app.use("/api/v1/vtu", require("./routes/utilityRoutes"));
+app.use("/api/v1/bills", require("./routes/utilityRoutes"));
 
 // Electricity & Cable TV Bills Routing
 if (utilityRoutes) {
