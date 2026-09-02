@@ -276,16 +276,15 @@ exports.verifyBVN = async (req, res) => {
       details: `BVN Verification Query for ${targetBvn}`,
     });
 
-    // E. Dispatch to Ayax BVN Gateway
-    // E. Dispatch to Ayax BVN Gateway
+   // E. Dispatch to Ayax BVN Gateway
     let response;
     const candidateEndpoints = [
+      `${AYAX_API_BASE_URL}/identity/bvn/verify`,
       `${AYAX_API_BASE_URL}/identity/nin/bvn-lookup`,
-      `${AYAX_API_BASE_URL}/identity/bvn-lookup`,
-      `${AYAX_API_BASE_URL}/bvn/lookup`,
-      `${AYAX_API_BASE_URL}/bvn-verify`,
-      `${AYAX_API_BASE_URL}/identity/bvn`,
-      `${AYAX_API_BASE_URL}/bvn/validate`,
+      `${AYAX_API_BASE_URL}/identity/verify-bvn`,
+      `${AYAX_API_BASE_URL}/identity/verify`,
+      `${AYAX_API_BASE_URL}/vtu/verify-bvn`,
+      `${AYAX_API_BASE_URL}/bvn`,
     ];
 
     try {
@@ -297,6 +296,9 @@ exports.verifyBVN = async (req, res) => {
               bvn: targetBvn,
               bvnNumber: targetBvn,
               idNumber: targetBvn,
+              searchValue: targetBvn,
+              searchType: "bvn",
+              type: "bvn",
               reference,
               ref_id: reference,
               amount: amountNum,
@@ -308,7 +310,7 @@ exports.verifyBVN = async (req, res) => {
           );
           if (response.data) break;
         } catch (e) {
-          // Idan 404 ne, bar shi ya gwada na gaba har sai ya dace
+          // Idan kuskuren 404 ne, bar shi ya gwada na gaba
           if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
         }
       }
