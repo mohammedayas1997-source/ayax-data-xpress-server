@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { verifyTransactionPin } = require("../middleware/verifyPin");
 
-// 1. Safe Auth Middleware Import (Supports both auth & authMiddleware naming)
+// 1. Safe Auth Middleware Import
 let authMiddleware;
 try {
   authMiddleware = require("../middleware/authMiddleware");
@@ -14,7 +14,14 @@ const protect = authMiddleware.protect || authMiddleware.verifyToken || authMidd
 const authorize = authMiddleware.authorize || authMiddleware.restrictTo || ((...roles) => (req, res, next) => next());
 
 // 2. Controller Import
-const bvnController = require("../controllers/bvnController") || {};
+let bvnController = {};
+try {
+  bvnController = require("../controllers/bvnController");
+} catch (e) {
+  try {
+    bvnController = require("../controllers/nimcController");
+  } catch (err) {}
+}
 
 // Safe Route Handler Helper
 const safe = (fn, name) => {
@@ -33,30 +40,52 @@ const safe = (fn, name) => {
 // ==========================================
 router.get(
   "/prices",
-  safe(bvnController.getBVNPrices || bvnController.getPrices, "getBVNPrices")
+  safe(bvnController.getBVNPrices || bvnController.getPrices || bvnController.getNIMCPrices, "getBVNPrices")
 );
 
 router.get(
   "/pricing",
-  safe(bvnController.getBVNPrices || bvnController.getPrices, "getBVNPrices")
+  safe(bvnController.getBVNPrices || bvnController.getPrices || bvnController.getNIMCPrices, "getBVNPrices")
 );
 
 // ==========================================
-// 2. USER ROUTES (Verification & Requests)
+// 2. USER ROUTES (Verification & Generation)
 // ==========================================
-// Live verification lookup da PIN authentication
+
+// ✅ WANNAN SHINE AINIHIN ENDPOINT DA KE JIKIN SCREEN
+router.post(
+  "/verify-and-generate",
+  protect,
+  verifyTransactionPin,
+  safe(
+    bvnController.verifyBVN ||
+      bvnController.verify ||
+      bvnController.submitBVNRequest ||
+      bvnController.submitNIMCRequest,
+    "verifyBVN"
+  )
+);
+
+// Sauran aliases na verification
 router.post(
   "/verify",
   protect,
   verifyTransactionPin,
-  safe(bvnController.verifyBVN || bvnController.verify, "verifyBVN")
+  safe(bvnController.verifyBVN || bvnController.verify || bvnController.submitBVNRequest, "verifyBVN")
+);
+
+router.post(
+  "/validate",
+  protect,
+  verifyTransactionPin,
+  safe(bvnController.verifyBVN || bvnController.verify || bvnController.submitBVNRequest, "verifyBVN")
 );
 
 router.post(
   "/submit",
   protect,
   verifyTransactionPin,
-  safe(bvnController.submitBVNRequest || bvnController.requestBVNModification, "submitBVNRequest")
+  safe(bvnController.submitBVNRequest || bvnController.requestBVNModification || bvnController.verifyBVN, "submitBVNRequest")
 );
 
 router.post(
