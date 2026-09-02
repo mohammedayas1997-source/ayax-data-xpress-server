@@ -159,7 +159,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
 };
 
 /**
- * 0. GET NIMC PRICING MATRIX (An saka wannan don cike layin da ke routes)
+ * 0. GET NIMC PRICING MATRIX
  * @route GET /api/v1/nimc/prices OR /api/v1/nimc/pricing
  */
 exports.getNIMCPrices = async (req, res) => {
@@ -198,7 +198,7 @@ exports.getPrices = exports.getNIMCPrices;
 
 /**
  * 1. SUBMIT NIMC / NIN APPLICATION OR VERIFICATION REQUEST
- * @route POST /api/v1/nimc/submit-request (or /api/v1/nimc/request-modification)
+ * @route POST /api/v1/nimc/submit-request
  */
 exports.submitNIMCRequest = async (req, res) => {
   try {
@@ -222,36 +222,26 @@ exports.submitNIMCRequest = async (req, res) => {
     const finalNin = String(ninNumber || nin || searchValue || "").trim();
     const finalPin = String(pin || transactionPin || "").trim();
     const finalDetails = formData || details || {};
-    // Dynamic user resolver (yana duba req.user, req.body, ko headers)
-let userId = req.user?._id || req.user?.id || req.body?.userId || req.user?.userId;
 
-// Idan babu a req.user, a duba token kai tsaye don samun ID ba tare da crash ba
-if (!userId && req.headers.authorization) {
-  try {
-    const rawToken = req.headers.authorization.split(" ")[1];
-    const jwt = require("jsonwebtoken");
-    const decoded = jwt.decode(rawToken);
-    userId = decoded?.id || decoded?._id || decoded?.userId;
-  } catch (err) {}
-}
+    // Dynamic user resolver
+    let userId = req.user?._id || req.user?.id || req.body?.userId || req.user?.userId;
 
-if (!userId) {
-  return res.status(401).json({
-    success: false,
-    status: "failed",
-    message: "User session expired or unauthorized. Please log in again.",
-  });
-}
+    if (!userId && req.headers.authorization) {
+      try {
+        const rawToken = req.headers.authorization.split(" ")[1];
+        const jwt = require("jsonwebtoken");
+        const decoded = jwt.decode(rawToken);
+        userId = decoded?.id || decoded?._id || decoded?.userId;
+      } catch (err) {}
+    }
 
-const user = await User.findById(userId).select("+transactionPin +pin +walletBalance +balance");
-
-if (!user) {
-  return res.status(404).json({
-    success: false,
-    status: "failed",
-    message: "User account record not found.",
-  });
-}
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        status: "failed",
+        message: "User session expired or unauthorized. Please log in again.",
+      });
+    }
 
     if (!finalServiceType || (!finalNin && !trackingId && !phoneNumber) || !finalPin) {
       return res.status(400).json({
@@ -261,10 +251,15 @@ if (!user) {
       });
     }
 
+    // Layi guda kacal na kiran User
     const user = await User.findById(userId).select("+transactionPin +pin +walletBalance +balance");
 
     if (!user) {
-      return res.status(404).json({ success: false, message: "User account not found." });
+      return res.status(404).json({
+        success: false,
+        status: "failed",
+        message: "User account record not found.",
+      });
     }
 
     // A. Verify Transaction PIN
@@ -380,16 +375,17 @@ if (!user) {
       });
     }
 
-    // A cikin submitNIMCRequest (Controllers/nimcController.js):
-const baseUrl = getBaseUrl();
-const candidateEndpoints = [
-  `${baseUrl}/identity/nin/verify`,
-  `${baseUrl}/nimc/verify`,
-  `${baseUrl}/identity/validation`,
-  `${baseUrl}/nin/validate`,
-  `${baseUrl}/vtu/nimc-validate`,
-];
+    // G. Gateway Candidate Endpoints
+    const baseUrl = getBaseUrl();
+    const candidateEndpoints = [
+      `${baseUrl}/identity/nin/verify`,
+      `${baseUrl}/nimc/verify`,
+      `${baseUrl}/identity/validation`,
+      `${baseUrl}/nin/validate`,
+      `${baseUrl}/vtu/nimc-validate`,
+    ];
 
+    let ayaxResponse;
     try {
       for (const endpoint of candidateEndpoints) {
         try {
@@ -527,7 +523,7 @@ const candidateEndpoints = [
 };
 
 /**
- * 2. LIVE VERIFY NIMC DIRECTLY (Tare da Candidate Endpoints don gujewa 404)
+ * 2. LIVE VERIFY NIMC DIRECTLY
  * @route POST /api/v1/nimc/verify
  */
 exports.verifyNIMC = async (req, res) => {
