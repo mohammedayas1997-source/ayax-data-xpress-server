@@ -158,7 +158,19 @@ const adminRoutes = require("./routes/adminRoutes");
 const nimcRoutes = require("./routes/nimcRoutes");
 const bvnRoutes = require("./routes/bvnRoutes");
 const superAdminRoutes = require("./routes/superAdminRoutes");
-const validationRoutes = require("./routes/ninRoutes");
+
+// Safe Import don validationRoutes
+let validationRoutes;
+try {
+  validationRoutes = require("./routes/validationRoutes");
+} catch (e) {
+  try {
+    validationRoutes = require("./routes/ninRoutes");
+  } catch (err) {
+    validationRoutes = null;
+  }
+}
+
 const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 const dataRoutes = require("./routes/data.routes");
 const transactionRoutes = require("./routes/transaction.routes");
@@ -183,9 +195,13 @@ const User = require("./models/User");
 
 // --- ROUTES REGISTRATION ---
 app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/validation", validationRoutes);
+if (validationRoutes) {
+  app.use("/api/v1/validation", validationRoutes);
+  app.use("/api/v1/vtu/validation", validationRoutes);
+}
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/nimc", nimcRoutes);
+app.use("/api/v1/vtu/nimc", nimcRoutes);
 app.use("/api/v1/bvn", bvnRoutes);
 app.use("/api/v1/webhooks", webhookRoutes);
 app.use("/api/v1/payment", paymentRoutes);
@@ -194,20 +210,21 @@ app.use("/api/v1/wallet", walletRoutes);
 app.use("/api/v1/transactions", transactionRoutes);
 app.use("/api/v1/virtual-account", virtualAccountRoutes);
 
-// VTU, Data & Airtime Routing
-app.use("/api/v1/vtu", vtuRoutes);
-app.use("/api/v1/data", dataRoutes);
-app.use("/api/v1/airtime", vtuRoutes);
-app.use("/api/v1/vtu", require("./routes/utilityRoutes"));
-app.use("/api/v1/bills", require("./routes/utilityRoutes"));
-
-// Electricity & Cable TV Bills Routing
+// ✅ DAIDAI: Dora utilityRoutes kafin vtuRoutes don kiran /validate-cable da /pay-cable su fara biyawa
 if (utilityRoutes) {
+  app.use("/api/v1/vtu", utilityRoutes);
   app.use("/api/v1/bills", utilityRoutes);
   app.use("/api/v1/utility", utilityRoutes);
   app.use("/api/v1/electricity", utilityRoutes);
   app.use("/api/v1/cable", utilityRoutes);
-} else {
+}
+
+// VTU, Data & Airtime Routing
+app.use("/api/v1/vtu", vtuRoutes);
+app.use("/api/v1/data", dataRoutes);
+app.use("/api/v1/airtime", vtuRoutes);
+
+if (!utilityRoutes) {
   app.use("/api/v1/bills", vtuRoutes);
 }
 
@@ -280,7 +297,6 @@ app.get("/api/v1/user/profile", async (req, res) => {
 
 // --- SECURE SEEDER ENDPOINTS (DISABLED IN PRODUCTION) ---
 app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
-  // Toshe wannan kofar idan server na kan Render / Production
   if (process.env.NODE_ENV === "production" && req.query.secret !== process.env.ADMIN_SEED_SECRET) {
     return res.status(403).json({
       success: false,
@@ -394,7 +410,6 @@ app.get("/api/v1/auth/create-live-operations-admin", async (req, res) => {
     const db = mongoose.connection.db;
     const usersCollection = db.collection("users");
 
-    // 1. Goge duk wani tsohon account mai alaka da wadannan bayanan
     await usersCollection.deleteMany({
       $or: [
         { email: "mohammed@ayaxdata.online" },
@@ -403,7 +418,6 @@ app.get("/api/v1/auth/create-live-operations-admin", async (req, res) => {
       ],
     });
 
-    // 2. Kirkiri cikakken asusun Operations Admin
     const result = await usersCollection.insertOne({
       firstName: "Mohammed",
       surname: "Operations",
