@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-// 1. Dynamic Middleware Loaders (don kaucewa crash idan sunan file ya bambanta)
+// 1. Dynamic Middleware Loaders
 let authMiddleware;
 try {
   authMiddleware = require("../middleware/authMiddleware");
@@ -20,9 +20,7 @@ let verifyTransactionPin = (req, res, next) => next();
 try {
   const pinMod = require("../middleware/verifyPin");
   verifyTransactionPin = pinMod.verifyTransactionPin || pinMod;
-} catch (p) {
-  // Safe fallback idan babu verifyPin file din
-}
+} catch (p) {}
 
 // 2. Controller Functions
 const nimcController = require("../controllers/nimcController");
@@ -46,59 +44,23 @@ router.get("/prices", safe(nimcController.getNIMCPrices || nimcController.getPri
 router.get("/pricing", safe(nimcController.getNIMCPrices || nimcController.getPrices, "getNIMCPrices"));
 
 // ==========================================
-// 2. USER ROUTES (Verification & Validation Aliases)
+// 2. QUICK DIRECT LOOKUP (Babu caji / Babu PIN)
 // ==========================================
-
-// Direct Verification (Binciken NIN)
 router.post("/verify", protect, safe(nimcController.verifyNIMC || nimcController.verify, "verifyNIMC"));
 router.post("/verify-nin", protect, safe(nimcController.verifyNIMC || nimcController.verify, "verifyNIMC"));
 router.post("/nin-verify", protect, safe(nimcController.verifyNIMC || nimcController.verify, "verifyNIMC"));
-router.post("/validate", protect, safe(nimcController.verifyNIMC || nimcController.verify, "verifyNIMC"));
-router.post("/validate-nin", protect, safe(nimcController.verifyNIMC || nimcController.verify, "verifyNIMC"));
 
-// Submit Application / Verification tare da Charge & PIN
-router.post("/submit", protect, verifyTransactionPin, safe(nimcController.submitNIMCRequest, "submitNIMCRequest"));
-router.post("/submit-request", protect, verifyTransactionPin, safe(nimcController.submitNIMCRequest, "submitNIMCRequest"));
-router.post("/request-modification", protect, verifyTransactionPin, safe(nimcController.submitNIMCRequest, "submitNIMCRequest"));
-router.post("/process", protect, verifyTransactionPin, safe(nimcController.submitNIMCRequest, "submitNIMCRequest"));
-router.post("/pay", protect, verifyTransactionPin, safe(nimcController.submitNIMCRequest, "submitNIMCRequest"));
-
-// User History
-router.get("/my-requests", protect, safe(nimcController.getMyNIMCRequests, "getMyNIMCRequests"));
-router.get("/history", protect, safe(nimcController.getMyNIMCRequests, "getMyNIMCRequests"));
-
-
-// 1. Karbar /verify-and-charge da frontend ke kira
+// ==========================================
+// 3. SUBMIT VALIDATION / REQUESTS (Tare da PIN & Charge)
+// ==========================================
+// ✅ WANNAN SHINE KE KAWO KUSKUREN JIKIN HOTO:
 router.post(
-  "/verify-and-charge",
+  "/validate-request",
   protect,
   verifyTransactionPin,
   safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
 );
 
-// 2. Karbar Admin Price Update
-router.post(
-  "/admin/update-price",
-  protect,
-  authorize("admin", "superadmin"),
-  safe(nimcController.setNIMCPrice, "setNIMCPrice")
-);
-// ==========================================
-// 3. ADMIN ROUTES
-// ==========================================
-router.get("/admin/all", protect, authorize("admin", "superadmin"), safe(nimcController.getAllNIMCRequests, "getAllNIMCRequests"));
-router.get("/admin/requests", protect, authorize("admin", "superadmin"), safe(nimcController.getAllNIMCRequests, "getAllNIMCRequests"));
-router.patch("/admin/processing/:id", protect, authorize("admin", "superadmin"), safe(nimcController.updateToProcessing, "updateToProcessing"));
-router.put("/admin/processing/:id", protect, authorize("admin", "superadmin"), safe(nimcController.updateToProcessing, "updateToProcessing"));
-router.patch("/admin/approve/:id", protect, authorize("admin", "superadmin"), safe(nimcController.approveRequest, "approveRequest"));
-router.put("/admin/approve/:id", protect, authorize("admin", "superadmin"), safe(nimcController.approveRequest, "approveRequest"));
-router.patch("/admin/reject/:id", protect, authorize("admin", "superadmin"), safe(nimcController.rejectRequest, "rejectRequest"));
-router.post("/admin/set-price", protect, authorize("admin", "superadmin"), safe(nimcController.setNIMCPrice, "setNIMCPrice"));
-
-// Pricing da NINValidation.js ke kira a layi na 82: GET /nin/prices
-router.get("/prices", safe(nimcController.getNIMCPrices, "getNIMCPrices"));
-
-// Validation Submit da NINValidation.js ke kira a layi na 187: POST /nin/validate
 router.post(
   "/validate",
   protect,
@@ -106,12 +68,91 @@ router.post(
   safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
 );
 
-// Admin price update da NINValidation.js ke kira: POST /admin/nin/update-price
+router.post(
+  "/validate-nin",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+router.post(
+  "/verify-and-charge",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+router.post(
+  "/submit",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+router.post(
+  "/submit-request",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+router.post(
+  "/request-modification",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+router.post(
+  "/process",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+router.post(
+  "/pay",
+  protect,
+  verifyTransactionPin,
+  safe(nimcController.submitNIMCRequest, "submitNIMCRequest")
+);
+
+// ==========================================
+// 4. USER HISTORY
+// ==========================================
+router.get("/my-requests", protect, safe(nimcController.getMyNIMCRequests, "getMyNIMCRequests"));
+router.get("/history", protect, safe(nimcController.getMyNIMCRequests, "getMyNIMCRequests"));
+
+// ==========================================
+// 5. ADMIN CONTROLS
+// ==========================================
 router.post(
   "/update-price",
   protect,
   authorize("admin", "superadmin"),
   safe(nimcController.setNIMCPrice, "setNIMCPrice")
 );
+
+router.post(
+  "/admin/update-price",
+  protect,
+  authorize("admin", "superadmin"),
+  safe(nimcController.setNIMCPrice, "setNIMCPrice")
+);
+
+router.post(
+  "/admin/set-price",
+  protect,
+  authorize("admin", "superadmin"),
+  safe(nimcController.setNIMCPrice, "setNIMCPrice")
+);
+
+router.get("/admin/all", protect, authorize("admin", "superadmin"), safe(nimcController.getAllNIMCRequests, "getAllNIMCRequests"));
+router.get("/admin/requests", protect, authorize("admin", "superadmin"), safe(nimcController.getAllNIMCRequests, "getAllNIMCRequests"));
+router.patch("/admin/processing/:id", protect, authorize("admin", "superadmin"), safe(nimcController.updateToProcessing, "updateToProcessing"));
+router.put("/admin/processing/:id", protect, authorize("admin", "superadmin"), safe(nimcController.updateToProcessing, "updateToProcessing"));
+router.patch("/admin/approve/:id", protect, authorize("admin", "superadmin"), safe(nimcController.approveRequest, "approveRequest"));
+router.put("/admin/approve/:id", protect, authorize("admin", "superadmin"), safe(nimcController.approveRequest, "approveRequest"));
+router.patch("/admin/reject/:id", protect, authorize("admin", "superadmin"), safe(nimcController.rejectRequest, "rejectRequest"));
 
 module.exports = router;

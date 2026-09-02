@@ -380,14 +380,15 @@ if (!user) {
       });
     }
 
-    // G. Dispatch Live Processing to Ayax NIMC Gateway
-    const baseUrl = getBaseUrl();
-    let ayaxResponse;
-    const candidateEndpoints = [
-      `${baseUrl}/identity/nimc/process`,
-      `${baseUrl}/identity/nin/verify`,
-      `${baseUrl}/nimc/verify`,
-    ];
+    // A cikin submitNIMCRequest (Controllers/nimcController.js):
+const baseUrl = getBaseUrl();
+const candidateEndpoints = [
+  `${baseUrl}/identity/nin/verify`,
+  `${baseUrl}/nimc/verify`,
+  `${baseUrl}/identity/validation`,
+  `${baseUrl}/nin/validate`,
+  `${baseUrl}/vtu/nimc-validate`,
+];
 
     try {
       for (const endpoint of candidateEndpoints) {
