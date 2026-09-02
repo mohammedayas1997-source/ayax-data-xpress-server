@@ -155,10 +155,27 @@ const executeAutoRefund = async (userId, amountNum, reference, targetBvn, reason
  */
 exports.verifyBVN = async (req, res) => {
   try {
-    const { bvn, bvnNumber, pin, transactionPin, amount } = req.body;
-    const targetBvn = String(bvn || bvnNumber || "").trim();
+    const {
+      bvn,
+      bvnNumber,
+      searchValue,
+      number,
+      identityNumber,
+      pin,
+      transactionPin,
+      amount,
+    } = req.body;
+
+    // 1. Tattaro lambar ko ta wane suna frontend ya turo ta
+    const rawBvn = String(
+      bvn || bvnNumber || searchValue || identityNumber || number || ""
+    ).trim();
+
+    // 2. Cire duk wani rubutu ko space, a bar lambobi zalla
+    const targetBvn = rawBvn.replace(/\D/g, "");
+
     const finalPin = String(pin || transactionPin || "").trim();
-    const amountNum = Number(amount || 150); // Standard BVN query fee
+    const amountNum = Number(amount || 150);
     const userId = req.user?._id || req.user?.id;
 
     if (!targetBvn || targetBvn.length !== 11) {
@@ -182,6 +199,8 @@ exports.verifyBVN = async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: "User account not found." });
     }
+
+    // Ci gaba da sauran code din...
 
     // A. Verify PIN
     let isPinValid = false;
