@@ -222,7 +222,36 @@ exports.submitNIMCRequest = async (req, res) => {
     const finalNin = String(ninNumber || nin || searchValue || "").trim();
     const finalPin = String(pin || transactionPin || "").trim();
     const finalDetails = formData || details || {};
-    const userId = req.user?._id || req.user?.id;
+    // Dynamic user resolver (yana duba req.user, req.body, ko headers)
+let userId = req.user?._id || req.user?.id || req.body?.userId || req.user?.userId;
+
+// Idan babu a req.user, a duba token kai tsaye don samun ID ba tare da crash ba
+if (!userId && req.headers.authorization) {
+  try {
+    const rawToken = req.headers.authorization.split(" ")[1];
+    const jwt = require("jsonwebtoken");
+    const decoded = jwt.decode(rawToken);
+    userId = decoded?.id || decoded?._id || decoded?.userId;
+  } catch (err) {}
+}
+
+if (!userId) {
+  return res.status(401).json({
+    success: false,
+    status: "failed",
+    message: "User session expired or unauthorized. Please log in again.",
+  });
+}
+
+const user = await User.findById(userId).select("+transactionPin +pin +walletBalance +balance");
+
+if (!user) {
+  return res.status(404).json({
+    success: false,
+    status: "failed",
+    message: "User account record not found.",
+  });
+}
 
     if (!finalServiceType || (!finalNin && !trackingId && !phoneNumber) || !finalPin) {
       return res.status(400).json({
