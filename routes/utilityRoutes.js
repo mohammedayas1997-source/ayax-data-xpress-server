@@ -1,14 +1,14 @@
 const express = require("express");
 const router = express.Router();
 
-// Tabbatar hanya da sunan controller din sun daidaita:
+// Tabbatar da kiran ainihin utilityController
 const {
   verifyMeter,
   buyElectricity,
   getCablePlans,
   verifySmartCard,
   buyCableSubscription,
-} = require("../controllers/billsController"); // <-- Duba idan billsController ne ko utilityController
+} = require("../controllers/utilityController");
 
 const { protect } = require("../middleware/auth");
 const { verifyTransactionPin } = require("../middleware/verifyPin");
@@ -22,7 +22,7 @@ router.post("/pay-electricity", protect, verifyTransactionPin, buyElectricity);
 // Cable TV Routes
 router.get("/cable/plans", protect, getCablePlans);
 
-// Validation Aliases (Daidai da kiran da browser ke yi a hotunanka)
+// Validation Aliases
 router.post("/cable/verify", protect, verifySmartCard);
 router.post("/validate-cable", protect, verifySmartCard);
 
