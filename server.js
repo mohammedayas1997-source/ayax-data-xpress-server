@@ -110,10 +110,10 @@ app.use("/api/v1/auth/login", authLimiter);
 app.use("/api/v1/auth/forgot-password", authLimiter);
 app.use("/api/v1/auth/reset-password", authLimiter);
 
-// Purchase Rate Limiter (Data, Airtime, Utilities, NIN)
+// Purchase Rate Limiter (Data, Airtime, Utilities, NIN, BVN)
 const purchaseLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 15,
+  max: 25,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -127,7 +127,9 @@ app.use("/api/v1/data/buy", purchaseLimiter);
 app.use("/api/v1/bills/electricity/buy", purchaseLimiter);
 app.use("/api/v1/bills/cable/buy", purchaseLimiter);
 app.use("/api/v1/nimc/submit-request", purchaseLimiter);
+app.use("/api/v1/nimc/verify-and-charge", purchaseLimiter);
 app.use("/api/v1/bvn/verify", purchaseLimiter);
+app.use("/api/v1/bvn/verify-and-generate", purchaseLimiter);
 app.use("/api/v1/validation/submit", purchaseLimiter);
 
 // --- ROOT & HEALTH CHECK ROUTES ---
@@ -159,18 +161,6 @@ const nimcRoutes = require("./routes/nimcRoutes");
 const bvnRoutes = require("./routes/bvnRoutes");
 const superAdminRoutes = require("./routes/superAdminRoutes");
 
-// Safe Import don validationRoutes
-let validationRoutes;
-try {
-  validationRoutes = require("./routes/validationRoutes");
-} catch (e) {
-  try {
-    validationRoutes = require("./routes/ninRoutes");
-  } catch (err) {
-    validationRoutes = null;
-  }
-}
-
 const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 const dataRoutes = require("./routes/data.routes");
 const transactionRoutes = require("./routes/transaction.routes");
@@ -195,18 +185,19 @@ const User = require("./models/User");
 
 // --- ROUTES REGISTRATION ---
 app.use("/api/v1/auth", authRoutes);
-if (validationRoutes) {
-  app.use("/api/v1/validation", validationRoutes);
-  app.use("/api/v1/nin", validationRoutes);
-  app.use("/api/v1/vtu/validation", validationRoutes);
-}
-app.use("/api/v1/support", supportRoutes);
+
+// ✅ NIMC, NIN & Validation Services
 app.use("/api/v1/nimc", nimcRoutes);
-app.use("/api/v1/nin", nimcRoutes); // ✅ Don karbar GET /nin/prices da POST /nin/validate
-app.use("/api/v1/validation", nimcRoutes); // ✅ Don karbar duk wani kiran validation
-app.use("/api/v1/admin/nin", nimcRoutes); // ✅ Don karbar POST /admin/nin/update-price
+app.use("/api/v1/nin", nimcRoutes);
+app.use("/api/v1/validation", nimcRoutes);
+app.use("/api/v1/admin/nin", nimcRoutes);
 app.use("/api/v1/vtu/nimc", nimcRoutes);
+
+// ✅ BVN Services
 app.use("/api/v1/bvn", bvnRoutes);
+
+// ✅ Core Payment & Wallet Services
+app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/webhooks", webhookRoutes);
 app.use("/api/v1/payment", paymentRoutes);
 app.use("/api/v1/payments", paymentRoutes);
@@ -214,7 +205,7 @@ app.use("/api/v1/wallet", walletRoutes);
 app.use("/api/v1/transactions", transactionRoutes);
 app.use("/api/v1/virtual-account", virtualAccountRoutes);
 
-// ✅ DAIDAI: Dora utilityRoutes kafin vtuRoutes don kiran /validate-cable da /pay-cable su fara biyawa
+// Utility & Bills Routing
 if (utilityRoutes) {
   app.use("/api/v1/vtu", utilityRoutes);
   app.use("/api/v1/bills", utilityRoutes);
@@ -403,7 +394,7 @@ app.get("/api/v1/auth/create-live-support", async (req, res) => {
   }
 });
 
-// --- AUTO-SEED / RESET OPERATIONS ADMIN (mohammed@ayaxdata.online & admin@ayaxdata.online) ---
+// --- AUTO-SEED / RESET OPERATIONS ADMIN ---
 app.get("/api/v1/auth/create-live-operations-admin", async (req, res) => {
   try {
     const plainPassword = "Password123@";
