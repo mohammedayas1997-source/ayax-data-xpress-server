@@ -15,7 +15,6 @@ try {
   }
 }
 
-// Dynamic imports don kare server daga crashing idan babu models
 let Activity;
 try {
   Activity = require("../models/Activity");
@@ -111,7 +110,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
       reference: refundRef,
       type: "refund",
       category: "WALLET",
-      service: `Refund: ${finalNetwork.toUpperCase()} Data (${cleanPlanCode})`,
+      service: `Refund: ${String(finalNetwork || "DATA").toUpperCase()} (${cleanPlanCode || ""})`,
       amount: amountNum,
       oldBalance: prevBal,
       newBalance: currentBal,
@@ -119,7 +118,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
       recipient: targetPhone,
       phoneNumber: targetPhone,
       status: "success",
-      description: `Auto-Refund of ₦${amountNum.toLocaleString()} for failed ${finalNetwork.toUpperCase()} Data (${reason})`,
+      description: `Auto-Refund of ₦${amountNum.toLocaleString()} for failed data delivery (${reason})`,
       details: {
         originalReference: reference,
         planCode: cleanPlanCode,
@@ -134,6 +133,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
       "REFUND"
     );
 
+    console.log(`💸 [AUTO-REFUND COMPLETE] ₦${amountNum} credited back to User ${userId} (Ref: ${reference})`);
     return currentBal;
   } catch (err) {
     console.error("Data Auto-Refund Execution Error:", err.message);
@@ -255,7 +255,6 @@ exports.buyData = async (req, res) => {
       details: `${finalNetwork} (${cleanPlanCode}) Data Bundle for ${targetPhone}`,
     });
 
-    // Haɗa ainihin Gateway Base URL (tare da fallback zuwa www.ayaxapis.com)
     const rawBaseUrl = process.env.AYAX_API_BASE_URL || "https://www.ayaxapis.com";
     const cleanBaseUrl = rawBaseUrl.replace(/\/+$/, "");
     const targetUrl = `${cleanBaseUrl}/api/v1/data/purchase`;
@@ -292,6 +291,7 @@ exports.buyData = async (req, res) => {
         apiError.message ||
         "Gateway connection error";
 
+      // Mayar da kudi nan take idan kira ya fadi
       const refundBalance = await executeAutoRefund(
         userId,
         amountNum,
@@ -306,63 +306,17 @@ exports.buyData = async (req, res) => {
         success: false,
         status: "failed",
         refunded: true,
-        message: `Provider Error (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
+        message: `Delivery Error (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
         newBalance: refundBalance,
       });
     }
 
     const resData = response.data;
-    const isSuccessful =
-      resData &&
-      (resData.success === true ||
-        resData.status === "success" ||
-        resData.status === "SUCCESSFUL" ||
-        resData.status === 200 ||
-        resData.code === "TRANSACTION_QUEUED" ||
-        resData.code === 200);
+    const providerStatus = String(resData.status || "").toUpperCase();
 
-    if (isSuccessful) {
-      const providerData = resData.data || resData;
-
-      await Transaction.findOneAndUpdate(
-        { reference },
-        {
-          status: "success",
-          reference: providerData.reference || providerData.orderId || reference,
-          details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone}`,
-        }
-      );
-
-      if (Activity) {
-        await Activity.create({
-          user: userId,
-          staffId: userId,
-          action: "BUY_DATA",
-          details: `Purchased ${finalNetwork} (${cleanPlanCode}) data for ${targetPhone}`,
-          targetUser: userId,
-        }).catch((err) => console.warn("Activity log skipped:", err.message));
-      }
-
-      await sendNotification(
-        userId,
-        "Data Bundle Successful 🎉",
-        `Your ${finalNetwork} data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
-        "DATA"
-      );
-
-      return res.status(200).json({
-        success: true,
-        status: "success",
-        message: "Data Purchase Dispatched Successfully",
-        orderId: providerData.reference || reference,
-        network: finalNetwork,
-        phone: targetPhone,
-        amount: amountNum,
-        newBalance: newBal,
-      });
-    } else {
-      const failReason = resData.message || resData.error || "Provider declined data transaction";
-
+    // 1. Idan ya fadi kai tsaye daga Gateway
+    if (resData.success === false || providerStatus === "FAILED") {
+      const failReason = resData.message || resData.error || "Gateway delivery failed";
       const refundBalance = await executeAutoRefund(
         userId,
         amountNum,
@@ -377,10 +331,59 @@ exports.buyData = async (req, res) => {
         success: false,
         status: "failed",
         refunded: true,
-        message: `Purchase failed: ${failReason}. Your wallet was refunded automatically.`,
+        message: `Delivery failed: ${failReason}. Your wallet was refunded automatically.`,
         newBalance: refundBalance,
       });
     }
+
+    // 2. Idan an kammala nan take (kamar Clubkonnect / API na kai tsaye)
+    if (providerStatus === "SUCCESSFUL" || providerStatus === "SUCCESS") {
+      await Transaction.findOneAndUpdate(
+        { reference },
+        {
+          status: "success",
+          details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone}`,
+        }
+      );
+
+      await sendNotification(
+        userId,
+        "Data Bundle Delivered 🎉",
+        `Your ${finalNetwork} data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
+        "DATA"
+      );
+
+      return res.status(200).json({
+        success: true,
+        status: "success",
+        message: "Data Purchase Successful",
+        orderId: reference,
+        network: finalNetwork,
+        phone: targetPhone,
+        amount: amountNum,
+        newBalance: newBal,
+      });
+    }
+
+    // 3. Idan yana kan layi ta GSM Gateway (PROCESSING)
+    await Transaction.findOneAndUpdate(
+      { reference },
+      {
+        status: "processing",
+        details: `Processing via GSM Gateway: ${finalNetwork} Data to ${targetPhone}`,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      status: "processing",
+      message: "Order received and queued for delivery via GSM Gateway",
+      orderId: reference,
+      network: finalNetwork,
+      phone: targetPhone,
+      amount: amountNum,
+      newBalance: newBal,
+    });
   } catch (error) {
     console.error("Buy Data Controller Error:", error);
     return res.status(500).json({
@@ -388,6 +391,52 @@ exports.buyData = async (req, res) => {
       message: "Data processing error occurred.",
       error: error.message,
     });
+  }
+};
+
+/**
+ * @desc    Kofa na musamman don karbar sakamakon Gateway (Webhook / Callback)
+ * @route   POST /api/v1/vtu/gateway-callback
+ * @access  Public (Secret Protected)
+ */
+exports.handleGatewayCallback = async (req, res) => {
+  try {
+    const { reference, status, message } = req.body;
+    const normalizedStatus = String(status || "").toUpperCase();
+
+    const txn = await Transaction.findOne({ reference });
+    if (!txn || txn.status === "refunded" || txn.status === "success") {
+      return res.status(200).json({ success: true, message: "Ignored or already processed" });
+    }
+
+    if (["SUCCESS", "SUCCESSFUL", "COMPLETED"].includes(normalizedStatus)) {
+      txn.status = "success";
+      txn.details = `Delivered successfully: ${message || ""}`;
+      await txn.save();
+
+      await sendNotification(
+        txn.user,
+        "Data Bundle Delivered 🎉",
+        `Your data bundle for ${txn.recipient || txn.phoneNumber} has been confirmed delivered.`,
+        "DATA"
+      );
+    } else if (["FAILED", "FAILURE", "CANCELLED", "ERROR"].includes(normalizedStatus)) {
+      // Mayar da kudi kai tsaye
+      await executeAutoRefund(
+        txn.user,
+        Number(txn.amount),
+        txn.reference,
+        "DATA",
+        "",
+        txn.recipient || txn.phoneNumber,
+        message || "Gateway delivery failure"
+      );
+    }
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("Gateway callback error:", err.message);
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
