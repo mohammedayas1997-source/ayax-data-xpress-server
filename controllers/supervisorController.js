@@ -26,6 +26,24 @@ try {
   Transaction = null;
 }
 
+
+const findUserByIdentifier = async (identifier) => {
+  if (!identifier) return null;
+  const clean = String(identifier).trim();
+
+  const queryConditions = [
+    { referralCode: clean.toUpperCase() },
+    { referralId: clean.toUpperCase() },
+    { phone: clean },
+    { email: clean.toLowerCase() },
+  ];
+
+  if (mongoose.Types.ObjectId.isValid(clean)) {
+    queryConditions.unshift({ _id: clean });
+  }
+
+  return await User.findOne({ $or: queryConditions });
+};
 /**
  * @desc    Get Supervisor Dashboard Real-Time Telemetry & Agents
  * @route   GET /api/v1/supervisor/dashboard
@@ -490,42 +508,89 @@ exports.getAgentSalesSummary = async (req, res) => {
 };
 
 
-// Reassign all agents from one supervisor to another (e.g., suspension/termination)
+// 1. Reassign all agents from one supervisor to another (Bulk Transfer via Ref Code or ID)
 exports.transferAllAgentsToNewSupervisor = async (req, res) => {
   try {
-    const { oldSupervisorId, newSupervisorId } = req.body;
+    const {
+      oldSupervisorId,
+      oldSupervisorRef,
+      newSupervisorId,
+      newSupervisorRef,
+    } = req.body;
 
-    if (!oldSupervisorId || !newSupervisorId) {
+    const sourceInput = String(oldSupervisorRef || oldSupervisorId || "").trim();
+    const destInput = String(newSupervisorRef || newSupervisorId || "").trim();
+
+    if (!sourceInput || !destInput) {
       return res.status(400).json({
         success: false,
-        message: "Both old and new supervisor IDs are required.",
+        message: "Both source and destination supervisor Ref codes (or IDs) are required.",
       });
     }
 
-    if (String(oldSupervisorId) === String(newSupervisorId)) {
+    if (sourceInput.toUpperCase() === destInput.toUpperCase()) {
       return res.status(400).json({
         success: false,
         message: "Source and destination supervisors cannot be the same.",
       });
     }
 
-    const newSupervisor = await User.findById(newSupervisorId);
+    // Nemo tsohon da sabon supervisor ta hanyar Ref Code, Phone, ko _id
+    const [oldSupervisor, newSupervisor] = await Promise.all([
+      findUserByIdentifier(sourceInput),
+      findUserByIdentifier(destInput),
+    ]);
+
     if (!newSupervisor) {
       return res.status(404).json({
         success: false,
-        message: "Destination supervisor not found.",
+        message: `Destination supervisor [${destInput}] not found.`,
       });
     }
 
+    // Tattara dukkan hanyoyin da za a gano wakilan tsohon mai kula
+    const oldSupId = oldSupervisor ? oldSupervisor._id : (mongoose.Types.ObjectId.isValid(sourceInput) ? sourceInput : null);
+    const oldSupRef = oldSupervisor?.referralCode || sourceInput.toUpperCase();
+    const oldSupPhone = oldSupervisor?.phone;
+
+    const matchConditions = [];
+    if (oldSupId) {
+      matchConditions.push({ supervisorId: oldSupId });
+      matchConditions.push({ assignedSupervisor: oldSupId });
+    }
+    if (oldSupRef) {
+      matchConditions.push({ supervisorRef: oldSupRef });
+      matchConditions.push({ referredBy: oldSupRef });
+      matchConditions.push({ supervisorId: oldSupRef });
+    }
+    if (oldSupPhone) {
+      matchConditions.push({ supervisorPhone: oldSupPhone });
+    }
+
+    const newDestRef = newSupervisor.referralCode || `AYX-${(newSupervisor.lga || "LGA").toUpperCase()}-${String(newSupervisor.phone || "0000").slice(-4)}`;
+
     const updateResult = await User.updateMany(
-      { supervisorId: oldSupervisorId },
-      { $set: { supervisorId: newSupervisorId } }
+      { $or: matchConditions },
+      {
+        $set: {
+          supervisorId: newSupervisor._id,
+          assignedSupervisor: newSupervisor._id,
+          supervisorRef: newDestRef,
+          assignedSupervisorName: newSupervisor.fullName || newSupervisor.name || "Supervisor",
+          referredBy: newDestRef,
+        },
+      }
     );
 
     return res.status(200).json({
       success: true,
-      message: `Successfully transferred ${updateResult.modifiedCount} agents to ${newSupervisor.fullName || newSupervisor.name || "new supervisor"}.`,
+      message: `Successfully transferred ${updateResult.modifiedCount} agents to ${newSupervisor.fullName || newSupervisor.name} (${newDestRef}).`,
       transferredCount: updateResult.modifiedCount,
+      destinationSupervisor: {
+        id: newSupervisor._id,
+        name: newSupervisor.fullName || newSupervisor.name,
+        ref: newDestRef,
+      },
     });
   } catch (error) {
     console.error("Bulk agent transfer error:", error.message);
@@ -536,43 +601,64 @@ exports.transferAllAgentsToNewSupervisor = async (req, res) => {
   }
 };
 
-// Reassign a single agent to a new supervisor
+// 2. Reassign a single agent to a new supervisor (via Ref Code, Phone, or ID)
 exports.transferSingleAgent = async (req, res) => {
   try {
-    const { agentId, newSupervisorId } = req.body;
+    const {
+      agentId,
+      agentRef,
+      newSupervisorId,
+      newSupervisorRef,
+    } = req.body;
 
-    if (!agentId || !newSupervisorId) {
+    const agentInput = String(agentRef || agentId || "").trim();
+    const destInput = String(newSupervisorRef || newSupervisorId || "").trim();
+
+    if (!agentInput || !destInput) {
       return res.status(400).json({
         success: false,
-        message: "Agent ID and new supervisor ID are required.",
+        message: "Agent identifier and destination supervisor Ref code are required.",
       });
     }
 
-    const newSupervisor = await User.findById(newSupervisorId);
+    const [targetAgent, newSupervisor] = await Promise.all([
+      findUserByIdentifier(agentInput),
+      findUserByIdentifier(destInput),
+    ]);
+
+    if (!targetAgent) {
+      return res.status(404).json({
+        success: false,
+        message: `Agent [${agentInput}] not found.`,
+      });
+    }
+
     if (!newSupervisor) {
       return res.status(404).json({
         success: false,
-        message: "Destination supervisor not found.",
+        message: `Destination supervisor [${destInput}] not found.`,
       });
     }
 
-    const updatedAgent = await User.findByIdAndUpdate(
-      agentId,
-      { $set: { supervisorId: newSupervisorId } },
-      { new: true }
-    );
+    const newDestRef = newSupervisor.referralCode || `AYX-${(newSupervisor.lga || "LGA").toUpperCase()}-${String(newSupervisor.phone || "0000").slice(-4)}`;
 
-    if (!updatedAgent) {
-      return res.status(404).json({
-        success: false,
-        message: "Agent not found.",
-      });
-    }
+    targetAgent.supervisorId = newSupervisor._id;
+    targetAgent.assignedSupervisor = newSupervisor._id;
+    targetAgent.supervisorRef = newDestRef;
+    targetAgent.assignedSupervisorName = newSupervisor.fullName || newSupervisor.name || "Supervisor";
+    targetAgent.referredBy = newDestRef;
+
+    await targetAgent.save();
 
     return res.status(200).json({
       success: true,
-      message: `Successfully assigned agent [${updatedAgent.fullName || updatedAgent.name}] to new supervisor.`,
-      agent: updatedAgent,
+      message: `Successfully reassigned agent [${targetAgent.fullName || targetAgent.name}] to ${newSupervisor.fullName || newSupervisor.name} (${newDestRef}).`,
+      agent: {
+        id: targetAgent._id,
+        name: targetAgent.fullName || targetAgent.name,
+        phone: targetAgent.phone,
+        newSupervisorRef: newDestRef,
+      },
     });
   } catch (error) {
     console.error("Single agent transfer error:", error.message);
