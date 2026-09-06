@@ -96,14 +96,12 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // PIN Verification
+    // Tabbatar da PIN
     const finalPin = String(pin || transactionPin || "").trim();
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
     if (storedPin) {
-      try {
-        isPinValid = await bcrypt.compare(finalPin, storedPin);
-      } catch (_) {}
+      try { isPinValid = await bcrypt.compare(finalPin, storedPin); } catch (_) {}
       if (!isPinValid && storedPin === finalPin) isPinValid = true;
     }
     if (!isPinValid && finalPin === "0000") isPinValid = true;
@@ -116,7 +114,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // Wallet Balance Check
+    // Tabbatar da Kudin Wallet
     const cost = Number(amount || 150);
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     if (currentBal < cost) {
@@ -127,63 +125,53 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    const reference = `AYAX-BVN-${Date.now()}`;
-    const baseUrl = getBaseUrl();
+    // Saita asalin Endpoints na Abjiktech bisa tsarin Documentation
     const isPremium = serviceType === "bvn_premium" || serviceId === "bvn_premium";
     const slipTypeName = isPremium ? "Premium Slip" : "Standard Slip";
 
-    const targetEndpoint = `${baseUrl}/identity/bvn/verify`;
+    const targetEndpoint = isPremium
+      ? "https://abjiktech.com.ng/api/verification/bvn_premium_slip.php"
+      : "https://abjiktech.com.ng/api/verification/bvn_full_details_slip.php";
+
+    const activeApiKey = String(
+      process.env.ABJIKTECH_API_KEY ||
+      process.env.AYAX_API_KEY ||
+      process.env.MARKETPLACE_API_KEY ||
+      ""
+    ).trim();
+
     const requestPayload = {
+      api_key: activeApiKey,
       bvn: cleanBvn,
-      bvnNumber: cleanBvn,
-      searchValue: cleanBvn,
-      slipType: slipTypeName,
-      reference,
     };
 
-    // 1. Kiran Marketplace
-    let mData = null;
+    // Kiran Abjiktech
+    let abjikRes;
     try {
-      const marketplaceRes = await axios.post(targetEndpoint, requestPayload, {
-        headers: getHeaders(),
+      abjikRes = await axios.post(targetEndpoint, requestPayload, {
+        headers: { "Content-Type": "application/json" },
         timeout: 65000,
         validateStatus: () => true,
       });
-      mData = marketplaceRes.data;
     } catch (apiErr) {
-      mData = apiErr.response?.data || null;
-    }
-
-    if (!mData) {
       return res.status(422).json({
         success: false,
         status: "failed",
-        message: "Unable to connect to Marketplace gateway. No funds were deducted.",
+        message: `Gateway Error: ${apiErr.message || "Connection failed"}`,
       });
     }
 
-    // 2. Ciro PDF link
-    let finalSlipUrl =
-      mData?.slipUrl ||
-      mData?.pdfUrl ||
-      mData?.downloadUrl ||
-      mData?.url ||
-      mData?.data?.slipUrl ||
-      mData?.data?.pdfUrl ||
-      mData?.data?.downloadUrl ||
-      mData?.data?.url ||
-      mData?.data?.details?.slipUrl ||
-      mData?.details?.slipUrl ||
-      null;
+    const mData = abjikRes.data;
 
-    const messageText = String(mData?.message || "").toLowerCase();
+    // Duba idan aiki ya yi nasara (status == 'success' ko response_code == '00')
     const isSuccess =
-      mData?.success === true ||
       mData?.status === "success" ||
-      messageText.includes("pdf generated") ||
-      messageText.includes("successful");
+      mData?.response_code === "00" ||
+      String(mData?.message || "").toLowerCase().includes("successfully");
 
-    if (!isSuccess && !finalSlipUrl) {
+    const base64Data = mData?.pdf_base64 || mData?.data?.pdf_base64 || null;
+
+    if (!isSuccess || !base64Data) {
       return res.status(422).json({
         success: false,
         status: "failed",
@@ -191,27 +179,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    if (!finalSlipUrl) {
-      finalSlipUrl = `https://abjiktech.com.ng/uploads/slips/standard_bvn_${cleanBvn}.pdf`;
-    }
-
-    if (finalSlipUrl && !String(finalSlipUrl).startsWith("http")) {
-      finalSlipUrl = `https://abjiktech.com.ng/${String(finalSlipUrl).replace(/^\/+/, "")}`;
-    }
-
-    // Dauko ainihin PDF din ta Server a maida shi Base64 don a sauke shi kai tsaye
-    let base64Pdf = null;
-    try {
-      const pdfBufferRes = await axios.get(finalSlipUrl, {
-        responseType: "arraybuffer",
-        timeout: 25000,
-      });
-      base64Pdf = Buffer.from(pdfBufferRes.data, "binary").toString("base64");
-    } catch (streamErr) {
-      console.warn("Could not convert slip to base64, falling back to link:", streamErr.message);
-    }
-
-    // 3. Debi kudi a wallet tunda an tabbatar da takardar
+    // Debi kudi a wallet din Data Express tunda Abjiktech ya dawo da PDF
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
@@ -220,6 +188,7 @@ exports.verifyBVN = async (req, res) => {
     const newBal = Number(debitedUser?.walletBalance ?? debitedUser?.balance ?? 0);
     const oldBal = Number((newBal + cost).toFixed(2));
 
+    const reference = `AYAX-BVN-${Date.now()}`;
     await Transaction.create({
       user: userId,
       userId,
@@ -232,31 +201,26 @@ exports.verifyBVN = async (req, res) => {
       oldBalance: oldBal,
       newBalance: newBal,
       recipient: cleanBvn,
-      slipUrl: finalSlipUrl,
       status: "success",
-      details: `BVN slip successfully retrieved for ${cleanBvn}`,
+      details: `BVN slip generated for ${cleanBvn}`,
     });
 
-    // 4. Mayar da amsa tare da pdfBase64
     return res.status(200).json({
       success: true,
       status: "success",
       message: "BVN verification successful.",
       bvn: cleanBvn,
       slipType: slipTypeName,
-      slipUrl: finalSlipUrl,
-      pdfUrl: finalSlipUrl,
-      downloadUrl: finalSlipUrl,
-      url: finalSlipUrl,
-      pdfBase64: base64Pdf,
+      userData: mData.user_data || null,
+      pdf_base64: base64Data, // Tura asalin binary PDF zuwa ga App
       newBalance: newBal,
     });
   } catch (err) {
-    console.error("Data Express BVN Error:", err.message);
+    console.error("BVN Error:", err.message);
     return res.status(500).json({
       success: false,
       status: "failed",
-      message: "An internal server error occurred. No funds were deducted.",
+      message: "Internal server error. No funds were deducted.",
     });
   }
 };
