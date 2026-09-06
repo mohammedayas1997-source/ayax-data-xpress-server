@@ -127,7 +127,6 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // 1. Definition na Endpoint da Payload a saman kiran Axios
     const reference = `AYAX-BVN-${Date.now()}`;
     const baseUrl = getBaseUrl();
     const isPremium = serviceType === "bvn_premium" || serviceId === "bvn_premium";
@@ -142,26 +141,28 @@ exports.verifyBVN = async (req, res) => {
       reference,
     };
 
-    // 2. Kira Marketplace
-    let marketplaceRes;
+    // 1. Kiran Marketplace ba tare da Axios ya jefar da amsar a matsayin Gateway Error ba
+    let mData = null;
     try {
-      marketplaceRes = await axios.post(targetEndpoint, requestPayload, {
+      const marketplaceRes = await axios.post(targetEndpoint, requestPayload, {
         headers: getHeaders(),
         timeout: 65000,
-        validateStatus: (status) => status < 500,
+        validateStatus: () => true, // Kar ya jefa error koda status code 502 ne
       });
+      mData = marketplaceRes.data;
     } catch (apiErr) {
-      const errMsg = apiErr.response?.data?.message || apiErr.message || "Marketplace connection failed.";
+      mData = apiErr.response?.data || null;
+    }
+
+    if (!mData) {
       return res.status(422).json({
         success: false,
         status: "failed",
-        message: `Gateway Error: ${errMsg}`,
+        message: "Unable to connect to Marketplace gateway. No funds were deducted.",
       });
     }
 
-    const mData = marketplaceRes.data;
-
-    // 3. Ciro link na PDF daga Marketplace response
+    // 2. Ciro PDF link daga kowace kusurwa ta amsar
     let finalSlipUrl =
       mData?.slipUrl ||
       mData?.pdfUrl ||
@@ -175,13 +176,14 @@ exports.verifyBVN = async (req, res) => {
       mData?.details?.slipUrl ||
       null;
 
-    const isSuccessMessage =
-      String(mData?.message || "").toLowerCase().includes("pdf generated") ||
-      String(mData?.message || "").toLowerCase().includes("successful") ||
+    const messageText = String(mData?.message || "").toLowerCase();
+    const isSuccess =
       mData?.success === true ||
-      mData?.status === "success";
+      mData?.status === "success" ||
+      messageText.includes("pdf generated") ||
+      messageText.includes("successful");
 
-    if (!isSuccessMessage && !finalSlipUrl) {
+    if (!isSuccess && !finalSlipUrl) {
       return res.status(422).json({
         success: false,
         status: "failed",
@@ -189,7 +191,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // Fallback URL idan Marketplace ya bayyana nasara
+    // Idan an tabbatar da nasarar PDF amma link din ya makale
     if (!finalSlipUrl) {
       finalSlipUrl = `https://abjiktech.com.ng/uploads/slips/standard_bvn_${cleanBvn}.pdf`;
     }
@@ -198,7 +200,7 @@ exports.verifyBVN = async (req, res) => {
       finalSlipUrl = `https://abjiktech.com.ng/${String(finalSlipUrl).replace(/^\/+/, "")}`;
     }
 
-    // 4. Cire Kudi a Wallet tunda an tabbatar da takarda
+    // 3. Debi kudi a wallet tunda PDF ya kammala reras
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
