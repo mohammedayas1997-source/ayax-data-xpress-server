@@ -312,11 +312,116 @@ exports.buyData = async (req, res) => {
     }
 
     const resData = response.data;
-    const providerStatus = String(resData.status || "").toUpperCase();
+    const providerStatus = String(resData?.status || "").toUpperCase();
+    const isDirectSuccess =
+      resData &&
+      (resData.success === true ||
+        providerStatus === "SUCCESSFUL" ||
+        providerStatus === "SUCCESS" ||
+        resData.status === 200 ||
+        resData.code === 200) &&
+      providerStatus !== "PROCESSING" &&
+      resData.code !== "TRANSACTION_QUEUED";
 
-    // 1. Idan ya fadi kai tsaye daga Gateway
-    if (resData.success === false || providerStatus === "FAILED") {
-      const failReason = resData.message || resData.error || "Gateway delivery failed";
+    // 1. IDAN YA YI NASARA NAN TAKE (Misali Clubkonnect ko USSD Direct)
+    if (isDirectSuccess) {
+      const providerData = resData.data || resData;
+
+      await Transaction.findOneAndUpdate(
+        { reference },
+        {
+          status: "success",
+          reference: providerData.reference || providerData.orderId || reference,
+          details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone}`,
+        }
+      );
+
+      await sendNotification(
+        userId,
+        "Data Bundle Successful 🎉",
+        `Your ${finalNetwork} data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
+        "DATA"
+      );
+
+      return res.status(200).json({
+        success: true,
+        status: "success",
+        message: "Data Purchase Successful!",
+        orderId: providerData.reference || reference,
+        network: finalNetwork,
+        phone: targetPhone,
+        amount: amountNum,
+        newBalance: newBal,
+      });
+    }
+
+    // 2. IDAN YANA GSM QUEUE / PROCESSING: DAKATA A TABBATAR KAFIN A BAR SHI
+    if (providerStatus === "PROCESSING" || resData.code === "TRANSACTION_QUEUED" || resData.route === "GSM_GATEWAY") {
+      let isVerified = false;
+      let finalFailureReason = "Delivery timed out on GSM Gateway";
+
+      // Jira har na tsawon dakika 12 (sau 4 a kowane dakika 3) don tabbatar da an tura
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        try {
+          const checkRes = await axios.get(
+            `${cleanBaseUrl}/api/v1/data/status/${reference}`,
+            {
+              headers: {
+                "x-api-key": activeApiKey,
+                Authorization: `Bearer ${activeApiKey}`,
+              },
+              timeout: 5000,
+            }
+          );
+
+          const currentStatus = String(checkRes.data?.status || checkRes.data?.data?.status || "").toUpperCase();
+
+          if (currentStatus === "SUCCESSFUL" || currentStatus === "SUCCESS") {
+            isVerified = true;
+            break;
+          }
+
+          if (currentStatus === "FAILED" || currentStatus === "REFUNDED") {
+            finalFailureReason = checkRes.data?.message || "Delivery rejected by network";
+            break;
+          }
+        } catch (pollErr) {
+          // Ci gaba da dubawa
+        }
+      }
+
+      // Idan an tabbatar da nasara a wayar:
+      if (isVerified) {
+        await Transaction.findOneAndUpdate(
+          { reference },
+          {
+            status: "success",
+            details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone}`,
+          }
+        );
+
+        await sendNotification(
+          userId,
+          "Data Bundle Successful 🎉",
+          `Your ${finalNetwork} data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
+          "DATA"
+        );
+
+        return res.status(200).json({
+          success: true,
+          status: "success",
+          message: "Data Purchase Successful!",
+          orderId: reference,
+          network: finalNetwork,
+          phone: targetPhone,
+          amount: amountNum,
+          newBalance: newBal,
+        });
+      }
+
+      // IDAN BAI TABBATA BA KO YA FAƊI: YI AUTO-REFUND NAN TAKE
       const refundBalance = await executeAutoRefund(
         userId,
         amountNum,
@@ -324,17 +429,37 @@ exports.buyData = async (req, res) => {
         finalNetwork,
         cleanPlanCode,
         targetPhone,
-        failReason
+        finalFailureReason
       );
 
       return res.status(422).json({
         success: false,
         status: "failed",
         refunded: true,
-        message: `Delivery failed: ${failReason}. Your wallet was refunded automatically.`,
+        message: `Delivery failed: ${finalFailureReason}. ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
         newBalance: refundBalance,
       });
     }
+
+    // 3. DUK WANI KUSKURE NA DABAN: AUTO-REFUND
+    const failReason = resData.message || resData.error || "Provider declined data transaction";
+    const refundBalance = await executeAutoRefund(
+      userId,
+      amountNum,
+      reference,
+      finalNetwork,
+      cleanPlanCode,
+      targetPhone,
+      failReason
+    );
+
+    return res.status(422).json({
+      success: false,
+      status: "failed",
+      refunded: true,
+      message: `Purchase failed: ${failReason}. Your wallet was refunded automatically.`,
+      newBalance: refundBalance,
+    });
 
     // 2. Idan an kammala nan take (kamar Clubkonnect / API na kai tsaye)
     if (providerStatus === "SUCCESSFUL" || providerStatus === "SUCCESS") {

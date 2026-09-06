@@ -83,7 +83,7 @@ const sendNotification = async (userId, title, message, category = "UTILITIES") 
   }
 };
 
-// Automated Auto-Refund Processor
+// Automated Auto-Refund Processor (Yana mayar da ainihin kudi tare da Service Fee)
 const executeAutoRefund = async ({
   userId,
   amountNum,
@@ -229,6 +229,7 @@ exports.verifyMeter = async (req, res) => {
         meterNumber: finalMeterNo,
         disco: finalDisco,
         meterType: finalMeterType,
+        serviceFee: 50,
       });
     }
 
@@ -250,7 +251,7 @@ exports.verifyMeter = async (req, res) => {
 };
 
 /**
- * @desc    Purchase Electricity Token
+ * @desc    Purchase Electricity Token (₦50 Service Fee Applied)
  * @route   POST /api/v1/bills/electricity/buy
  */
 exports.buyElectricity = async (req, res) => {
@@ -274,10 +275,14 @@ exports.buyElectricity = async (req, res) => {
     const finalMeterType = String(meterType || "prepaid").toLowerCase().trim();
     const finalPhone = String(phone || phoneNo || phoneNumber || "").trim();
     const finalPin = String(pin || transactionPin || "").trim();
-    const amountNum = Number(amount);
+    const tokenAmount = Number(amount);
     const userId = req.user?._id || req.user?.id;
 
-    if (!finalDisco || !finalMeterNo || !amountNum || amountNum <= 0 || !finalPhone) {
+    // Saita Service Fee na Naira 50
+    const SERVICE_FEE = 50;
+    const totalAmountToDebit = Number((tokenAmount + SERVICE_FEE).toFixed(2));
+
+    if (!finalDisco || !finalMeterNo || !tokenAmount || tokenAmount <= 0 || !finalPhone) {
       return res.status(400).json({
         success: false,
         status: "failed",
@@ -327,27 +332,28 @@ exports.buyElectricity = async (req, res) => {
     }
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
-    if (currentBal < amountNum) {
+    if (currentBal < totalAmountToDebit) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: `Insufficient wallet balance. Required: ₦${amountNum.toLocaleString()}, Available: ₦${currentBal.toLocaleString()}`,
+        message: `Insufficient wallet balance. Required: ₦${totalAmountToDebit.toLocaleString()} (Token: ₦${tokenAmount.toLocaleString()} + ₦${SERVICE_FEE} Fee), Available: ₦${currentBal.toLocaleString()}`,
       });
     }
 
+    // Cire duka jimillar kudin daga Wallet
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       {
         $inc: {
-          walletBalance: -amountNum,
-          balance: -amountNum,
+          walletBalance: -totalAmountToDebit,
+          balance: -totalAmountToDebit,
         },
       },
       { new: true }
     );
 
     const newBal = Number(debitedUser.walletBalance ?? debitedUser.balance ?? 0);
-    const oldBal = Number((newBal + amountNum).toFixed(2));
+    const oldBal = Number((newBal + totalAmountToDebit).toFixed(2));
 
     const reference = `AYAX-ELEC-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     const transactionId = `TXN-${Date.now()}`;
@@ -360,7 +366,7 @@ exports.buyElectricity = async (req, res) => {
       type: "electricity",
       category: "UTILITIES",
       service: `${finalDisco.toUpperCase()} Electricity Token`,
-      amount: amountNum,
+      amount: totalAmountToDebit,
       oldBalance: oldBal,
       newBalance: newBal,
       previousBalance: oldBal,
@@ -369,19 +375,20 @@ exports.buyElectricity = async (req, res) => {
       meterNumber: finalMeterNo,
       provider: finalDisco.toUpperCase(),
       status: "pending",
-      details: `Electricity payment for ${finalMeterNo} (${finalDisco.toUpperCase()})`,
+      details: `${finalDisco.toUpperCase()} Meter ${finalMeterNo} (Token: ₦${tokenAmount} + Fee: ₦${SERVICE_FEE})`,
     });
 
     const baseUrl = getBaseUrl();
     let response;
     try {
+      // Tura ainihin tokenAmount kadai zuwa Provider API
       response = await axios.post(
         `${baseUrl}/bills/electricity/buy`,
         {
           disco: finalDisco,
           meterNo: finalMeterNo,
           meterType: finalMeterType,
-          amount: amountNum,
+          amount: tokenAmount,
           phone: finalPhone,
           reference,
           ref_id: reference,
@@ -398,7 +405,7 @@ exports.buyElectricity = async (req, res) => {
 
       const refundBal = await executeAutoRefund({
         userId,
-        amountNum,
+        amountNum: totalAmountToDebit,
         reference,
         serviceName: `${finalDisco.toUpperCase()} Electricity`,
         recipientIdentifier: finalMeterNo,
@@ -411,7 +418,7 @@ exports.buyElectricity = async (req, res) => {
         success: false,
         status: "failed",
         refunded: true,
-        message: `Failed to generate token (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded to your wallet instantly.`,
+        message: `Failed to generate token (${errMsg}). ₦${totalAmountToDebit.toLocaleString()} has been refunded to your wallet instantly.`,
         newBalance: refundBal,
       });
     }
@@ -444,7 +451,7 @@ exports.buyElectricity = async (req, res) => {
           units: unitsValue,
           apiReference: providerData.orderid || providerData.reference || reference,
           apiResponse: providerData,
-          details: `Success: Token (${tokenValue}) for Meter ${finalMeterNo}`,
+          details: `Success: Token (${tokenValue}) for Meter ${finalMeterNo} (Charged: ₦${totalAmountToDebit})`,
         }
       );
 
@@ -454,7 +461,7 @@ exports.buyElectricity = async (req, res) => {
           staffId: userId,
           action: "ELECTRICITY_PURCHASED",
           category: "VTU",
-          details: `Purchased electricity worth ₦${amountNum} for meter ${finalMeterNo} - Token: ${tokenValue}`,
+          details: `Purchased electricity token worth ₦${tokenAmount} (Fee: ₦${SERVICE_FEE}) for meter ${finalMeterNo} - Token: ${tokenValue}`,
           targetUser: userId,
         }).catch(() => {});
       }
@@ -462,7 +469,7 @@ exports.buyElectricity = async (req, res) => {
       await sendNotification(
         userId,
         "Electricity Token Generated 🎉",
-        `Your electricity purchase of ₦${amountNum.toLocaleString()} for meter ${finalMeterNo} was successful. Token: ${tokenValue} | Units: ${unitsValue}`,
+        `Your electricity purchase of ₦${tokenAmount.toLocaleString()} for meter ${finalMeterNo} was successful. Token: ${tokenValue} | Units: ${unitsValue}`,
         "UTILITIES"
       );
 
@@ -474,6 +481,9 @@ exports.buyElectricity = async (req, res) => {
         reference,
         token: tokenValue,
         units: unitsValue,
+        tokenAmount,
+        serviceFee: SERVICE_FEE,
+        totalCharged: totalAmountToDebit,
         newBalance: newBal,
       });
     } else {
@@ -481,7 +491,7 @@ exports.buyElectricity = async (req, res) => {
 
       const refundBal = await executeAutoRefund({
         userId,
-        amountNum,
+        amountNum: totalAmountToDebit,
         reference,
         serviceName: `${finalDisco.toUpperCase()} Electricity`,
         recipientIdentifier: finalMeterNo,
@@ -538,6 +548,7 @@ exports.getCablePlans = async (req, res) => {
       count: plans.length,
       data: plans,
       plans,
+      serviceFee: 50,
     });
   } catch (error) {
     console.error("Get Cable Plans Error:", error.response?.data || error.message);
@@ -611,6 +622,7 @@ exports.verifySmartCard = async (req, res) => {
         provider: finalProvider,
         currentBouquet: customerInfo.currentBouquet || customerInfo.currentPlan || "N/A",
         dueDate: customerInfo.dueDate || customerInfo.expiryDate || "N/A",
+        serviceFee: 50,
       });
     }
 
@@ -632,7 +644,7 @@ exports.verifySmartCard = async (req, res) => {
 };
 
 /**
- * @desc    Subscribe / Renew Cable TV Subscription
+ * @desc    Subscribe / Renew Cable TV Subscription (₦50 Service Fee Applied)
  * @route   POST /api/v1/bills/cable/buy
  */
 exports.buyCableSubscription = async (req, res) => {
@@ -659,10 +671,14 @@ exports.buyCableSubscription = async (req, res) => {
     const finalPlanCode = String(planCode || packageCode || "").trim();
     const finalPhone = String(phone || phoneNumber || "").trim();
     const finalPin = String(pin || transactionPin || "").trim();
-    const amountNum = Number(amount);
+    const packageAmount = Number(amount);
     const userId = req.user?._id || req.user?.id;
 
-    if (!finalProvider || !finalCardNo || !finalPlanCode || !amountNum || amountNum <= 0) {
+    // Saita Service Fee na Naira 50
+    const SERVICE_FEE = 50;
+    const totalAmountToDebit = Number((packageAmount + SERVICE_FEE).toFixed(2));
+
+    if (!finalProvider || !finalCardNo || !finalPlanCode || !packageAmount || packageAmount <= 0) {
       return res.status(400).json({
         success: false,
         status: "failed",
@@ -712,27 +728,28 @@ exports.buyCableSubscription = async (req, res) => {
     }
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
-    if (currentBal < amountNum) {
+    if (currentBal < totalAmountToDebit) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: `Insufficient wallet balance. Required: ₦${amountNum.toLocaleString()}, Available: ₦${currentBal.toLocaleString()}`,
+        message: `Insufficient wallet balance. Required: ₦${totalAmountToDebit.toLocaleString()} (Package: ₦${packageAmount.toLocaleString()} + ₦${SERVICE_FEE} Fee), Available: ₦${currentBal.toLocaleString()}`,
       });
     }
 
+    // Cire duka jimillar kudin daga Wallet
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       {
         $inc: {
-          walletBalance: -amountNum,
-          balance: -amountNum,
+          walletBalance: -totalAmountToDebit,
+          balance: -totalAmountToDebit,
         },
       },
       { new: true }
     );
 
     const newBal = Number(debitedUser.walletBalance ?? debitedUser.balance ?? 0);
-    const oldBal = Number((newBal + amountNum).toFixed(2));
+    const oldBal = Number((newBal + totalAmountToDebit).toFixed(2));
 
     const reference = `AYAX-CABLE-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     const transactionId = `TXN-${Date.now()}`;
@@ -745,7 +762,7 @@ exports.buyCableSubscription = async (req, res) => {
       type: "cable",
       category: "UTILITIES",
       service: `${finalProvider.toUpperCase()} Cable Subscription`,
-      amount: amountNum,
+      amount: totalAmountToDebit,
       oldBalance: oldBal,
       newBalance: newBal,
       previousBalance: oldBal,
@@ -755,12 +772,13 @@ exports.buyCableSubscription = async (req, res) => {
       provider: finalProvider.toUpperCase(),
       planCode: finalPlanCode,
       status: "pending",
-      details: `Cable Subscription (${planName || finalPlanCode}) for IUC ${finalCardNo} (${finalProvider.toUpperCase()})`,
+      details: `${finalProvider.toUpperCase()} (${planName || finalPlanCode}) for IUC ${finalCardNo} (Charged: ₦${totalAmountToDebit})`,
     });
 
     const baseUrl = getBaseUrl();
     let response;
     try {
+      // Tura ainihin packageAmount kadai zuwa Provider API
       response = await axios.post(
         `${baseUrl}/bills/cable/buy`,
         {
@@ -768,7 +786,7 @@ exports.buyCableSubscription = async (req, res) => {
           smartCardNo: finalCardNo,
           smartCardNumber: finalCardNo,
           planCode: finalPlanCode,
-          amount: amountNum,
+          amount: packageAmount,
           phone: finalPhone || user.phone,
           subscriptionType: subscriptionType || "renew",
           reference,
@@ -786,7 +804,7 @@ exports.buyCableSubscription = async (req, res) => {
 
       const refundBal = await executeAutoRefund({
         userId,
-        amountNum,
+        amountNum: totalAmountToDebit,
         reference,
         serviceName: `${finalProvider.toUpperCase()} Cable Subscription`,
         recipientIdentifier: finalCardNo,
@@ -799,7 +817,7 @@ exports.buyCableSubscription = async (req, res) => {
         success: false,
         status: "failed",
         refunded: true,
-        message: `Subscription activation failed (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded to your wallet instantly.`,
+        message: `Subscription activation failed (${errMsg}). ₦${totalAmountToDebit.toLocaleString()} has been refunded to your wallet instantly.`,
         newBalance: refundBal,
       });
     }
@@ -822,7 +840,7 @@ exports.buyCableSubscription = async (req, res) => {
           status: "success",
           apiReference: providerData.orderid || providerData.reference || reference,
           apiResponse: providerData,
-          details: `Success: Cable subscription (${planName || finalPlanCode}) activated for ${finalCardNo}`,
+          details: `Success: Cable subscription (${planName || finalPlanCode}) activated for ${finalCardNo} (Charged: ₦${totalAmountToDebit})`,
         }
       );
 
@@ -832,7 +850,7 @@ exports.buyCableSubscription = async (req, res) => {
           staffId: userId,
           action: "CABLE_PURCHASED",
           category: "VTU",
-          details: `Subscribed to ${finalProvider.toUpperCase()} (${planName || finalPlanCode}) for IUC ${finalCardNo}`,
+          details: `Subscribed to ${finalProvider.toUpperCase()} (${planName || finalPlanCode}) for IUC ${finalCardNo} - Fee: ₦${SERVICE_FEE}`,
           targetUser: userId,
         }).catch(() => {});
       }
@@ -840,7 +858,7 @@ exports.buyCableSubscription = async (req, res) => {
       await sendNotification(
         userId,
         "Cable Subscription Activated 🎉",
-        `Your ${finalProvider.toUpperCase()} subscription for IUC ${finalCardNo} (₦${amountNum.toLocaleString()}) was successfully activated.`,
+        `Your ${finalProvider.toUpperCase()} subscription for IUC ${finalCardNo} (₦${packageAmount.toLocaleString()}) was successfully activated.`,
         "UTILITIES"
       );
 
@@ -850,6 +868,9 @@ exports.buyCableSubscription = async (req, res) => {
         message: "Cable subscription activated successfully.",
         orderId: providerData.orderid || reference,
         reference,
+        packageAmount,
+        serviceFee: SERVICE_FEE,
+        totalCharged: totalAmountToDebit,
         newBalance: newBal,
       });
     } else {
@@ -857,7 +878,7 @@ exports.buyCableSubscription = async (req, res) => {
 
       const refundBal = await executeAutoRefund({
         userId,
-        amountNum,
+        amountNum: totalAmountToDebit,
         reference,
         serviceName: `${finalProvider.toUpperCase()} Cable Subscription`,
         recipientIdentifier: finalCardNo,

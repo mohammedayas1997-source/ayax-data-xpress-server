@@ -83,7 +83,7 @@ const sendNotification = async (userId, title, message, category = "UTILITIES") 
   }
 };
 
-// Automated Auto-Refund Processor
+// Automated Auto-Refund Processor (Yana mayar da duka jimillar kudi har da Service Fee)
 const executeAutoRefund = async (userId, amountNum, reference, finalDisco, finalMeterNo, finalPhone, reason) => {
   try {
     const user = await User.findByIdAndUpdate(
@@ -248,6 +248,7 @@ exports.verifyMeter = async (req, res) => {
         electricCompany: finalDisco,
         disco: finalDisco,
         meterType: finalMeterType,
+        serviceFee: 50,
       });
     } else {
       return res.status(400).json({
@@ -273,7 +274,7 @@ exports.verifyMeter = async (req, res) => {
 };
 
 /**
- * 2. PROCESS ELECTRICITY PAYMENT & TOKEN DISPATCH VIA AYAX APIS
+ * 2. PROCESS ELECTRICITY PAYMENT (NAIRA 50 SERVICE FEE APPLIED)
  */
 exports.buyElectricity = async (req, res) => {
   try {
@@ -297,10 +298,14 @@ exports.buyElectricity = async (req, res) => {
     const finalMeterType = String(meterType || "prepaid").toLowerCase().trim();
     const finalPhone = String(phoneNo || phone || phoneNumber || "").trim();
     const finalPin = String(transactionPin || pin || "").trim();
-    const amountNum = Number(amount);
+    const tokenAmount = Number(amount); // Ainihin kudin wutar lantarki
     const userId = req.user?._id || req.user?.id;
 
-    if (!finalDisco || !finalMeterNo || !amountNum || amountNum <= 0 || !finalPhone) {
+    // SAITA SERVICE FEE ZUWA 50 NAIRA
+    const SERVICE_FEE = 50;
+    const totalAmountToDebit = Number((tokenAmount + SERVICE_FEE).toFixed(2));
+
+    if (!finalDisco || !finalMeterNo || !tokenAmount || tokenAmount <= 0 || !finalPhone) {
       return res.status(400).json({
         success: false,
         status: "failed",
@@ -351,28 +356,29 @@ exports.buyElectricity = async (req, res) => {
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
 
-    if (currentBal < amountNum) {
+    // Duba idan balance ya isa (Token Amount + 50 Naira Service Fee)
+    if (currentBal < totalAmountToDebit) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: `Insufficient Wallet Balance. Required: ₦${amountNum.toLocaleString()}, Available: ₦${currentBal.toLocaleString()}`,
+        message: `Insufficient Wallet Balance. Required: ₦${totalAmountToDebit.toLocaleString()} (Token: ₦${tokenAmount.toLocaleString()} + ₦${SERVICE_FEE} Fee), Available: ₦${currentBal.toLocaleString()}`,
       });
     }
 
-    // Atomic Debit daga Wallet
+    // Cire kudi a wallet (Total Amount = Token + 50 Naira)
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       {
         $inc: {
-          walletBalance: -amountNum,
-          balance: -amountNum,
+          walletBalance: -totalAmountToDebit,
+          balance: -totalAmountToDebit,
         },
       },
       { new: true }
     );
 
     const newBal = Number(debitedUser.walletBalance ?? debitedUser.balance ?? 0);
-    const oldBal = Number((newBal + amountNum).toFixed(2));
+    const oldBal = Number((newBal + totalAmountToDebit).toFixed(2));
 
     const transactionId = `ELEC${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
     const reference = `AYAX-ELEC-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
@@ -385,7 +391,7 @@ exports.buyElectricity = async (req, res) => {
       type: "electricity",
       category: "UTILITIES",
       service: `${finalDisco.toUpperCase()} Electricity Token`,
-      amount: amountNum,
+      amount: totalAmountToDebit,
       oldBalance: oldBal,
       newBalance: newBal,
       previousBalance: oldBal,
@@ -394,7 +400,7 @@ exports.buyElectricity = async (req, res) => {
       phoneNumber: finalPhone,
       provider: finalDisco.toUpperCase(),
       status: "pending",
-      details: `${finalDisco.toUpperCase()} Electricity Token for Meter ${finalMeterNo}`,
+      details: `${finalDisco.toUpperCase()} Meter ${finalMeterNo} (Token: ₦${tokenAmount} + Fee: ₦${SERVICE_FEE})`,
     });
 
     const baseUrl = getBaseUrl();
@@ -408,6 +414,7 @@ exports.buyElectricity = async (req, res) => {
     try {
       for (const endpoint of candidatePurchaseEndpoints) {
         try {
+          // LURA: Ainihin kudin wutar zalla (tokenAmount) ake tura wa API, ba a hada kudin sabis na 50 ba
           response = await axios.post(
             endpoint,
             {
@@ -416,7 +423,7 @@ exports.buyElectricity = async (req, res) => {
               meterNo: finalMeterNo,
               meterNumber: finalMeterNo,
               meterType: finalMeterType,
-              amount: amountNum,
+              amount: tokenAmount,
               phone: finalPhone,
               reference: reference,
               ref_id: reference,
@@ -444,9 +451,10 @@ exports.buyElectricity = async (req, res) => {
         apiError.message ||
         "Electricity gateway timed out";
 
+      // Mayar wa mai amfani da duka kudin sa har da 50 Naira idan transaction ya fadi
       const refundBal = await executeAutoRefund(
         userId,
-        amountNum,
+        totalAmountToDebit,
         reference,
         finalDisco,
         finalMeterNo,
@@ -458,7 +466,7 @@ exports.buyElectricity = async (req, res) => {
         success: false,
         status: "failed",
         refunded: true,
-        message: `Failed to generate token (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded to your wallet instantly.`,
+        message: `Failed to generate token (${errMsg}). ₦${totalAmountToDebit.toLocaleString()} has been refunded to your wallet instantly.`,
         newBalance: refundBal,
       });
     }
@@ -497,7 +505,7 @@ exports.buyElectricity = async (req, res) => {
           units: unitsValue,
           apiReference: providerData.orderid || providerData.reference || reference,
           apiResponse: providerData,
-          details: `Success: Token (${tokenValue}) for Meter ${finalMeterNo}`,
+          details: `Success: Token (${tokenValue}) for Meter ${finalMeterNo} (Charged: ₦${totalAmountToDebit})`,
         }
       );
 
@@ -507,7 +515,7 @@ exports.buyElectricity = async (req, res) => {
           staffId: userId,
           action: "ELECTRICITY_PURCHASED",
           category: "VTU",
-          details: `Purchased electricity worth ₦${amountNum} for meter ${finalMeterNo} - Token: ${tokenValue}`,
+          details: `Purchased electricity token worth ₦${tokenAmount} (Fee: ₦${SERVICE_FEE}) for meter ${finalMeterNo} - Token: ${tokenValue}`,
           targetUser: userId,
         }).catch(() => {});
       }
@@ -515,7 +523,7 @@ exports.buyElectricity = async (req, res) => {
       await sendNotification(
         userId,
         "Electricity Token Generated 🎉",
-        `Your electricity purchase of ₦${amountNum.toLocaleString()} for meter ${finalMeterNo} was successful. Token: ${tokenValue} | Units: ${unitsValue}`,
+        `Your electricity purchase of ₦${tokenAmount.toLocaleString()} for meter ${finalMeterNo} was successful. Token: ${tokenValue} | Units: ${unitsValue}`,
         "UTILITIES"
       );
 
@@ -528,6 +536,9 @@ exports.buyElectricity = async (req, res) => {
         token: tokenValue,
         unit: unitsValue,
         units: unitsValue,
+        tokenAmount: tokenAmount,
+        serviceFee: SERVICE_FEE,
+        totalCharged: totalAmountToDebit,
         newBalance: newBal,
       });
     } else {
@@ -535,7 +546,7 @@ exports.buyElectricity = async (req, res) => {
 
       const refundBal = await executeAutoRefund(
         userId,
-        amountNum,
+        totalAmountToDebit,
         reference,
         finalDisco,
         finalMeterNo,
