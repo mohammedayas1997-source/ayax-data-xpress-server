@@ -4,6 +4,7 @@ const Transaction = require("../models/Transaction");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
+// Safely resolve user ID daga Token ko Session
 const resolveUserId = (req) => {
   if (req.user?.id) return req.user.id;
   if (req.user?._id) return req.user._id;
@@ -22,25 +23,20 @@ const resolveUserId = (req) => {
   return null;
 };
 
-const getHeaders = () => {
-  const activeKey = String(
-    process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
-  ).trim();
+// Asalin Tushen Abjiktech ko Marketplace Provider
+const getProviderConfig = () => {
+  const abjiktechKey = (process.env.ABJIKTECH_API_KEY || "dv_068de722a84b71ce900a65fa4c17bdf9_1788498653").trim();
+  const marketplaceKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
+  
+  const rawMarketplaceUrl = process.env.AYAX_API_BASE_URL || process.env.MARKETPLACE_API_URL || "https://www.ayaxapis.com";
+  const cleanMarketplaceUrl = rawMarketplaceUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "") + "/api/v1";
 
   return {
-    "Content-Type": "application/json",
-    "x-api-key": activeKey,
-    Authorization: `Bearer ${activeKey}`,
+    abjiktechKey,
+    marketplaceKey,
+    marketplaceUrl: cleanMarketplaceUrl,
+    abjiktechBase: "https://abjiktech.com.ng/api/verification",
   };
-};
-
-const getBaseUrl = () => {
-  const rawUrl =
-    process.env.AYAX_API_BASE_URL ||
-    process.env.MARKETPLACE_API_URL ||
-    "https://www.ayaxapis.com";
-  const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-  return `${cleanBase}/api/v1`;
 };
 
 exports.getBVNPrices = async (req, res) => {
@@ -99,13 +95,13 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // Tace lambar BVN ko Waya
+    // Tace Lambar BVN ko Waya
     let rawDigits = String(bvn || bvnNumber || phone || phoneNumber || searchValue || "").replace(/\D/g, "").trim();
     if (!rawDigits) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Please provide a valid 11-digit BVN or phone number.",
+        message: "Please enter a valid 11-digit BVN or phone number.",
       });
     }
 
@@ -150,7 +146,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // Balance Check & Charge
+    // Balance Check
     const cost = Number(amount || (isPhoneSearch ? 200 : 150));
     chargedCost = cost;
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
@@ -162,6 +158,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
+    // Rage Kudi a Wallet din Data Express
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
@@ -186,69 +183,97 @@ exports.verifyBVN = async (req, res) => {
       newBalance: newBal,
       recipient: rawDigits,
       status: "pending",
-      details: `BVN search query for ${rawDigits}`,
+      details: `BVN processing for ID: ${rawDigits}`,
     });
 
-    const baseUrl = getBaseUrl();
-    let targetEndpoint = `${baseUrl}/identity/bvn/verify`;
-    let requestPayload = {
-      bvn: rawDigits,
-      bvnNumber: rawDigits,
-      searchValue: rawDigits,
-      slipType: serviceType === "bvn_premium" ? "Premium Card" : "Standard Slip",
-      format: "pdf",
-      generatePdf: true,
-      reference,
-    };
+    const config = getProviderConfig();
+    const isPremiumTier = serviceType === "bvn_premium" || serviceId === "bvn_premium";
 
-    if (isPhoneSearch) {
-      targetEndpoint = `${baseUrl}/identity/bvn/verify-phone`;
-      requestPayload = {
-        phone: cleanPhone,
-        phoneNumber: cleanPhone,
-        searchValue: cleanPhone,
-        slipType: "Standard Slip",
-        format: "pdf",
-        generatePdf: true,
-        reference,
-      };
-    }
+    let providerResponse = null;
 
-    let bvnRes;
+    // =========================================================================
+    // MATAKI NA 1: TURAWA ASALIN UWAR GARKE (ABJIKTECH DIRECT KO MARKETPLACE)
+    // =========================================================================
     try {
-      bvnRes = await axios.post(targetEndpoint, requestPayload, {
-        headers: getHeaders(),
-        timeout: 55000,
-      });
-    } catch (err) {
-      if (isPhoneSearch) {
-        targetEndpoint = `${baseUrl}/identity/bvn/phone-lookup`;
-        bvnRes = await axios.post(
-          targetEndpoint,
-          { phone: cleanPhone, format: "pdf", reference },
-          { headers: getHeaders(), timeout: 55000 }
-        );
-      } else {
-        throw err;
+      // Hanyar 1: Kiran Abjiktech Direct tare da ainihin document requirements
+      const abjiktechUrl = isPremiumTier
+        ? `${config.abjiktechBase}/bvn_premium_slip.php`
+        : `${config.abjiktechBase}/bvn_full_details_slip.php`;
+
+      const directRes = await axios.post(
+        abjiktechUrl,
+        {
+          api_key: config.abjiktechKey,
+          bvn: isPhoneSearch ? cleanPhone : rawDigits,
+        },
+        {
+          headers: { "Content-Type": "application/json" },
+          timeout: 45000,
+        }
+      );
+
+      if (directRes.data?.status === "success" || directRes.data?.pdf_url || directRes.data?.slip_url) {
+        providerResponse = directRes.data;
       }
+    } catch (directErr) {
+      console.warn("Direct Abjiktech attempt failed, routing via Marketplace fallback:", directErr.message);
     }
 
-    const resData = bvnRes.data;
-    if (!resData || (!resData.success && resData.status !== "success")) {
-      throw new Error(resData?.message || "BVN record could not be retrieved from gateway.");
+    // Hanyar 2: Marketplace Route Fallback (Idan Hanyar 1 bata mayar da sakamako ba)
+    if (!providerResponse) {
+      const marketplaceEndpoint = isPhoneSearch
+        ? `${config.marketplaceUrl}/identity/bvn/verify-phone`
+        : `${config.marketplaceUrl}/identity/bvn/verify`;
+
+      const mRes = await axios.post(
+        marketplaceEndpoint,
+        {
+          bvn: rawDigits,
+          phone: cleanPhone,
+          slipType: isPremiumTier ? "Premium Slip" : "Standard Slip",
+          reference,
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": config.marketplaceKey,
+            Authorization: `Bearer ${config.marketplaceKey}`,
+          },
+          timeout: 45000,
+        }
+      );
+
+      providerResponse = mRes.data;
     }
 
-    // Tace data daga kowane gurbi (harda Abjiktech user_data)
+    if (!providerResponse) {
+      throw new Error("Could not connect to the upstream BVN clearing system.");
+    }
+
+    // =========================================================================
+    // MATAKI NA 2: CIRO AINIHIN PDF LINK DA BAYANAI BA TARE DA BLANK BA
+    // =========================================================================
     const rawData =
-      resData.user_data ||
-      resData.data?.user_data ||
-      resData.data?.details?.data ||
-      resData.data?.details ||
-      resData.data?.bvnDetails ||
-      resData.data ||
-      resData;
+      providerResponse.user_data ||
+      providerResponse.data?.user_data ||
+      providerResponse.data?.details?.data ||
+      providerResponse.data?.details ||
+      providerResponse.data?.bvnDetails ||
+      providerResponse.data ||
+      providerResponse;
 
-    // 1. Ciro Sunaye
+    const finalPdfSlipUrl =
+      providerResponse.pdf_url ||
+      providerResponse.slip_url ||
+      providerResponse.pdfUrl ||
+      providerResponse.slipUrl ||
+      rawData.pdf_url ||
+      rawData.slip_url ||
+      rawData.slipUrl ||
+      rawData.pdfUrl ||
+      rawData.downloadUrl ||
+      null;
+
     const firstName = String(
       rawData.firstName || rawData.firstname || rawData.first_name || ""
     ).trim();
@@ -267,7 +292,6 @@ exports.verifyBVN = async (req, res) => {
       `${firstName} ${middleName} ${lastName}`.replace(/\s+/g, " ").trim() ||
       "Verified Customer";
 
-    // 2. Ciro Lambobi da Adireshi
     const resolvedBvn = String(
       rawData.bvn || rawData.bvnNumber || rawData.bvn_number || rawDigits
     ).trim();
@@ -275,7 +299,6 @@ exports.verifyBVN = async (req, res) => {
     const phone1 = String(
       rawData.phoneNumber ||
       rawData.phoneNumber1 ||
-      rawData.phone_number1 ||
       rawData.telephoneNo ||
       rawData.phone ||
       cleanPhone ||
@@ -290,9 +313,6 @@ exports.verifyBVN = async (req, res) => {
       rawData.birthdate ||
       "N/A";
 
-    const gender = String(rawData.gender || "N/A").toUpperCase();
-    const nin = rawData.nin || rawData.ninNumber || "N/A";
-
     const residentialAddress =
       rawData.residentialAddress ||
       rawData.residential_address ||
@@ -300,12 +320,9 @@ exports.verifyBVN = async (req, res) => {
       rawData.residence_address ||
       "N/A";
 
-    const state = rawData.stateOfOrigin || rawData.state_of_origin || rawData.state || "N/A";
-    const lga = rawData.lgaOfOrigin || rawData.lga_of_origin || rawData.lga || "N/A";
     const bank = rawData.enrollmentBank || rawData.enrollment_bank || rawData.bank || "COMMERCIAL BANK";
     const branch = rawData.enrollmentBranch || rawData.enrollment_branch || rawData.branch || "HEAD OFFICE";
 
-    // 3. Hoto & Slip URL
     const photo =
       rawData.photo ||
       rawData.image ||
@@ -313,26 +330,15 @@ exports.verifyBVN = async (req, res) => {
       rawData.passport ||
       null;
 
-    const slipUrl =
-      resData.pdf_url ||
-      resData.slip_url ||
-      resData.pdfUrl ||
-      resData.slipUrl ||
-      rawData.slipUrl ||
-      rawData.pdfUrl ||
-      rawData.pdf_url ||
-      rawData.slip_url ||
-      rawData.downloadUrl ||
-      null;
-
+    // Sabunta Transaction
     await Transaction.findOneAndUpdate(
       { reference },
       {
         status: "success",
         recipient: resolvedBvn,
-        slipUrl,
+        slipUrl: finalPdfSlipUrl,
         apiResponse: rawData,
-        details: `BVN verified successfully for ${fullName} (${resolvedBvn})`,
+        details: `BVN verified successfully: ${fullName} (${resolvedBvn})`,
       }
     );
 
@@ -349,38 +355,39 @@ exports.verifyBVN = async (req, res) => {
       phone: phone1,
       dateOfBirth: dob,
       dob,
-      gender,
-      nin,
+      gender: String(rawData.gender || "N/A").toUpperCase(),
+      nin: String(rawData.nin || rawData.ninNumber || "N/A"),
       address: residentialAddress,
       residentialAddress,
-      state,
-      lga,
+      state: rawData.stateOfOrigin || rawData.state || "N/A",
+      lga: rawData.lgaOfOrigin || rawData.lga || "N/A",
       enrollmentBank: bank,
       bank,
       enrollmentBranch: branch,
       photo,
       image: photo,
-      slipUrl,
-      pdfUrl: slipUrl,
+      slipUrl: finalPdfSlipUrl,
+      pdfUrl: finalPdfSlipUrl,
     };
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: "BVN profile retrieved successfully.",
-      slipUrl,
-      pdfUrl: slipUrl,
+      message: "BVN verified and slip generated successfully.",
+      slipUrl: finalPdfSlipUrl,
+      pdfUrl: finalPdfSlipUrl,
+      downloadUrl: finalPdfSlipUrl,
       data: payloadResponse,
       details: payloadResponse,
       newBalance: newBal,
     });
   } catch (err) {
-    console.error("BVN Processing Error:", err.response?.data || err.message);
+    console.error("Data Express BVN Error:", err.response?.data || err.message);
 
     const failureReason =
       err.response?.data?.message ||
       err.message ||
-      "BVN verification failed.";
+      "BVN verification failed at provider.";
 
     if (chargedUserId && chargedCost > 0) {
       await User.findByIdAndUpdate(chargedUserId, {
@@ -402,7 +409,7 @@ exports.verifyBVN = async (req, res) => {
       success: false,
       status: "failed",
       refunded: true,
-      message: `${failureReason} Fee has been refunded to your wallet.`,
+      message: `${failureReason} Your wallet has been refunded.`,
     });
   }
 };
