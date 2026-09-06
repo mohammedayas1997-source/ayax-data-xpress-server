@@ -2,7 +2,19 @@ const express = require("express");
 const router = express.Router();
 
 const leaderController = require("../controllers/leaderController");
-const { protect } = require("../middleware/authMiddleware");
+let authMiddleware;
+try {
+  authMiddleware = require("../middleware/authMiddleware");
+} catch (e) {
+  authMiddleware = require("../middleware/auth");
+}
+
+const protect =
+  authMiddleware?.protect || authMiddleware?.verifyToken || authMiddleware;
+const authorize =
+  authMiddleware?.authorize ||
+  authMiddleware?.restrictTo ||
+  ((...roles) => (req, res, next) => next());
 
 // Helper don kiyaye undefined handler errors
 const safeLeader = (handlerName) => {
@@ -19,6 +31,16 @@ const safeLeader = (handlerName) => {
 
 // Sanya Tsaron Login ga dukkan routes
 router.use(protect);
+router.use(
+  authorize(
+    "leader",
+    "state_manager",
+    "national_sales_director",
+    "super_leader",
+    "superadmin",
+    "admin"
+  )
+);
 
 // ==========================================
 // 1. DASHBOARDS & TARGET TELEMETRY
@@ -38,8 +60,6 @@ router.get("/live-audit-stream", safeLeader("getLiveAuditStream"));
 // ==========================================
 router.post("/deploy-targets", safeLeader("assignStateLeaderTarget"));
 router.post("/assign-target", safeLeader("assignStateLeaderTarget"));
-router.post("/assign-target", leaderController.assignStateLeaderTarget);
-router.post("/deploy-targets", leaderController.assignStateLeaderTarget);
 
 // ==========================================
 // 4. APPOINT & ENROLL SUPERVISORS

@@ -10,10 +10,10 @@ try {
 }
 
 const protect =
-  authMiddleware.protect || authMiddleware.verifyToken || authMiddleware;
+  authMiddleware?.protect || authMiddleware?.verifyToken || authMiddleware;
 const authorize =
-  authMiddleware.authorize ||
-  authMiddleware.restrictTo ||
+  authMiddleware?.authorize ||
+  authMiddleware?.restrictTo ||
   ((...roles) => (req, res, next) => next());
 
 // Ikon Admin da SuperAdmin gaba daya
@@ -21,6 +21,12 @@ const adminAndSuperAdmin = authorize("superadmin", "admin");
 
 // 2. Controller Imports
 const superAdminController = require("../controllers/superAdminController");
+let supervisorController;
+try {
+  supervisorController = require("../controllers/supervisorController");
+} catch (_) {
+  supervisorController = superAdminController;
+}
 
 // Safe Route Handler Helper
 const safe = (fn, name) => {
@@ -59,7 +65,6 @@ router.get(
 // ==========================================
 // 2. USER CREATION & STAFF APPOINTMENTS
 // ==========================================
-// Matches SuperAdminDashboard.js: Provision NSD, SM, Supervisor, Agent
 router.post(
   "/create-user",
   safe(superAdminController.createUser, "createUser")
@@ -71,7 +76,26 @@ router.post(
 );
 
 // ==========================================
-// 3. ALL COMPANY STAFF & USERS DIRECTORATE
+// 3. AGENT TEAM REASSIGNMENT & TRANSFERS
+// ==========================================
+router.post(
+  "/supervisors/transfer-all-agents",
+  safe(
+    supervisorController?.transferAllAgentsToNewSupervisor || superAdminController?.transferAllAgentsToNewSupervisor,
+    "transferAllAgentsToNewSupervisor"
+  )
+);
+
+router.post(
+  "/supervisors/transfer-single-agent",
+  safe(
+    supervisorController?.transferSingleAgent || superAdminController?.transferSingleAgent,
+    "transferSingleAgent"
+  )
+);
+
+// ==========================================
+// 4. ALL COMPANY STAFF & USERS DIRECTORATE
 // ==========================================
 router.get(
   "/users",
@@ -84,9 +108,8 @@ router.get(
 );
 
 // ==========================================
-// 4. REFUND DISPUTES QUEUE & APPROVAL ENGINE
+// 5. REFUND DISPUTES QUEUE & APPROVAL ENGINE
 // ==========================================
-// Matches SuperAdminDashboard.js: Refunds Tab & Approval Action
 router.get(
   "/refund-requests",
   safe(superAdminController.getRefundRequests, "getRefundRequests")
@@ -102,7 +125,15 @@ router.post(
   safe(superAdminController.approveRefund, "approveRefund")
 );
 
-// Executive Override Refund
+// Batch Approve Refunds (Multi-select Refund Route)
+router.post(
+  "/refunds/batch-approve",
+  safe(
+    superAdminController.batchApproveRefunds || superAdminController.approveRefund,
+    "batchApproveRefunds"
+  )
+);
+
 router.post(
   "/refunds/executive-override",
   safe(superAdminController.approveRefund, "approveRefund")
@@ -114,9 +145,8 @@ router.post(
 );
 
 // ==========================================
-// 5. ALL COMPANY TRANSACTIONS (AUDIT TRAIL)
+// 6. ALL COMPANY TRANSACTIONS (AUDIT TRAIL)
 // ==========================================
-// Matches SuperAdminDashboard.js: Audit Stream Tab
 router.get(
   "/transactions",
   safe(superAdminController.getAllTransactions, "getAllTransactions")
@@ -128,7 +158,7 @@ router.get(
 );
 
 // ==========================================
-// 6. ALL COMPANY SERVICES & TARIFFS
+// 7. ALL COMPANY SERVICES & TARIFFS
 // ==========================================
 router.get(
   "/services",
@@ -141,7 +171,7 @@ router.get(
 );
 
 // ==========================================
-// 7. DATA PACKAGES MATRIX (GET, CREATE, UPDATE, DELETE)
+// 8. DATA PACKAGES MATRIX
 // ==========================================
 router.get(
   "/plans",
@@ -169,7 +199,7 @@ router.delete(
 );
 
 // ==========================================
-// 8. FINANCIAL DISPATCH (DIRECT LEDGER CREDIT/DEBIT)
+// 9. FINANCIAL DISPATCH (DIRECT LEDGER)
 // ==========================================
 router.post(
   "/wallet/adjust",
@@ -182,7 +212,7 @@ router.post(
 );
 
 // ==========================================
-// 9. TARGET MANAGEMENT (NSD, SM, SUPERVISORS, AGENTS)
+// 10. TARGET MANAGEMENT
 // ==========================================
 router.post(
   "/assign-target",
@@ -190,9 +220,8 @@ router.post(
 );
 
 // ==========================================
-// 10. ROLE ELEVATION & SECURITY CONTROLS
+// 11. ROLE ELEVATION & SECURITY CONTROLS
 // ==========================================
-// Promote / Demote User Role
 router.patch(
   "/users/change-role",
   safe(superAdminController.changeUserRole, "changeUserRole")
@@ -203,7 +232,6 @@ router.post(
   safe(superAdminController.changeUserRole, "changeUserRole")
 );
 
-// Force Override Password / PIN
 router.post(
   "/users/force-reset-security",
   safe(superAdminController.forceResetUserSecurity, "forceResetUserSecurity")
@@ -214,7 +242,6 @@ router.post(
   safe(superAdminController.forceResetUserSecurity, "forceResetUserSecurity")
 );
 
-// Lock / Unlock / Freeze User Account
 router.patch(
   "/users/toggle-lock",
   safe(superAdminController.toggleWalletLock, "toggleWalletLock")
@@ -226,7 +253,7 @@ router.post(
 );
 
 // ==========================================
-// 11. BROADCAST NOTIFICATIONS & MARKETING DISPATCH
+// 12. BROADCAST NOTIFICATIONS & MARKETING
 // ==========================================
 router.post(
   "/broadcast-notification",
@@ -244,7 +271,7 @@ router.post(
 );
 
 // ==========================================
-// 12. GLOBAL PRICING & TARIFF MATRIX OVERRIDE
+// 13. GLOBAL PRICING & TARIFF MATRIX
 // ==========================================
 router.post(
   "/pricing/set-global",
@@ -257,7 +284,7 @@ router.post(
 );
 
 // ==========================================
-// 13. FORENSIC AUDIT EXPUNGING
+// 14. FORENSIC AUDIT EXPUNGING
 // ==========================================
 router.delete(
   "/logs/expunge",

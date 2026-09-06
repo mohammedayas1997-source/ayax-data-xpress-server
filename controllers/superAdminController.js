@@ -1595,3 +1595,34 @@ exports.expungeSystemAuditLogs = async (req, res) => {
     });
   }
 };
+
+exports.batchApproveRefunds = async (req, res) => {
+  try {
+    const { transactionIds } = req.body;
+    if (!Array.isArray(transactionIds) || transactionIds.length === 0) {
+      return res.status(400).json({ success: false, message: "Transaction IDs array is required." });
+    }
+
+    let refundedCount = 0;
+    for (const id of transactionIds) {
+      const tx = await Transaction.findById(id);
+      if (tx && tx.status !== "refunded") {
+        await User.findByIdAndUpdate(tx.user || tx.userId, {
+          $inc: { walletBalance: Number(tx.amount || 0), balance: Number(tx.amount || 0) },
+        });
+        tx.status = "refunded";
+        tx.details = (tx.details || "") + " | Batch Refunded by SuperAdmin";
+        await tx.save();
+        refundedCount++;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully approved and refunded ${refundedCount} accounts.`,
+      refundedCount,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
