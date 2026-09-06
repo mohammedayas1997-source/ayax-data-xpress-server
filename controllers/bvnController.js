@@ -4,7 +4,6 @@ const Transaction = require("../models/Transaction");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
-// Safely resolve user ID daga Token ko Session
 const resolveUserId = (req) => {
   if (req.user?.id) return req.user.id;
   if (req.user?._id) return req.user._id;
@@ -23,7 +22,6 @@ const resolveUserId = (req) => {
   return null;
 };
 
-// Marketplace Headers & Config
 const getHeaders = () => {
   const activeKey = String(
     process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
@@ -47,19 +45,13 @@ const getBaseUrl = () => {
 
 exports.getBVNPrices = async (req, res) => {
   const prices = {
-    bvn_standard: 150,
-    bvn_premium: 350,
-    bvn_phone: 200,
-    bvn_basic: 100,
     bvn_full_details: 150,
-    bvn: 150,
-    phone: 200,
+    bvn_premium: 150,
   };
   return res.status(200).json({
     success: true,
     status: "success",
     prices,
-    data: prices,
   });
 };
 exports.getPrices = exports.getBVNPrices;
@@ -104,12 +96,14 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // PIN Check
+    // PIN Verification
     const finalPin = String(pin || transactionPin || "").trim();
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
     if (storedPin) {
-      try { isPinValid = await bcrypt.compare(finalPin, storedPin); } catch (_) {}
+      try {
+        isPinValid = await bcrypt.compare(finalPin, storedPin);
+      } catch (_) {}
       if (!isPinValid && storedPin === finalPin) isPinValid = true;
     }
     if (!isPinValid && finalPin === "0000") isPinValid = true;
@@ -122,6 +116,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
+    // Wallet Balance Check
     const cost = Number(amount || 150);
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     if (currentBal < cost) {
@@ -132,7 +127,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // 1. Bayyana Endpoints da Payload kafin kiran Axios
+    // 1. Definition na Endpoint da Payload a saman kiran Axios
     const reference = `AYAX-BVN-${Date.now()}`;
     const baseUrl = getBaseUrl();
     const isPremium = serviceType === "bvn_premium" || serviceId === "bvn_premium";
@@ -166,7 +161,7 @@ exports.verifyBVN = async (req, res) => {
 
     const mData = marketplaceRes.data;
 
-    // 3. Ciro link na PDF ko da a ina ya fado a JSON
+    // 3. Ciro link na PDF daga Marketplace response
     let finalSlipUrl =
       mData?.slipUrl ||
       mData?.pdfUrl ||
@@ -194,6 +189,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
+    // Fallback URL idan Marketplace ya bayyana nasara
     if (!finalSlipUrl) {
       finalSlipUrl = `https://abjiktech.com.ng/uploads/slips/standard_bvn_${cleanBvn}.pdf`;
     }
@@ -202,7 +198,7 @@ exports.verifyBVN = async (req, res) => {
       finalSlipUrl = `https://abjiktech.com.ng/${String(finalSlipUrl).replace(/^\/+/, "")}`;
     }
 
-    // 4. Debi kudi a wallet din Data Express tunda aiki ya yi nasara
+    // 4. Cire Kudi a Wallet tunda an tabbatar da takarda
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
