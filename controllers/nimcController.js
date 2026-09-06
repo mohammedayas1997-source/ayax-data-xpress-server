@@ -241,6 +241,7 @@ exports.submitNIMCRequest = async (req, res) => {
       details,
       formData,
       amount,
+      processingWindow,
     } = req.body;
 
     const finalServiceType = String(serviceType || type || serviceId || "nin_verification").trim();
@@ -373,8 +374,9 @@ exports.submitNIMCRequest = async (req, res) => {
     });
 
     // F. Create Initial NIMC Request Record
+    let createdRequest = null;
     if (NIMCRequest) {
-      await NIMCRequest.create({
+      createdRequest = await NIMCRequest.create({
         user: userId,
         serviceType: finalServiceType,
         ninNumber: finalNin,
@@ -389,14 +391,68 @@ exports.submitNIMCRequest = async (req, res) => {
       });
     }
 
-    // G. Gateway Execution
+    // G. Determine if request is an asynchronous 48-hour validation
+    const validationIdentifiers = [
+      "no_record",
+      "sim_val",
+      "vnin_val",
+      "update_record",
+      "bank_val",
+      "mod_val",
+      "photo_error",
+      "nin_validation",
+    ];
+
+    const isValidationQueue =
+      validationIdentifiers.includes(finalServiceType) ||
+      processingWindow === "48_WORKING_HOURS" ||
+      finalServiceType.toLowerCase().includes("val");
+
+    // Route 1: 48-Working-Hour Validation Queue (Queue & Keep Pending)
+    if (isValidationQueue) {
+      if (Activity) {
+        await Activity.create({
+          user: userId,
+          staffId: userId,
+          action: "NIN_VALIDATION_QUEUED",
+          category: "IDENTITY",
+          details: `NIN Validation (${finalServiceType}) queued for 48 working hours. Target: ${targetIdentifier}`,
+          targetUser: userId,
+        }).catch(() => {});
+      }
+
+      await sendNotification(
+        userId,
+        "NIN Validation Queued ⏳",
+        `Your validation request for NIN (${targetIdentifier}) has been queued and will be completed within 48 working hours. Reference: ${reference}`,
+        "IDENTITY"
+      );
+
+      return res.status(200).json({
+        success: true,
+        status: "success",
+        message: "NIN validation request submitted successfully. Processing takes up to 48 working hours.",
+        data: createdRequest || {
+          reference,
+          transactionId,
+          serviceType: finalServiceType,
+          searchValue: targetIdentifier,
+          amount: amountToCharge,
+          status: "pending",
+        },
+        reference,
+        newBalance: newBal,
+        processingWindow: "48_WORKING_HOURS",
+      });
+    }
+
+    // Route 2: Instant Slip / Direct Verification Gateways
     const baseUrl = getBaseUrl();
     const candidateEndpoints = [
       `${baseUrl}/identity/nin/verify`,
       `${baseUrl}/nimc/verify`,
       `${baseUrl}/identity/validation`,
       `${baseUrl}/nin/validate`,
-      `${baseUrl}/vtu/nimc-validate`,
     ];
 
     let ayaxResponse;
@@ -736,7 +792,6 @@ exports.approveRequest = async (req, res) => {
       request.pdfUrl = pdfUrl || slipUrl;
     }
 
-    // Safe admin ID extraction (avoids "Cannot read properties of null (reading 'id')")
     request.processedBy = resolveUserId(req);
 
     await request.save();
