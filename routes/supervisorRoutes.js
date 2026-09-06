@@ -51,6 +51,16 @@ router.get("/agents", safeSup("getMyAgents")); // Fallback
 router.post("/create-agent", safeSup("createAgent"));
 router.post("/enroll-agent", safeSup("createAgent"));
 
+router.post(
+  "/supervisors/transfer-all-agents",
+  supervisorController.transferAllAgentsToNewSupervisor
+);
+
+router.post(
+  "/supervisors/transfer-single-agent",
+  supervisorController.transferSingleAgent
+);
+
 // 5. AGENT REAL-TIME SALES, FLOAT & PERFORMANCE MONITORING
 router.get("/agent-performance/:agentId", safeSup("getAgentSalesSummary"));
 router.get("/agent-sales/:agentId", safeSup("getAgentSalesSummary"));

@@ -488,3 +488,97 @@ exports.getAgentSalesSummary = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+
+// Reassign all agents from one supervisor to another (e.g., suspension/termination)
+exports.transferAllAgentsToNewSupervisor = async (req, res) => {
+  try {
+    const { oldSupervisorId, newSupervisorId } = req.body;
+
+    if (!oldSupervisorId || !newSupervisorId) {
+      return res.status(400).json({
+        success: false,
+        message: "Both old and new supervisor IDs are required.",
+      });
+    }
+
+    if (String(oldSupervisorId) === String(newSupervisorId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Source and destination supervisors cannot be the same.",
+      });
+    }
+
+    const newSupervisor = await User.findById(newSupervisorId);
+    if (!newSupervisor) {
+      return res.status(404).json({
+        success: false,
+        message: "Destination supervisor not found.",
+      });
+    }
+
+    const updateResult = await User.updateMany(
+      { supervisorId: oldSupervisorId },
+      { $set: { supervisorId: newSupervisorId } }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully transferred ${updateResult.modifiedCount} agents to ${newSupervisor.fullName || newSupervisor.name || "new supervisor"}.`,
+      transferredCount: updateResult.modifiedCount,
+    });
+  } catch (error) {
+    console.error("Bulk agent transfer error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error during bulk transfer.",
+    });
+  }
+};
+
+// Reassign a single agent to a new supervisor
+exports.transferSingleAgent = async (req, res) => {
+  try {
+    const { agentId, newSupervisorId } = req.body;
+
+    if (!agentId || !newSupervisorId) {
+      return res.status(400).json({
+        success: false,
+        message: "Agent ID and new supervisor ID are required.",
+      });
+    }
+
+    const newSupervisor = await User.findById(newSupervisorId);
+    if (!newSupervisor) {
+      return res.status(404).json({
+        success: false,
+        message: "Destination supervisor not found.",
+      });
+    }
+
+    const updatedAgent = await User.findByIdAndUpdate(
+      agentId,
+      { $set: { supervisorId: newSupervisorId } },
+      { new: true }
+    );
+
+    if (!updatedAgent) {
+      return res.status(404).json({
+        success: false,
+        message: "Agent not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully assigned agent [${updatedAgent.fullName || updatedAgent.name}] to new supervisor.`,
+      agent: updatedAgent,
+    });
+  } catch (error) {
+    console.error("Single agent transfer error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error during agent transfer.",
+    });
+  }
+};
