@@ -66,23 +66,45 @@ exports.getPrices = exports.getBVNPrices;
 
 exports.verifyBVN = async (req, res) => {
   try {
-    const { bvn, bvnNumber, searchValue, serviceType, pin, transactionPin, amount } = req.body;
-    const userId = resolveUserId(req);
+    const {
+      bvn,
+      bvnNumber,
+      searchValue,
+      serviceType,
+      serviceId,
+      pin,
+      transactionPin,
+      amount,
+    } = req.body;
 
+    const userId = resolveUserId(req);
     if (!userId) {
-      return res.status(401).json({ success: false, message: "Session expired. Please login again." });
+      return res.status(401).json({
+        success: false,
+        status: "failed",
+        message: "Session expired. Please login again.",
+      });
     }
 
     const cleanBvn = String(bvn || bvnNumber || searchValue || "").replace(/\D/g, "").trim();
     if (!cleanBvn || cleanBvn.length !== 11) {
-      return res.status(400).json({ success: false, message: "A valid 11-digit BVN is required." });
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "A valid 11-digit BVN is required.",
+      });
     }
 
     const user = await User.findById(userId).select("+transactionPin +pin +walletBalance +balance");
     if (!user) {
-      return res.status(404).json({ success: false, message: "User account not found." });
+      return res.status(404).json({
+        success: false,
+        status: "failed",
+        message: "User account not found.",
+      });
     }
 
+    // PIN Check
     const finalPin = String(pin || transactionPin || "").trim();
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
@@ -93,7 +115,11 @@ exports.verifyBVN = async (req, res) => {
     if (!isPinValid && finalPin === "0000") isPinValid = true;
 
     if (!isPinValid) {
-      return res.status(400).json({ success: false, message: "Invalid Transaction PIN." });
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Invalid Transaction PIN.",
+      });
     }
 
     const cost = Number(amount || 150);
@@ -101,19 +127,32 @@ exports.verifyBVN = async (req, res) => {
     if (currentBal < cost) {
       return res.status(400).json({
         success: false,
+        status: "failed",
         message: `Insufficient balance. Required: NGN ${cost}, Available: NGN ${currentBal}`,
       });
     }
 
+    // 1. Bayyana Endpoints da Payload kafin kiran Axios
     const reference = `AYAX-BVN-${Date.now()}`;
     const baseUrl = getBaseUrl();
+    const isPremium = serviceType === "bvn_premium" || serviceId === "bvn_premium";
+    const slipTypeName = isPremium ? "Premium Slip" : "Standard Slip";
 
+    const targetEndpoint = `${baseUrl}/identity/bvn/verify`;
+    const requestPayload = {
+      bvn: cleanBvn,
+      bvnNumber: cleanBvn,
+      searchValue: cleanBvn,
+      slipType: slipTypeName,
+      reference,
+    };
+
+    // 2. Kira Marketplace
     let marketplaceRes;
     try {
       marketplaceRes = await axios.post(targetEndpoint, requestPayload, {
         headers: getHeaders(),
         timeout: 65000,
-        // Tabbatar da cewa ko da status code 400 ne, axios kada ya jefa error idan akwai amsa
         validateStatus: (status) => status < 500,
       });
     } catch (apiErr) {
@@ -127,7 +166,7 @@ exports.verifyBVN = async (req, res) => {
 
     const mData = marketplaceRes.data;
 
-    // Ciro kowane irin link da ya zo daga Marketplace koda a ina yake
+    // 3. Ciro link na PDF ko da a ina ya fado a JSON
     let finalSlipUrl =
       mData?.slipUrl ||
       mData?.pdfUrl ||
@@ -141,27 +180,29 @@ exports.verifyBVN = async (req, res) => {
       mData?.details?.slipUrl ||
       null;
 
-    // Idan an samu PDF a cikin sakon (kamar yadda saƙon allonka ya nuna)
-    const isSuccessMessage = 
+    const isSuccessMessage =
       String(mData?.message || "").toLowerCase().includes("pdf generated") ||
-      String(mData?.message || "").toLowerCase().includes("successful");
+      String(mData?.message || "").toLowerCase().includes("successful") ||
+      mData?.success === true ||
+      mData?.status === "success";
 
-    const isSuccess = mData?.success === true || mData?.status === "success" || isSuccessMessage;
-
-    if (!isSuccess && !finalSlipUrl) {
+    if (!isSuccessMessage && !finalSlipUrl) {
       return res.status(422).json({
         success: false,
         status: "failed",
-        message: mData?.message || "BVN record could not be retrieved.",
+        message: mData?.message || "BVN record could not be retrieved. No funds were deducted.",
       });
     }
 
-    // Idan babu direct link amma an tabbatar an yi nasara, hada link na tsarin Abjiktech
     if (!finalSlipUrl) {
       finalSlipUrl = `https://abjiktech.com.ng/uploads/slips/standard_bvn_${cleanBvn}.pdf`;
     }
 
-    // YANZU KAWAI ZA A DEBI KUDI A WALLET TUNDA AN TABBATAR DA NASARA
+    if (finalSlipUrl && !String(finalSlipUrl).startsWith("http")) {
+      finalSlipUrl = `https://abjiktech.com.ng/${String(finalSlipUrl).replace(/^\/+/, "")}`;
+    }
+
+    // 4. Debi kudi a wallet din Data Express tunda aiki ya yi nasara
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
@@ -200,9 +241,11 @@ exports.verifyBVN = async (req, res) => {
       newBalance: newBal,
     });
   } catch (err) {
+    console.error("Data Express BVN Error:", err.message);
     return res.status(500).json({
       success: false,
-      message: "An error occurred during verification. No funds were deducted.",
+      status: "failed",
+      message: "An internal server error occurred. No funds were deducted.",
     });
   }
 };
