@@ -60,10 +60,13 @@ const defaultBVNPricesHandler = (req, res) => {
 };
 
 // ==========================================
-// 1. PUBLIC / PRICING ROUTES
+// 1. PUBLIC / PRICING & DOWNLOAD ROUTES
 // ==========================================
 router.get("/prices", invoke("getBVNPrices", defaultBVNPricesHandler));
 router.get("/pricing", invoke("getBVNPrices", defaultBVNPricesHandler));
+
+// Direct Download Streaming Route (Babu toshewar CORS)
+router.get("/download-slip", invoke("downloadBVNSlip"));
 
 // ==========================================
 // 2. USER ROUTES (Verification & Slip Generation)
