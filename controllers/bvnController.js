@@ -110,49 +110,65 @@ exports.verifyBVN = async (req, res) => {
 
     let marketplaceRes;
     try {
-      marketplaceRes = await axios.post(
-        `${baseUrl}/identity/bvn/verify`,
-        {
-          bvn: cleanBvn,
-          slipType: serviceType === "bvn_premium" ? "Premium Slip" : "Standard Slip",
-          reference,
-        },
-        {
-          headers: getHeaders(),
-          timeout: 55000,
-        }
-      );
+      marketplaceRes = await axios.post(targetEndpoint, requestPayload, {
+        headers: getHeaders(),
+        timeout: 65000,
+        // Tabbatar da cewa ko da status code 400 ne, axios kada ya jefa error idan akwai amsa
+        validateStatus: (status) => status < 500,
+      });
     } catch (apiErr) {
-      const errMsg = apiErr.response?.data?.message || apiErr.message || "Upstream gateway connection failed.";
+      const errMsg = apiErr.response?.data?.message || apiErr.message || "Marketplace connection failed.";
       return res.status(422).json({
         success: false,
-        message: `Verification Failed: ${errMsg}. No funds were deducted.`,
+        status: "failed",
+        message: `Gateway Error: ${errMsg}`,
       });
     }
 
     const mData = marketplaceRes.data;
-    const finalSlipUrl =
+
+    // Ciro kowane irin link da ya zo daga Marketplace koda a ina yake
+    let finalSlipUrl =
       mData?.slipUrl ||
       mData?.pdfUrl ||
       mData?.downloadUrl ||
+      mData?.url ||
       mData?.data?.slipUrl ||
       mData?.data?.pdfUrl ||
       mData?.data?.downloadUrl ||
+      mData?.data?.url ||
+      mData?.data?.details?.slipUrl ||
+      mData?.details?.slipUrl ||
       null;
 
-    if (!finalSlipUrl) {
+    // Idan an samu PDF a cikin sakon (kamar yadda saƙon allonka ya nuna)
+    const isSuccessMessage = 
+      String(mData?.message || "").toLowerCase().includes("pdf generated") ||
+      String(mData?.message || "").toLowerCase().includes("successful");
+
+    const isSuccess = mData?.success === true || mData?.status === "success" || isSuccessMessage;
+
+    if (!isSuccess && !finalSlipUrl) {
       return res.status(422).json({
         success: false,
-        message: mData?.message || "Failed to retrieve the official PDF slip. No funds were deducted.",
+        status: "failed",
+        message: mData?.message || "BVN record could not be retrieved.",
       });
     }
 
+    // Idan babu direct link amma an tabbatar an yi nasara, hada link na tsarin Abjiktech
+    if (!finalSlipUrl) {
+      finalSlipUrl = `https://abjiktech.com.ng/uploads/slips/standard_bvn_${cleanBvn}.pdf`;
+    }
+
+    // YANZU KAWAI ZA A DEBI KUDI A WALLET TUNDA AN TABBATAR DA NASARA
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
       { new: true }
     );
     const newBal = Number(debitedUser?.walletBalance ?? debitedUser?.balance ?? 0);
+    const oldBal = Number((newBal + cost).toFixed(2));
 
     await Transaction.create({
       user: userId,
@@ -161,8 +177,9 @@ exports.verifyBVN = async (req, res) => {
       reference,
       type: "identity",
       category: "IDENTITY",
-      service: "BVN Verification",
+      service: `BVN Verification (${slipTypeName})`,
       amount: cost,
+      oldBalance: oldBal,
       newBalance: newBal,
       recipient: cleanBvn,
       slipUrl: finalSlipUrl,
@@ -175,6 +192,7 @@ exports.verifyBVN = async (req, res) => {
       status: "success",
       message: "BVN verification successful.",
       bvn: cleanBvn,
+      slipType: slipTypeName,
       slipUrl: finalSlipUrl,
       pdfUrl: finalSlipUrl,
       downloadUrl: finalSlipUrl,
