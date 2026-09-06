@@ -273,12 +273,11 @@ exports.downloadBVNSlip = async (req, res) => {
 
     const cleanTargetUrl = decodeURIComponent(url);
 
-    // Nemi asalin PDF din tare da fake headers don Abjiktech kar ya toshe
     const response = await axios({
       method: "GET",
       url: cleanTargetUrl,
       responseType: "stream",
-      timeout: 40000,
+      timeout: 45000,
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         Accept: "application/pdf,*/*",
