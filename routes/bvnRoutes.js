@@ -1,6 +1,5 @@
 const express = require("express");
 const router = express.Router();
-const { verifyTransactionPin } = require("../middleware/verifyPin");
 
 // 1. Safe Auth Middleware Import
 let authMiddleware;
@@ -17,17 +16,15 @@ const authorize =
   authMiddleware.restrictTo ||
   ((...roles) => (req, res, next) => next());
 
-// 2. Controller Import
-let bvnController = {};
+// 2. Safe Controller Import
+let bvnController = null;
 try {
   bvnController = require("../controllers/bvnController");
 } catch (e) {
-  try {
-    bvnController = require("../controllers/nimcController");
-  } catch (err) {}
+  console.error("BVN Controller Import Error:", e.message);
 }
 
-// Default Fallback na BVN Prices idan controller bai fitar da shi ba
+// Default Fallback na BVN Prices
 const defaultBVNPricesHandler = (req, res) => {
   const prices = {
     bvn_standard: 150,
@@ -51,7 +48,7 @@ const safe = (fn, fallbackFn) => {
     return res.status(501).json({
       success: false,
       status: "failed",
-      message: "BVN Service endpoint is currently being updated.",
+      message: "BVN Service endpoint is currently unavailable on server.",
     });
   };
 };
@@ -61,84 +58,59 @@ const safe = (fn, fallbackFn) => {
 // ==========================================
 router.get(
   "/prices",
-  safe(
-    bvnController.getBVNPrices || bvnController.getPrices,
-    defaultBVNPricesHandler
-  )
+  safe(bvnController?.getBVNPrices || bvnController?.getPrices, defaultBVNPricesHandler)
 );
 
 router.get(
   "/pricing",
-  safe(
-    bvnController.getBVNPrices || bvnController.getPrices,
-    defaultBVNPricesHandler
-  )
+  safe(bvnController?.getBVNPrices || bvnController?.getPrices, defaultBVNPricesHandler)
 );
 
 // ==========================================
-// 2. USER ROUTES (Verification & Generation)
+// 2. USER ROUTES (Verification & Slip Generation)
 // ==========================================
 
-// ✅ WANNAN SHINE AINIHIN ENDPOINT DA KE JIKIN BVNScreen.js
+// ✅ Babban kiran da ke jikin BVNScreen.js
+// (Mun bar PIN verification a hannun bvnController don kare double-check error)
 router.post(
   "/verify-and-generate",
   protect,
-  verifyTransactionPin,
   safe(
-    bvnController.verifyBVN ||
-      bvnController.verifyAndGenerate ||
-      bvnController.verify ||
-      bvnController.submitBVNRequest
+    bvnController?.verifyBVN ||
+      bvnController?.verifyAndGenerate ||
+      bvnController?.submitBVNRequest
   )
 );
 
-// Sauran aliases na verification
+// Sauran aliases
 router.post(
   "/verify",
   protect,
-  verifyTransactionPin,
-  safe(
-    bvnController.verifyBVN ||
-      bvnController.verifyAndGenerate ||
-      bvnController.verify
-  )
-);
-
-router.post(
-  "/validate",
-  protect,
-  verifyTransactionPin,
-  safe(
-    bvnController.verifyBVN ||
-      bvnController.verifyAndGenerate ||
-      bvnController.verify
-  )
+  safe(bvnController?.verifyBVN || bvnController?.verifyAndGenerate)
 );
 
 router.post(
   "/submit",
   protect,
-  verifyTransactionPin,
-  safe(bvnController.verifyBVN || bvnController.verifyAndGenerate)
+  safe(bvnController?.verifyBVN || bvnController?.verifyAndGenerate)
 );
 
 router.post(
   "/request",
   protect,
-  verifyTransactionPin,
-  safe(bvnController.verifyBVN || bvnController.verifyAndGenerate)
+  safe(bvnController?.verifyBVN || bvnController?.verifyAndGenerate)
 );
 
 router.get(
   "/my-requests",
   protect,
-  safe(bvnController.getMyBVNRequests || bvnController.getUserRequests)
+  safe(bvnController?.getMyBVNRequests || bvnController?.getUserRequests)
 );
 
 router.get(
   "/history",
   protect,
-  safe(bvnController.getMyBVNRequests || bvnController.getUserRequests)
+  safe(bvnController?.getMyBVNRequests || bvnController?.getUserRequests)
 );
 
 // ==========================================
@@ -148,35 +120,35 @@ router.get(
   "/admin/all",
   protect,
   authorize("admin", "superadmin"),
-  safe(bvnController.getAllBVNRequests || bvnController.getAdminRequests)
+  safe(bvnController?.getAllBVNRequests || bvnController?.getAdminRequests)
 );
 
 router.patch(
   "/admin/processing/:id",
   protect,
   authorize("admin", "superadmin"),
-  safe(bvnController.updateBVNStatus || bvnController.updateToProcessing)
+  safe(bvnController?.updateBVNStatus || bvnController?.updateToProcessing)
 );
 
 router.patch(
   "/admin/approve/:id",
   protect,
   authorize("admin", "superadmin"),
-  safe(bvnController.approveBVNRequest || bvnController.approveRequest)
+  safe(bvnController?.approveBVNRequest || bvnController?.approveRequest)
 );
 
 router.patch(
   "/admin/reject/:id",
   protect,
   authorize("admin", "superadmin"),
-  safe(bvnController.rejectBVNRequest || bvnController.rejectRequest)
+  safe(bvnController?.rejectBVNRequest || bvnController?.rejectRequest)
 );
 
 router.post(
   "/admin/set-price",
   protect,
   authorize("admin", "superadmin"),
-  safe(bvnController.setBVNPrice || bvnController.updatePrice)
+  safe(bvnController?.setBVNPrice || bvnController?.updatePrice)
 );
 
 module.exports = router;

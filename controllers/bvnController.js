@@ -4,13 +4,6 @@ const Transaction = require("../models/Transaction");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
-let Notification;
-try {
-  Notification = require("../models/Notification");
-} catch (e) {
-  Notification = null;
-}
-
 const resolveUserId = (req) => {
   if (req.user?.id) return req.user.id;
   if (req.user?._id) return req.user._id;
@@ -50,7 +43,6 @@ const getBaseUrl = () => {
   return `${cleanBase}/api/v1`;
 };
 
-// 1. Live Prices Handler
 exports.getBVNPrices = async (req, res) => {
   const prices = {
     bvn_standard: 150,
@@ -68,7 +60,6 @@ exports.getBVNPrices = async (req, res) => {
 };
 exports.getPrices = exports.getBVNPrices;
 
-// 2. Verify & Generate BVN Details
 exports.verifyBVN = async (req, res) => {
   try {
     const {
@@ -102,17 +93,17 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // Tace lambobi (BVN ko Phone)
-    let rawInput = String(bvn || bvnNumber || phone || phoneNumber || searchValue || "").replace(/\D/g, "").trim();
-    if (!rawInput) {
+    // Tace lambar BVN ko Waya
+    let rawDigits = String(bvn || bvnNumber || phone || phoneNumber || searchValue || "").replace(/\D/g, "").trim();
+    if (!rawDigits) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Please provide a valid BVN or phone number.",
+        message: "Please provide a valid 11-digit BVN or phone number.",
       });
     }
 
-    let cleanPhone = rawInput;
+    let cleanPhone = rawDigits;
     if (cleanPhone.startsWith("234") && cleanPhone.length >= 13) {
       cleanPhone = "0" + cleanPhone.slice(3);
     } else if (cleanPhone.length === 10 && !cleanPhone.startsWith("0")) {
@@ -130,11 +121,11 @@ exports.verifyBVN = async (req, res) => {
       return res.status(404).json({
         success: false,
         status: "failed",
-        message: "User record not found.",
+        message: "User account not found.",
       });
     }
 
-    // PIN Check
+    // PIN Verification
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
     if (storedPin) {
@@ -153,7 +144,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // Balance Check & Charge
+    // Balance Check
     const cost = Number(amount || (isPhoneSearch ? 200 : 150));
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     if (currentBal < cost) {
@@ -185,17 +176,18 @@ exports.verifyBVN = async (req, res) => {
       amount: cost,
       oldBalance: oldBal,
       newBalance: newBal,
-      recipient: rawInput,
+      recipient: rawDigits,
       status: "pending",
-      details: `BVN verification lookup for ${rawInput}`,
+      details: `BVN search query for ${rawDigits}`,
     });
 
     const baseUrl = getBaseUrl();
     let targetEndpoint = `${baseUrl}/identity/bvn/verify`;
     let requestPayload = {
-      bvn: rawInput,
+      bvn: rawDigits,
       slipType: "Standard Slip",
       format: "pdf",
+      generatePdf: true,
       reference,
     };
 
@@ -205,6 +197,7 @@ exports.verifyBVN = async (req, res) => {
         phone: cleanPhone,
         slipType: "Standard Slip",
         format: "pdf",
+        generatePdf: true,
         reference,
       };
     }
@@ -213,100 +206,103 @@ exports.verifyBVN = async (req, res) => {
     try {
       bvnRes = await axios.post(targetEndpoint, requestPayload, {
         headers: getHeaders(),
-        timeout: 45000,
+        timeout: 50000,
       });
-    } catch (primaryErr) {
-      // Fallback: Idan endpoint din waya na daban ne a gateway
+    } catch (err) {
       if (isPhoneSearch) {
+        // Backup Phone Endpoint
         targetEndpoint = `${baseUrl}/identity/bvn/phone-lookup`;
         bvnRes = await axios.post(
           targetEndpoint,
-          { phone: cleanPhone, reference },
-          { headers: getHeaders(), timeout: 45000 }
+          { phone: cleanPhone, format: "pdf", reference },
+          { headers: getHeaders(), timeout: 50000 }
         );
       } else {
-        throw primaryErr;
+        throw err;
       }
     }
 
     const resData = bvnRes.data;
     if (!resData || (!resData.success && resData.status !== "success")) {
-      throw new Error(resData?.message || "BVN record could not be retrieved from NIBSS gateway.");
+      throw new Error(resData?.message || "BVN record could not be retrieved from gateway.");
     }
 
-    const rawDetails =
+    // DEEP EXTRACTION NA DATA DAGA UPSTREAM GATEWAY
+    const rawData =
       resData.data?.details?.data ||
       resData.data?.details ||
+      resData.data?.bvnDetails ||
       resData.data ||
       resData;
 
-    // Ciro lambar BVN
-    const resolvedBvn = String(
-      rawDetails.bvn ||
-      rawDetails.bvnNumber ||
-      rawDetails.bvn_number ||
-      rawInput
-    ).trim();
-
-    // Ciro Cikakkun Sunaye daga kowane tsari na NIBSS
+    // 1. Ciro Sunaye
     const firstName = String(
-      rawDetails.firstName ||
-      rawDetails.firstname ||
-      rawDetails.first_name ||
-      ""
-    ).trim();
-
-    const lastName = String(
-      rawDetails.lastName ||
-      rawDetails.lastname ||
-      rawDetails.last_name ||
-      rawDetails.surname ||
-      ""
+      rawData.firstName || rawData.firstname || rawData.first_name || ""
     ).trim();
 
     const middleName = String(
-      rawDetails.middleName ||
-      rawDetails.middlename ||
-      rawDetails.middle_name ||
-      ""
+      rawData.middleName || rawData.middlename || rawData.middle_name || ""
     ).trim();
 
-    const computedFullName =
-      rawDetails.fullName ||
-      rawDetails.name ||
+    const lastName = String(
+      rawData.lastName || rawData.lastname || rawData.last_name || rawData.surname || ""
+    ).trim();
+
+    const fullName =
+      rawData.fullName ||
+      rawData.name ||
       `${firstName} ${middleName} ${lastName}`.replace(/\s+/g, " ").trim() ||
-      "N/A";
+      "Verified Customer";
+
+    // 2. Ciro Lambobi da Adireshi
+    const resolvedBvn = String(
+      rawData.bvn || rawData.bvnNumber || rawData.bvn_number || rawDigits
+    ).trim();
+
+    const phone1 = String(
+      rawData.phoneNumber ||
+      rawData.phoneNumber1 ||
+      rawData.phone_number1 ||
+      rawData.phone ||
+      rawData.telephoneno ||
+      cleanPhone ||
+      "N/A"
+    ).trim();
 
     const dob =
-      rawDetails.dateOfBirth ||
-      rawDetails.date_of_birth ||
-      rawDetails.dob ||
-      rawDetails.birthdate ||
+      rawData.dateOfBirth ||
+      rawData.date_of_birth ||
+      rawData.dob ||
+      rawData.birthdate ||
       "N/A";
 
-    const phoneNum =
-      rawDetails.phoneNumber ||
-      rawDetails.phoneNumber1 ||
-      rawDetails.phone ||
-      rawDetails.telephoneno ||
-      cleanPhone ||
+    const gender = String(rawData.gender || "N/A").toUpperCase();
+    const nin = rawData.nin || rawData.ninNumber || "N/A";
+
+    const residentialAddress =
+      rawData.residentialAddress ||
+      rawData.residential_address ||
+      rawData.address ||
+      rawData.residence_address ||
       "N/A";
 
-    const gender = (rawDetails.gender || "N/A").toUpperCase();
-    const nin = rawDetails.nin || rawDetails.ninNumber || "N/A";
-    const bank = rawDetails.enrollmentBank || rawDetails.enrollment_bank || rawDetails.bank || "COMMERCIAL BANK";
-    const branch = rawDetails.enrollmentBranch || rawDetails.enrollment_branch || rawDetails.branch || "N/A";
+    const state = rawData.stateOfOrigin || rawData.state_of_origin || rawData.state || "N/A";
+    const lga = rawData.lgaOfOrigin || rawData.lga_of_origin || rawData.lga || "N/A";
+    const bank = rawData.enrollmentBank || rawData.enrollment_bank || rawData.bank || "COMMERCIAL BANK";
+    const branch = rawData.enrollmentBranch || rawData.enrollment_branch || rawData.branch || "HEAD OFFICE";
 
+    // 3. Hoto & Slip Link
     const photo =
-      rawDetails.photo ||
-      rawDetails.image ||
-      rawDetails.base64Image ||
+      rawData.photo ||
+      rawData.image ||
+      rawData.base64Image ||
+      rawData.passport ||
       null;
 
     const slipUrl =
-      rawDetails.slipUrl ||
-      rawDetails.pdfUrl ||
-      rawDetails.downloadUrl ||
+      rawData.slipUrl ||
+      rawData.pdfUrl ||
+      rawData.downloadUrl ||
       resData.slipUrl ||
       resData.pdfUrl ||
       null;
@@ -317,44 +313,46 @@ exports.verifyBVN = async (req, res) => {
         status: "success",
         recipient: resolvedBvn,
         slipUrl,
-        apiResponse: rawDetails,
-        details: `BVN verification successful for ${computedFullName} (${resolvedBvn})`,
+        apiResponse: rawData,
+        details: `BVN verified successfully for ${fullName} (${resolvedBvn})`,
       }
     );
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: "BVN details retrieved successfully.",
+      message: "BVN profile retrieved successfully.",
       data: {
         bvn: resolvedBvn,
         bvnNumber: resolvedBvn,
-        fullName: computedFullName,
-        name: computedFullName,
-        firstName: firstName || computedFullName.split(" ")[0],
-        surname: lastName || computedFullName.split(" ").slice(-1)[0],
-        lastName: lastName,
-        middleName: middleName,
-        dob: dob,
+        fullName,
+        firstName: firstName || fullName.split(" ")[0],
+        middleName,
+        surname: lastName || fullName.split(" ").slice(-1)[0],
+        lastName,
+        phoneNumber: phone1,
+        phone: phone1,
         dateOfBirth: dob,
-        phone: phoneNum,
-        phoneNumber: phoneNum,
-        gender: gender,
-        nin: nin,
+        dob,
+        gender,
+        nin,
+        address: residentialAddress,
+        residentialAddress,
+        state,
+        lga,
         enrollmentBank: bank,
-        bank: bank,
+        bank,
         enrollmentBranch: branch,
-        photo: photo,
+        photo,
         image: photo,
-        slipUrl: slipUrl,
+        slipUrl,
         pdfUrl: slipUrl,
       },
       newBalance: newBal,
     });
   } catch (err) {
-    console.error("BVN Error:", err.response?.data || err.message);
+    console.error("BVN Processing Error:", err.response?.data || err.message);
 
-    // Auto-refund idan an samu matsala
     const userId = resolveUserId(req);
     const cost = Number(req.body.amount || 150);
     if (userId) {
@@ -370,7 +368,7 @@ exports.verifyBVN = async (req, res) => {
       message:
         err.response?.data?.message ||
         err.message ||
-        "Could not verify BVN. The fee has been refunded.",
+        "BVN verification failed. Fee has been auto-refunded to your wallet.",
     });
   }
 };
