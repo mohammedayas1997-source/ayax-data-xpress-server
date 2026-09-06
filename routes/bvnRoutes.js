@@ -27,7 +27,7 @@ const getController = () => {
   }
 };
 
-// Dynamic Route Invoker (Yana duba aikin a ainihin lokacin da request ya shigo)
+// Dynamic Route Invoker
 const invoke = (methodName, fallbackFn) => (req, res, next) => {
   const ctrl = getController();
   if (ctrl && typeof ctrl[methodName] === "function") {
@@ -91,7 +91,7 @@ router.get("/admin/all", protect, authorize("admin", "superadmin"), invoke("getA
 router.patch("/admin/processing/:id", protect, authorize("admin", "superadmin"), invoke("updateBVNStatus"));
 router.patch("/admin/approve/:id", protect, authorize("admin", "superadmin"), invoke("approveBVNRequest"));
 router.patch("/admin/reject/:id", protect, authorize("admin", "superadmin"), invoke("rejectBVNRequest"));
-router.get("/download-slip", bvnController.downloadBVNSlip);
+
 // Kafar saita farashi don Admin
 router.post("/admin/set-price", protect, authorize("admin", "superadmin"), invoke("setBVNPrice"));
 router.post("/admin/update-price", protect, authorize("admin", "superadmin"), invoke("setBVNPrice"));
