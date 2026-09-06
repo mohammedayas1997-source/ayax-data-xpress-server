@@ -248,8 +248,14 @@ exports.submitNIMCRequest = async (req, res) => {
     } = req.body;
 
     const finalServiceType = String(serviceType || type || serviceId || "nin").trim();
-    const finalNin = String(ninNumber || nin || searchValue || "").trim();
-    const finalPhone = String(phoneNumber || phone || searchValue || "").trim();
+    const finalNin = String(ninNumber || nin || searchValue || "").replace(/\D/g, "").trim();
+    
+    // Tace lambar waya yadda ya kamata
+    let cleanPhone = String(phoneNumber || phone || searchValue || "").replace(/\D/g, "").trim();
+    if (cleanPhone.startsWith("234") && cleanPhone.length === 13) {
+      cleanPhone = "0" + cleanPhone.slice(3);
+    }
+
     const finalPin = String(pin || transactionPin || "").trim();
     const finalDetails = formData || details || {};
 
@@ -337,7 +343,7 @@ exports.submitNIMCRequest = async (req, res) => {
 
     const transactionId = `NIMC${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
     const reference = `AYAX-NIMC-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
-    const targetIdentifier = finalNin || finalPhone || trackingId;
+    const targetIdentifier = finalServiceType === "phone" ? cleanPhone : (finalNin || cleanPhone || trackingId);
 
     // E. Save Transaction
     await Transaction.create({
@@ -354,7 +360,7 @@ exports.submitNIMCRequest = async (req, res) => {
       previousBalance: oldBal,
       recipient: targetIdentifier,
       nin: finalNin || null,
-      phoneNumber: finalPhone || null,
+      phoneNumber: cleanPhone || null,
       status: "pending",
       details: `Payment for NIMC Service (${finalServiceType}) - ID: ${targetIdentifier}`,
     });
@@ -366,7 +372,7 @@ exports.submitNIMCRequest = async (req, res) => {
         serviceType: finalServiceType,
         ninNumber: finalNin,
         trackingId: trackingId || null,
-        phoneNumber: finalPhone || null,
+        phoneNumber: cleanPhone || null,
         searchValue: targetIdentifier,
         formData: finalDetails,
         amount: amountToCharge,
@@ -379,8 +385,7 @@ exports.submitNIMCRequest = async (req, res) => {
     const baseUrl = getBaseUrl();
 
     // =========================================================================
-    // BRANCH 1: VALIDATION (48 WORKING HOURS QUEUE TO AYAX MARKETPLACE)
-    // POST /api/v1/identity/nin/validate
+    // BRANCH 1: 48-HOUR ASYNCHRONOUS VALIDATION QUEUE
     // =========================================================================
     const isValidationQueue =
       ["no_record", "sim_val", "vnin_val", "update_record", "bank_val", "mod_val", "photo_error"].includes(finalServiceType) ||
@@ -411,7 +416,6 @@ exports.submitNIMCRequest = async (req, res) => {
           });
         }
       } catch (e) {
-        // Idan marketplace yana da queued mode, bar shi a pending ga Admin
         return res.status(200).json({
           success: true,
           status: "success",
@@ -424,90 +428,142 @@ exports.submitNIMCRequest = async (req, res) => {
     }
 
     // =========================================================================
-    // BRANCH 2: DIRECT SLIP PRINTING (NIN & PHONE)
-    // POST /api/v1/identity/nin/verify OR POST /api/v1/identity/nin/verify-phone
+    // BRANCH 2: DIRECT SLIP PRINTING (WITH AUTO-LOOKUP FOR PHONE SEARCH)
     // =========================================================================
-    let targetEndpoint = `${baseUrl}/identity/nin/verify`;
-    let requestPayload = {
-      nin: finalNin,
-      slipType: finalServiceType === "premiumCard" ? "Premium Card" : "Standard Slip",
-      reference,
-    };
-
-    if (finalServiceType === "phone" || (!finalNin && finalPhone)) {
-      targetEndpoint = `${baseUrl}/identity/nin/verify-phone`;
-      requestPayload = {
-        phone: finalPhone,
-        slipType: "Standard Slip",
-        reference,
-      };
-    }
+    let resultPayload = null;
 
     try {
-      const marketplaceRes = await axios.post(targetEndpoint, requestPayload, {
-        headers: getHeaders(),
-        timeout: 45000,
-      });
+      const isPhoneSearch = finalServiceType === "phone" || (!finalNin && cleanPhone.length === 11);
 
-      const resData = marketplaceRes.data;
-      if (resData?.status === "success" || resData?.success) {
-        const resultPayload = resData.data?.details?.data || resData.data?.details || resData.data || {};
-
-        const slipDocumentUrl =
-          resultPayload.slipUrl ||
-          resultPayload.pdfUrl ||
-          resultPayload.url ||
-          resultPayload.slip ||
-          null;
-
-        await Transaction.findOneAndUpdate(
-          { reference },
-          {
-            status: "success",
-            slipUrl: slipDocumentUrl,
-            apiResponse: resultPayload,
-            details: `Completed: ${finalServiceType} processed successfully`,
-          }
+      if (isPhoneSearch) {
+        // Mataki 1: Binciko NIN ta Phone Number
+        const phoneRes = await axios.post(
+          `${baseUrl}/identity/nin/verify-phone`,
+          { phone: cleanPhone, slipType: "Standard Slip", reference },
+          { headers: getHeaders(), timeout: 45000 }
         );
 
-        if (NIMCRequest) {
-          await NIMCRequest.findOneAndUpdate(
-            { reference },
-            {
-              status: "completed",
-              resolvedAt: new Date(),
-              slipUrl: slipDocumentUrl,
-              pdfUrl: slipDocumentUrl,
-              details: resultPayload,
-            }
-          );
+        const phoneBody = phoneRes.data;
+        if (!phoneBody || (!phoneBody.success && phoneBody.status !== "success")) {
+          throw new Error(phoneBody?.message || "Phone number lookup failed on gateway.");
         }
 
-        await sendNotification(
-          userId,
-          "NIMC Slip Ready 🎉",
-          `Your verification slip for ID (${targetIdentifier}) is ready for download.`,
-          "IDENTITY"
+        const rawPhoneDetails = phoneBody.data?.details?.data || phoneBody.data?.details || phoneBody.data || {};
+        const discoveredNin =
+          rawPhoneDetails.nin ||
+          rawPhoneDetails.ninNumber ||
+          rawPhoneDetails.idNumber ||
+          phoneBody.nin;
+
+        // Mataki 2: Idan an samu NIN amma babu hoto ko cikakken suna, yi auto-lookup
+        if (discoveredNin && (!rawPhoneDetails.photo && !rawPhoneDetails.image && !rawPhoneDetails.firstname)) {
+          const autoLookupRes = await axios.post(
+            `${baseUrl}/identity/nin/verify`,
+            { nin: String(discoveredNin).trim(), slipType: "Standard Slip", reference: `AUTO-${reference}` },
+            { headers: getHeaders(), timeout: 45000 }
+          );
+
+          if (autoLookupRes.data?.data) {
+            resultPayload =
+              autoLookupRes.data.data.details?.data ||
+              autoLookupRes.data.data.details ||
+              autoLookupRes.data.data;
+          }
+        }
+
+        if (!resultPayload) {
+          resultPayload = rawPhoneDetails;
+        }
+
+        // Tabbatar da NIN ya fito
+        if (!resultPayload.nin && discoveredNin) {
+          resultPayload.nin = discoveredNin;
+        }
+      } else {
+        // Direct NIN Verification
+        const ninRes = await axios.post(
+          `${baseUrl}/identity/nin/verify`,
+          {
+            nin: finalNin,
+            slipType: finalServiceType === "premiumCard" ? "Premium Card" : "Standard Slip",
+            reference,
+          },
+          { headers: getHeaders(), timeout: 45000 }
         );
 
-        return res.status(200).json({
-          success: true,
+        const resData = ninRes.data;
+        if (!resData || (!resData.success && resData.status !== "success")) {
+          throw new Error(resData?.message || "Ayax Marketplace returned error.");
+        }
+
+        resultPayload = resData.data?.details?.data || resData.data?.details || resData.data || {};
+      }
+
+      // Gyara hanyar sauke PDF ko Slip
+      const slipDocumentUrl =
+        resultPayload.slipUrl ||
+        resultPayload.pdfUrl ||
+        resultPayload.url ||
+        resultPayload.slip ||
+        null;
+
+      await Transaction.findOneAndUpdate(
+        { reference },
+        {
           status: "success",
-          message: "NIMC Slip retrieved successfully.",
-          data: {
-            ...resultPayload,
-            fullName: resultPayload.fullName || `${resultPayload.firstname || ""} ${resultPayload.surname || ""}`.trim(),
-            nin: resultPayload.nin || finalNin,
+          slipUrl: slipDocumentUrl,
+          apiResponse: resultPayload,
+          details: `Completed: ${finalServiceType} processed successfully`,
+        }
+      );
+
+      if (NIMCRequest) {
+        await NIMCRequest.findOneAndUpdate(
+          { reference },
+          {
+            status: "completed",
+            resolvedAt: new Date(),
             slipUrl: slipDocumentUrl,
             pdfUrl: slipDocumentUrl,
-          },
+            details: resultPayload,
+          }
+        );
+      }
+
+      await sendNotification(
+        userId,
+        "NIMC Slip Ready 🎉",
+        `Your verification slip for ID (${targetIdentifier}) is ready for download.`,
+        "IDENTITY"
+      );
+
+      const computedFullName =
+        resultPayload.fullName ||
+        resultPayload.name ||
+        `${resultPayload.firstName || resultPayload.firstname || ""} ${resultPayload.middleName || resultPayload.middlename || ""} ${resultPayload.surname || ""}`.trim();
+
+      return res.status(200).json({
+        success: true,
+        status: "success",
+        message: "NIMC Slip retrieved successfully.",
+        data: {
+          ...resultPayload,
+          fullName: computedFullName || "Verified Citizen",
+          nin: resultPayload.nin || finalNin || "N/A",
+          photo: resultPayload.photo || resultPayload.image || null,
+          trackingId: resultPayload.trackingId || resultPayload.tracking_id || trackingId || "N/A",
+          telephoneno: resultPayload.telephoneno || resultPayload.phone || cleanPhone || "N/A",
+          birthdate: resultPayload.birthdate || resultPayload.dob || "N/A",
+          gender: resultPayload.gender || "N/A",
+          state: resultPayload.state || resultPayload.stateOfOrigin || "N/A",
+          lga: resultPayload.lga || resultPayload.lgaOfOrigin || "N/A",
           slipUrl: slipDocumentUrl,
           pdfUrl: slipDocumentUrl,
-          newBalance: newBal,
-        });
-      } else {
-        throw new Error(resData?.message || "Ayax Marketplace returned error.");
-      }
+        },
+        slipUrl: slipDocumentUrl,
+        pdfUrl: slipDocumentUrl,
+        newBalance: newBal,
+      });
     } catch (apiErr) {
       console.error("Ayax Marketplace API Error:", apiErr.response?.data || apiErr.message);
 
