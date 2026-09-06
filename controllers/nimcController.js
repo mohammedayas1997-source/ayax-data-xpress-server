@@ -4,8 +4,9 @@ const Transaction = require("../models/Transaction");
 const NIMCRequest = require("../models/NIMCRequest");
 const NIMCPrice = require("../models/NIMCPrice");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
-// Dynamic Imports don kariya daga server crash
+// Dynamic Imports
 let Activity;
 try {
   Activity = require("../models/Activity");
@@ -19,6 +20,25 @@ try {
 } catch (e) {
   Notification = null;
 }
+
+// Helper: Safely resolve User ID from all possible request vectors
+const resolveUserId = (req) => {
+  if (req.user?.id) return req.user.id;
+  if (req.user?._id) return req.user._id;
+  if (req.apiUser?.id) return req.apiUser.id;
+  if (req.apiUser?._id) return req.apiUser._id;
+  if (req.body?.userId) return req.body.userId;
+
+  if (req.headers?.authorization) {
+    try {
+      const parts = req.headers.authorization.split(" ");
+      const rawToken = parts.length === 2 ? parts[1] : parts[0];
+      const decoded = jwt.decode(rawToken);
+      return decoded?.id || decoded?._id || decoded?.userId || null;
+    } catch (_) {}
+  }
+  return null;
+};
 
 // Ayax Standard API Headers Generator
 const getHeaders = () => {
@@ -42,8 +62,9 @@ const getBaseUrl = () => {
   return `${cleanBase}/api/v1`;
 };
 
-// Helper don tura sanarwa ga User
+// Helper to dispatch user notifications
 const sendNotification = async (userId, title, message, category = "IDENTITY") => {
+  if (!userId) return;
   try {
     const user = await User.findById(userId);
     if (user) {
@@ -87,6 +108,7 @@ const sendNotification = async (userId, title, message, category = "IDENTITY") =
 
 // Automated Auto-Refund Processor
 const executeAutoRefund = async (userId, amountNum, reference, finalServiceType, targetIdentifier, reason) => {
+  if (!userId) return 0;
   try {
     const user = await User.findByIdAndUpdate(
       userId,
@@ -99,7 +121,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
       { new: true }
     );
 
-    if (!user) return;
+    if (!user) return 0;
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
@@ -115,10 +137,12 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
       }
     );
 
-    await NIMCRequest.findOneAndUpdate(
-      { reference },
-      { status: "rejected", adminComment: reason }
-    );
+    if (NIMCRequest) {
+      await NIMCRequest.findOneAndUpdate(
+        { reference },
+        { status: "rejected", adminComment: reason }
+      );
+    }
 
     const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     await Transaction.create({
@@ -128,7 +152,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
       reference: refundRef,
       type: "refund",
       category: "WALLET",
-      service: `Refund: NIMC ${finalServiceType.toUpperCase()}`,
+      service: `Refund: NIMC ${String(finalServiceType || "").toUpperCase()}`,
       amount: amountNum,
       oldBalance: prevBal,
       newBalance: currentBal,
@@ -148,13 +172,14 @@ const executeAutoRefund = async (userId, amountNum, reference, finalServiceType,
     await sendNotification(
       userId,
       "NIMC Service Refunded 💰",
-      `Your application for ${finalServiceType} (${targetIdentifier || "N/A"}) failed and ₦${amountNum.toLocaleString()} has been instantly refunded to your wallet. Reason: ${reason}`,
+      `Your application for ${finalServiceType} (${targetIdentifier || "N/A"}) failed and ₦${amountNum.toLocaleString()} has been refunded to your wallet. Reason: ${reason}`,
       "REFUND"
     );
 
     return currentBal;
   } catch (err) {
     console.error("NIMC Auto-Refund Execution Error:", err.message);
+    return 0;
   }
 };
 
@@ -223,17 +248,7 @@ exports.submitNIMCRequest = async (req, res) => {
     const finalPin = String(pin || transactionPin || "").trim();
     const finalDetails = formData || details || {};
 
-    // Dynamic user resolver
-    let userId = req.user?._id || req.user?.id || req.body?.userId || req.user?.userId;
-
-    if (!userId && req.headers.authorization) {
-      try {
-        const rawToken = req.headers.authorization.split(" ")[1];
-        const jwt = require("jsonwebtoken");
-        const decoded = jwt.decode(rawToken);
-        userId = decoded?.id || decoded?._id || decoded?.userId;
-      } catch (err) {}
-    }
+    const userId = resolveUserId(req);
 
     if (!userId) {
       return res.status(401).json({
@@ -251,7 +266,6 @@ exports.submitNIMCRequest = async (req, res) => {
       });
     }
 
-    // Layi guda kacal na kiran User
     const user = await User.findById(userId).select("+transactionPin +pin +walletBalance +balance");
 
     if (!user) {
@@ -269,7 +283,7 @@ exports.submitNIMCRequest = async (req, res) => {
     if (storedPin) {
       try {
         isPinValid = await bcrypt.compare(finalPin, storedPin);
-      } catch (e) {
+      } catch (_) {
         isPinValid = false;
       }
       if (!isPinValid && storedPin === finalPin) {
@@ -289,7 +303,7 @@ exports.submitNIMCRequest = async (req, res) => {
       });
     }
 
-    // B. Calculate Cost via NIMCPrice Matrix or Fallback
+    // B. Calculate Cost via NIMCPrice Matrix
     let amountToCharge = Number(amount || 0);
     if (NIMCPrice) {
       const pricing = await NIMCPrice.findOne({
@@ -331,7 +345,7 @@ exports.submitNIMCRequest = async (req, res) => {
       { new: true }
     );
 
-    const newBal = Number(debitedUser.walletBalance ?? debitedUser.balance ?? 0);
+    const newBal = Number(debitedUser?.walletBalance ?? debitedUser?.balance ?? 0);
     const oldBal = Number((newBal + amountToCharge).toFixed(2));
 
     const transactionId = `NIMC${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
@@ -375,7 +389,7 @@ exports.submitNIMCRequest = async (req, res) => {
       });
     }
 
-    // G. Gateway Candidate Endpoints
+    // G. Gateway Execution
     const baseUrl = getBaseUrl();
     const candidateEndpoints = [
       `${baseUrl}/identity/nin/verify`,
@@ -407,7 +421,7 @@ exports.submitNIMCRequest = async (req, res) => {
               timeout: 45000,
             }
           );
-          if (ayaxResponse.data) break;
+          if (ayaxResponse?.data) break;
         } catch (e) {
           if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
         }
@@ -565,13 +579,13 @@ exports.verifyNIMC = async (req, res) => {
           headers: getHeaders(),
           timeout: 30000,
         });
-        if (response.data) break;
+        if (response?.data) break;
       } catch (err) {
         if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw err;
       }
     }
 
-    const resData = response.data;
+    const resData = response?.data;
     const isSuccessful =
       resData &&
       (resData.success === true ||
@@ -611,9 +625,9 @@ exports.verifyNIMC = async (req, res) => {
  */
 exports.getMyNIMCRequests = async (req, res) => {
   try {
-    const userId = req.user?.id || req.user?._id;
+    const userId = resolveUserId(req);
     let requests = [];
-    if (NIMCRequest) {
+    if (NIMCRequest && userId) {
       requests = await NIMCRequest.find({ user: userId })
         .sort({ createdAt: -1 })
         .lean();
@@ -672,6 +686,10 @@ exports.getAllNIMCRequests = async (req, res) => {
  */
 exports.updateToProcessing = async (req, res) => {
   try {
+    if (!NIMCRequest) {
+      return res.status(500).json({ success: false, message: "NIMCRequest model unavailable." });
+    }
+
     const request = await NIMCRequest.findByIdAndUpdate(
       req.params.id,
       { status: "processing" },
@@ -699,6 +717,10 @@ exports.updateToProcessing = async (req, res) => {
  */
 exports.approveRequest = async (req, res) => {
   try {
+    if (!NIMCRequest) {
+      return res.status(500).json({ success: false, message: "NIMCRequest model unavailable." });
+    }
+
     const { adminNote, slipUrl, pdfUrl } = req.body;
     const request = await NIMCRequest.findById(req.params.id);
 
@@ -713,7 +735,9 @@ exports.approveRequest = async (req, res) => {
       request.slipUrl = slipUrl || pdfUrl;
       request.pdfUrl = pdfUrl || slipUrl;
     }
-    request.processedBy = req.user._id || req.user.id;
+
+    // Safe admin ID extraction (avoids "Cannot read properties of null (reading 'id')")
+    request.processedBy = resolveUserId(req);
 
     await request.save();
 
@@ -728,12 +752,14 @@ exports.approveRequest = async (req, res) => {
       );
     }
 
-    await sendNotification(
-      request.user,
-      "NIMC Result Slip Ready 📄",
-      `Your verification slip for NIN (${request.ninNumber || "Application"}) is ready for download in your Application History.`,
-      "IDENTITY"
-    );
+    if (request.user) {
+      await sendNotification(
+        request.user,
+        "NIMC Result Slip Ready 📄",
+        `Your verification slip for NIN (${request.ninNumber || "Application"}) is ready for download in your Application History.`,
+        "IDENTITY"
+      );
+    }
 
     return res.status(200).json({
       success: true,
@@ -755,6 +781,10 @@ exports.setNIMCPrice = async (req, res) => {
     const { serviceType, name, amount, description } = req.body;
     if (!serviceType || !amount) {
       return res.status(400).json({ success: false, message: "Service type and amount are required." });
+    }
+
+    if (!NIMCPrice) {
+      return res.status(500).json({ success: false, message: "NIMCPrice model unavailable." });
     }
 
     const priceRecord = await NIMCPrice.findOneAndUpdate(
