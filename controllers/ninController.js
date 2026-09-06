@@ -3,6 +3,7 @@ const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const axios = require("axios");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 // Dynamic Imports don kariya daga server crash
 let Activity;
@@ -18,6 +19,25 @@ try {
 } catch (e) {
   Notification = null;
 }
+
+// Safely resolve User ID
+const resolveUserId = (req) => {
+  if (req.user?._id) return req.user._id;
+  if (req.user?.id) return req.user.id;
+  if (req.apiUser?._id) return req.apiUser._id;
+  if (req.apiUser?.id) return req.apiUser.id;
+  if (req.body?.userId) return req.body.userId;
+
+  if (req.headers?.authorization) {
+    try {
+      const parts = req.headers.authorization.split(" ");
+      const rawToken = parts.length === 2 ? parts[1] : parts[0];
+      const decoded = jwt.decode(rawToken);
+      return decoded?._id || decoded?.id || decoded?.userId || null;
+    } catch (_) {}
+  }
+  return null;
+};
 
 // Ayax Standard API Headers Generator
 const getHeaders = () => {
@@ -41,8 +61,22 @@ const getBaseUrl = () => {
   return `${cleanBase}/api/v1`;
 };
 
+// Helper: Tace Validation Type zuwa ainihin IssueType da Gateway ke ganewa
+const mapValidationIssueType = (rawType) => {
+  const t = String(rawType || "").toLowerCase().trim();
+  if (t.includes("no_record") || t.includes("record") || t.includes("not found")) return "no_record";
+  if (t.includes("sim") || t.includes("telco")) return "sim_val";
+  if (t.includes("vnin")) return "vnin_val";
+  if (t.includes("update") || t.includes("record")) return "update_record";
+  if (t.includes("bank") || t.includes("bvn")) return "bank_val";
+  if (t.includes("mod") || t.includes("modification")) return "mod_val";
+  if (t.includes("photo") || t.includes("image")) return "photo_error";
+  return "no_record"; // Default fallback
+};
+
 // Helper don tura sanarwa ga User
 const sendNotification = async (userId, title, message, category = "IDENTITY") => {
+  if (!userId) return;
   try {
     const user = await User.findById(userId);
     if (user) {
@@ -86,6 +120,7 @@ const sendNotification = async (userId, title, message, category = "IDENTITY") =
 
 // Automated Auto-Refund Processor
 const executeAutoRefund = async (userId, amountNum, reference, finalType, finalNin, applicantPhone, reason) => {
+  if (!userId) return 0;
   try {
     const user = await User.findByIdAndUpdate(
       userId,
@@ -98,7 +133,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalType, finalN
       { new: true }
     );
 
-    if (!user) return;
+    if (!user) return 0;
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
@@ -116,7 +151,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalType, finalN
 
     await ValidationRequest.findOneAndUpdate(
       { reference },
-      { status: "failed", adminComment: reason }
+      { status: "rejected", adminComment: reason }
     );
 
     const refundRef = `REF-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
@@ -134,7 +169,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalType, finalN
       previousBalance: prevBal,
       recipient: finalNin,
       nin: finalNin,
-      phoneNumber: applicantPhone || user.phone,
+      phoneNumber: applicantPhone || user.phone || null,
       status: "success",
       description: `Auto-Refund of ₦${amountNum.toLocaleString()} for failed ${finalType} (NIN: ${finalNin}) (${reason})`,
       details: {
@@ -148,13 +183,14 @@ const executeAutoRefund = async (userId, amountNum, reference, finalType, finalN
     await sendNotification(
       userId,
       "Validation Fee Refunded 💰",
-      `Your ₦${amountNum.toLocaleString()} payment for ${finalType} (NIN: ${finalNin}) failed and has been instantly refunded to your wallet. Reason: ${reason}`,
+      `Your ₦${amountNum.toLocaleString()} payment for ${finalType} (NIN: ${finalNin}) failed and has been refunded to your wallet. Reason: ${reason}`,
       "REFUND"
     );
 
     return currentBal;
   } catch (err) {
     console.error("Validation Auto-Refund Execution Error:", err.message);
+    return 0;
   }
 };
 
@@ -167,7 +203,9 @@ exports.submitValidation = async (req, res) => {
     const {
       type,
       validationType,
+      serviceType,
       serviceId,
+      issueType,
       nin,
       searchValue,
       pin,
@@ -179,17 +217,44 @@ exports.submitValidation = async (req, res) => {
       formData,
     } = req.body;
 
-    const userId = req.user ? req.user._id || req.user.id : req.body.userId;
-    const finalType = String(validationType || type || "NIN Validation").trim();
-    const finalNin = String(nin || searchValue || "").trim();
+    const userId = resolveUserId(req);
+    const finalNin = String(nin || searchValue || "").replace(/\D/g, "").trim();
     const finalPin = String(pin || transactionPin || "").trim();
     const amountNum = Number(amount);
+    
+    // Tace nau'in validation zuwa slug na gateway
+    const rawType = String(issueType || validationType || serviceType || type || serviceId || "no_record").trim();
+    const cleanIssueType = mapValidationIssueType(rawType);
 
-    if (!finalType || !finalNin || !finalPin || isNaN(amountNum) || amountNum <= 0 || !userId) {
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        status: "failed",
+        message: "User session expired or unauthorized. Please log in again.",
+      });
+    }
+
+    if (!finalNin || finalNin.length !== 11) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Please provide all required fields (validation type, 11-digit NIN, transaction PIN, and valid amount).",
+        message: "Please enter a valid 11-digit National Identification Number (NIN).",
+      });
+    }
+
+    if (!finalPin) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "Please enter your 4-digit Transaction PIN.",
+      });
+    }
+
+    if (isNaN(amountNum) || amountNum <= 0) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "A valid service amount is required.",
       });
     }
 
@@ -252,7 +317,7 @@ exports.submitValidation = async (req, res) => {
       { new: true }
     );
 
-    const newBal = Number(debitedUser.walletBalance ?? debitedUser.balance ?? 0);
+    const newBal = Number(debitedUser?.walletBalance ?? debitedUser?.balance ?? 0);
     const oldBal = Number((newBal + amountNum).toFixed(2));
 
     const transactionId = `VAL${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
@@ -270,24 +335,24 @@ exports.submitValidation = async (req, res) => {
       previousBalance: oldBal,
       type: "identity",
       category: "IDENTITY",
-      service: `NIN Validation (${finalType})`,
+      service: `NIN Validation (${cleanIssueType})`,
       recipient: finalNin,
       nin: finalNin,
       phoneNumber: applicantPhone || user.phone || null,
-      details: `Payment for Validation Service (${finalType}) - NIN: ${finalNin}`,
+      details: `Payment for Validation (${cleanIssueType}) - NIN: ${finalNin}`,
       status: "pending",
     });
 
     // E. Create Initial Validation Request Record
-    await ValidationRequest.create({
+    const createdRequest = await ValidationRequest.create({
       userId,
       user: userId,
-      type: finalType,
+      type: cleanIssueType,
       service: "NIN_VALIDATION",
-      serviceId: serviceId || null,
+      serviceId: cleanIssueType,
       nin: finalNin,
       searchValue: finalNin,
-      applicantName: applicantName || user.name || user.fullName || "Client",
+      applicantName: applicantName || user.name || user.fullName || "Citizen",
       applicantPhone: applicantPhone || user.phone || "N/A",
       additionalNote: additionalNote || "",
       amount: amountNum,
@@ -297,55 +362,38 @@ exports.submitValidation = async (req, res) => {
       formData: formData || {},
     });
 
-    // F. Dispatch Live Processing to Ayax Validation Gateway
+    // F. Dispatch Kai Tsaye zuwa Asalin Uwar Garke (POST /api/v1/identity/nin/validate)
     const baseUrl = getBaseUrl();
-    let response;
-    const candidateEndpoints = [
-      `${baseUrl}/identity/validation/process`,
-      `${baseUrl}/nin/validate`,
-      `${baseUrl}/identity/nin/validate`,
-      `${baseUrl}/identity/nimc/process`,
-    ];
+    const targetEndpoint = `${baseUrl}/identity/nin/validate`;
 
     try {
-      for (const endpoint of candidateEndpoints) {
-        try {
-          response = await axios.post(
-            endpoint,
-            {
-              type: finalType,
-              serviceId,
-              nin: finalNin,
-              searchValue: finalNin,
-              reference,
-              ref_id: reference,
-              amount: amountNum,
-              applicantName: applicantName || user.name,
-              applicantPhone: applicantPhone || user.phone,
-              formData: formData || {},
-            },
-            {
-              headers: getHeaders(),
-              timeout: 45000,
-            }
-          );
-          if (response.data) break;
-        } catch (e) {
-          if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
+      const response = await axios.post(
+        targetEndpoint,
+        {
+          nin: finalNin,
+          issueType: cleanIssueType,
+          errorType: cleanIssueType,
+          reference: reference,
+          ref_id: reference,
+        },
+        {
+          headers: getHeaders(),
+          timeout: 45000,
         }
-      }
+      );
 
       const resData = response?.data;
       const isSuccessful =
         resData &&
         (resData.success === true ||
           resData.status === "success" ||
-          resData.status === true ||
           resData.code === 200 ||
           resData.code === "200");
 
       if (isSuccessful) {
         const providerPayload = resData.data || resData;
+
+        // Idan uwar garke ta mayar da slip URL nan take ko ta sanya a queue
         const slipUrl = providerPayload.slipUrl || providerPayload.pdfUrl || providerPayload.url || null;
 
         await Transaction.findOneAndUpdate(
@@ -354,17 +402,18 @@ exports.submitValidation = async (req, res) => {
             status: "success",
             slipUrl,
             apiResponse: providerPayload,
-            details: `Success: Validation completed for ${finalType}`,
+            details: `Completed: Validation submitted to upstream gateway for ${cleanIssueType}`,
           }
         );
 
-        const completedRequest = await ValidationRequest.findOneAndUpdate(
+        const updatedReq = await ValidationRequest.findOneAndUpdate(
           { reference },
           {
-            status: "completed",
+            status: slipUrl ? "completed" : "processing",
             responseDetails: providerPayload,
             slipUrl,
             pdfUrl: slipUrl,
+            adminComment: "Submitted directly to upstream NIMC clearing system.",
           },
           { new: true }
         );
@@ -373,129 +422,157 @@ exports.submitValidation = async (req, res) => {
           await Activity.create({
             user: userId,
             staffId: userId,
-            action: "VALIDATION_REQUEST_COMPLETED",
+            action: "VALIDATION_DISPATCHED",
             category: "IDENTITY",
-            details: `Successfully completed validation for ${finalType} (NIN: ${finalNin}) worth ₦${amountNum}`,
+            details: `Submitted direct validation for NIN: ${finalNin} (${cleanIssueType})`,
             targetUser: userId,
           }).catch(() => {});
         }
 
         await sendNotification(
           userId,
-          "Validation Request Approved 🎉",
-          `Your validation request for NIN (${finalNin}) has been successfully completed.`,
+          "NIN Validation Processing ⏳",
+          `Your validation request for NIN (${finalNin}) has been submitted successfully to the NIMC processing portal. Clearing takes 24-48 working hours.`,
           "IDENTITY"
         );
 
         return res.status(200).json({
           success: true,
           status: "success",
-          message: "NIN Validation completed successfully via Ayax APIs.",
+          message: "Validation request successfully dispatched directly to the central gateway.",
           data: {
-            request: completedRequest,
+            request: updatedReq,
             providerResponse: providerPayload,
           },
           newBalance: newBal,
         });
       } else {
-        throw new Error(resData?.message || "Ayax validation provider declined request.");
+        throw new Error(resData?.message || "Upstream gateway rejected the validation request.");
       }
     } catch (apiError) {
       console.error(
-        "Ayax Validation Gateway Connection Error:",
+        "Direct Validation Gateway Error:",
         apiError.response?.status,
         apiError.response?.data || apiError.message
       );
 
-      const errMsg =
-        apiError.response?.data?.message || apiError.message || "Validation gateway timed out";
+      // Idan server ta samu timeout ko gateway ta bashi 48-hours queue amsa ba tare da error na rejection ba
+      const statusCode = apiError.response?.status;
+      const errBody = apiError.response?.data;
 
-      const refundBal = await executeAutoRefund(
-        userId,
-        amountNum,
-        reference,
-        finalType,
-        finalNin,
-        applicantPhone,
-        errMsg
+      // Idan kuskuren rashin kudi ne a wallet din Gateway ko wani gazawa ta can
+      const failureReason =
+        errBody?.message || apiError.message || "Upstream clearing gateway communication error";
+
+      // Idan gateway din bata samu ba ko ta yi rejection na kudi/tsari, mayar da kudi
+      if (statusCode === 400 || statusCode === 422 || statusCode === 402 || statusCode === 404) {
+        const refundBal = await executeAutoRefund(
+          userId,
+          amountNum,
+          reference,
+          cleanIssueType,
+          finalNin,
+          applicantPhone,
+          failureReason
+        );
+
+        return res.status(422).json({
+          success: false,
+          status: "failed",
+          refunded: true,
+          message: `Validation submission failed: ${failureReason}. ₦${amountNum.toLocaleString()} has been refunded to your wallet.`,
+          newBalance: refundBal,
+        });
+      }
+
+      // Idan kuma network timeout ne ko 500/502/504, bar buƙatar a matsayin 'processing' a hannun Admin maimakon refund na gaggawa
+      await Transaction.findOneAndUpdate(
+        { reference },
+        { details: `Queued upstream: ${failureReason}` }
       );
 
-      return res.status(422).json({
-        success: false,
-        status: "failed",
-        refunded: true,
-        message: `Validation service unavailable (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded to your wallet instantly.`,
-        newBalance: refundBal,
+      await ValidationRequest.findOneAndUpdate(
+        { reference },
+        { status: "processing", adminComment: `Queued for batch dispatch: ${failureReason}` }
+      );
+
+      return res.status(200).json({
+        success: true,
+        status: "success",
+        message: "Your validation request has been accepted and queued for 24-48 hours processing window.",
+        data: createdRequest,
+        newBalance: newBal,
       });
     }
   } catch (error) {
-    console.error("Submit Validation Server Error:", error);
+    console.error("Submit Validation Internal Server Error:", error);
     return res.status(500).json({
       success: false,
       status: "failed",
-      message: "Internal server error occurred while processing validation request.",
+      message: "Internal server error processing validation request.",
       error: error.message,
     });
   }
 };
 
 /**
- * 2. QUICK VALIDATION LOOKUP / VERIFY
+ * 2. QUICK VALIDATION STATUS LOOKUP
  * @route POST /api/v1/validation/verify
  */
 exports.verifyValidation = async (req, res) => {
   try {
-    const { nin, searchValue, searchType } = req.body;
-    const targetQuery = String(nin || searchValue || "").trim();
+    const { nin, searchValue } = req.body;
+    const targetNin = String(nin || searchValue || "").replace(/\D/g, "").trim();
 
-    if (!targetQuery) {
+    if (!targetNin || targetNin.length !== 11) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Identification number is required.",
+        message: "Please provide a valid 11-digit NIN.",
       });
     }
 
-    const baseUrl = getBaseUrl();
-    const candidateEndpoints = [
-      `${baseUrl}/identity/nin/verify`,
-      `${baseUrl}/identity/validation/verify`,
-      `${baseUrl}/nin/validate`,
-    ];
+    // Bincika idan akwai buƙatar da ke kan aiki a database ɗin mu
+    const localRecord = await ValidationRequest.findOne({ nin: targetNin })
+      .sort({ createdAt: -1 })
+      .lean();
 
-    let response;
-    for (const endpoint of candidateEndpoints) {
-      try {
-        response = await axios.post(
-          endpoint,
-          { nin: targetQuery, searchValue: targetQuery, searchType: searchType || "nin" },
-          { headers: getHeaders(), timeout: 30000 }
-        );
-        if (response.data) break;
-      } catch (e) {
-        if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
-      }
-    }
-
-    const resData = response.data;
-    if (resData && (resData.success === true || resData.status === "success" || resData.code === 200)) {
+    if (localRecord) {
       return res.status(200).json({
         success: true,
         status: "success",
-        data: resData.data || resData,
+        message: `Validation record found. Current status: ${localRecord.status.toUpperCase()}`,
+        data: localRecord,
       });
     }
 
-    return res.status(400).json({
+    // Idan babu, duba live verification a gateway
+    const baseUrl = getBaseUrl();
+    const response = await axios.post(
+      `${baseUrl}/identity/nin/verify`,
+      { nin: targetNin, slipType: "Standard Slip" },
+      { headers: getHeaders(), timeout: 35000 }
+    );
+
+    if (response.data?.success || response.data?.status === "success") {
+      return res.status(200).json({
+        success: true,
+        status: "success",
+        message: "NIN is active and verified.",
+        data: response.data?.data?.details || response.data?.data,
+      });
+    }
+
+    return res.status(404).json({
       success: false,
       status: "failed",
-      message: resData?.message || "Validation record not found.",
+      message: "No validation record found for this NIN.",
     });
   } catch (error) {
     return res.status(error.response?.status || 500).json({
       success: false,
       status: "failed",
-      message: error.response?.data?.message || "Identity lookup failed.",
+      message: error.response?.data?.message || "Validation lookup failed.",
       error: error.message,
     });
   }
@@ -507,10 +584,13 @@ exports.verifyValidation = async (req, res) => {
  */
 exports.getMyValidationRequests = async (req, res) => {
   try {
-    const userId = req.user?._id || req.user?.id;
-    const requests = await ValidationRequest.find({ userId })
-      .sort({ createdAt: -1 })
-      .lean();
+    const userId = resolveUserId(req);
+    let requests = [];
+    if (userId) {
+      requests = await ValidationRequest.find({ userId })
+        .sort({ createdAt: -1 })
+        .lean();
+    }
 
     return res.status(200).json({
       success: true,
@@ -530,7 +610,7 @@ exports.getMyValidationRequests = async (req, res) => {
 };
 
 /**
- * 4. ADMIN: GET ALL VALIDATION REQUESTS (DASHBOARD)
+ * 4. ADMIN: GET ALL VALIDATION REQUESTS
  * @route GET /api/v1/validation/admin/all
  */
 exports.getAllValidationRequests = async (req, res) => {
@@ -577,7 +657,7 @@ exports.approveValidation = async (req, res) => {
       request.slipUrl = slipUrl || pdfUrl;
       request.pdfUrl = pdfUrl || slipUrl;
     }
-    request.processedBy = req.user?._id || req.user?.id;
+    request.processedBy = resolveUserId(req);
     await request.save();
 
     if (request.reference) {
@@ -594,7 +674,7 @@ exports.approveValidation = async (req, res) => {
     await sendNotification(
       request.userId,
       "NIN Validation Completed 📄",
-      `Your validation request for NIN (${request.nin}) has been marked as completed by administrators.`,
+      `Your validation request for NIN (${request.nin}) has been completed. Check your status history.`,
       "IDENTITY"
     );
 
