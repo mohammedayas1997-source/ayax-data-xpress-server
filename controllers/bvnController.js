@@ -199,7 +199,19 @@ exports.verifyBVN = async (req, res) => {
       finalSlipUrl = `https://abjiktech.com.ng/${String(finalSlipUrl).replace(/^\/+/, "")}`;
     }
 
-    // 3. Debi kudi a wallet
+    // Dauko ainihin PDF din ta Server a maida shi Base64 don a sauke shi kai tsaye
+    let base64Pdf = null;
+    try {
+      const pdfBufferRes = await axios.get(finalSlipUrl, {
+        responseType: "arraybuffer",
+        timeout: 25000,
+      });
+      base64Pdf = Buffer.from(pdfBufferRes.data, "binary").toString("base64");
+    } catch (streamErr) {
+      console.warn("Could not convert slip to base64, falling back to link:", streamErr.message);
+    }
+
+    // 3. Debi kudi a wallet tunda an tabbatar da takardar
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
@@ -225,6 +237,7 @@ exports.verifyBVN = async (req, res) => {
       details: `BVN slip successfully retrieved for ${cleanBvn}`,
     });
 
+    // 4. Mayar da amsa tare da pdfBase64
     return res.status(200).json({
       success: true,
       status: "success",
@@ -235,6 +248,7 @@ exports.verifyBVN = async (req, res) => {
       pdfUrl: finalSlipUrl,
       downloadUrl: finalSlipUrl,
       url: finalSlipUrl,
+      pdfBase64: base64Pdf,
       newBalance: newBal,
     });
   } catch (err) {
