@@ -273,25 +273,27 @@ exports.downloadBVNSlip = async (req, res) => {
 
     const cleanTargetUrl = decodeURIComponent(url);
 
-    // Backend ke dauko ainihin PDF din (babu batun CORS a nan)
-    const response = await axios.get(cleanTargetUrl, {
+    // Nemi asalin PDF din tare da fake headers don Abjiktech kar ya toshe
+    const response = await axios({
+      method: "GET",
+      url: cleanTargetUrl,
       responseType: "stream",
-      timeout: 35000,
+      timeout: 40000,
       headers: {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        Accept: "application/pdf,*/*",
       },
     });
 
-    const fileName = `BVN_Official_Slip_${bvn || Date.now()}.pdf`;
+    const fileName = `BVN_Slip_${bvn || Date.now()}.pdf`;
 
-    // Saita headers da zasu tilasta wa browser yin saukewa (force download)
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
-    return response.data.pipe(res);
+    response.data.pipe(res);
   } catch (err) {
-    console.error("PDF Streaming Download Error:", err.message);
-    return res.status(500).send("Could not stream PDF file.");
+    console.error("PDF Download Proxy Error:", err.message);
+    return res.status(500).send("Failed to stream PDF document.");
   }
 };
 
