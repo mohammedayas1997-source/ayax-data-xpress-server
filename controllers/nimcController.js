@@ -61,6 +61,19 @@ const getBaseUrl = () => {
   return `${cleanBase}/api/v1`;
 };
 
+// Helper: Mappin kalar slip zuwa ainihin sunan da Gateway ke ganewa
+const mapSlipTypeToGateway = (serviceType) => {
+  switch (serviceType) {
+    case "premiumCard":
+      return "Premium Card";
+    case "basicSlip":
+      return "Basic Slip";
+    case "standardSlip":
+    default:
+      return "Standard Slip";
+  }
+};
+
 // Notification Helper
 const sendNotification = async (userId, title, message, category = "IDENTITY") => {
   if (!userId) return;
@@ -225,7 +238,7 @@ exports.getPrices = exports.getNIMCPrices;
 
 /**
  * 1. SUBMIT NIMC / NIN APPLICATION OR VERIFICATION REQUEST
- * Matching Ayax API Marketplace Identity Endpoints
+ * Features: Auto-lookup for Phone Searches & Requesting Official Signed PDFs
  */
 exports.submitNIMCRequest = async (req, res) => {
   try {
@@ -250,10 +263,13 @@ exports.submitNIMCRequest = async (req, res) => {
     const finalServiceType = String(serviceType || type || serviceId || "nin").trim();
     const finalNin = String(ninNumber || nin || searchValue || "").replace(/\D/g, "").trim();
     
-    // Tace lambar waya yadda ya kamata
-    let cleanPhone = String(phoneNumber || phone || searchValue || "").replace(/\D/g, "").trim();
-    if (cleanPhone.startsWith("234") && cleanPhone.length === 13) {
+    // Tace lambar waya sosai
+    let rawPhone = String(phoneNumber || phone || searchValue || "").replace(/\D/g, "").trim();
+    let cleanPhone = rawPhone;
+    if (cleanPhone.startsWith("234") && cleanPhone.length >= 13) {
       cleanPhone = "0" + cleanPhone.slice(3);
+    } else if (cleanPhone.length === 10 && !cleanPhone.startsWith("0")) {
+      cleanPhone = "0" + cleanPhone;
     }
 
     const finalPin = String(pin || transactionPin || "").trim();
@@ -343,9 +359,9 @@ exports.submitNIMCRequest = async (req, res) => {
 
     const transactionId = `NIMC${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
     const reference = `AYAX-NIMC-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
-    const targetIdentifier = finalServiceType === "phone" ? cleanPhone : (finalNin || cleanPhone || trackingId);
+    let targetIdentifier = finalServiceType === "phone" ? cleanPhone : (finalNin || cleanPhone || trackingId);
 
-    // E. Save Transaction
+    // E. Save Pending Transaction
     await Transaction.create({
       user: userId,
       userId: userId,
@@ -385,7 +401,7 @@ exports.submitNIMCRequest = async (req, res) => {
     const baseUrl = getBaseUrl();
 
     // =========================================================================
-    // BRANCH 1: 48-HOUR ASYNCHRONOUS VALIDATION QUEUE
+    // BRANCH 1: VALIDATION QUEUE (48 HOURS)
     // =========================================================================
     const isValidationQueue =
       ["no_record", "sim_val", "vnin_val", "update_record", "bank_val", "mod_val", "photo_error"].includes(finalServiceType) ||
@@ -428,18 +444,29 @@ exports.submitNIMCRequest = async (req, res) => {
     }
 
     // =========================================================================
-    // BRANCH 2: DIRECT SLIP PRINTING (WITH AUTO-LOOKUP FOR PHONE SEARCH)
+    // BRANCH 2: DIRECT SLIP PRINTING & PHONE AUTO-LOOKUP
     // =========================================================================
     let resultPayload = null;
+    const resolvedSlipType = mapSlipTypeToGateway(finalServiceType);
 
     try {
       const isPhoneSearch = finalServiceType === "phone" || (!finalNin && cleanPhone.length === 11);
 
       if (isPhoneSearch) {
-        // Mataki 1: Binciko NIN ta Phone Number
+        if (!cleanPhone || cleanPhone.length < 11) {
+          throw new Error("Please provide a valid 11-digit Nigerian phone number.");
+        }
+
+        // Mataki 1: Binciko NIN ta Phone Number tare da neman ainihin PDF
         const phoneRes = await axios.post(
           `${baseUrl}/identity/nin/verify-phone`,
-          { phone: cleanPhone, slipType: "Standard Slip", reference },
+          {
+            phone: cleanPhone,
+            slipType: resolvedSlipType,
+            format: "pdf",
+            generatePdf: true,
+            reference,
+          },
           { headers: getHeaders(), timeout: 45000 }
         );
 
@@ -448,19 +475,46 @@ exports.submitNIMCRequest = async (req, res) => {
           throw new Error(phoneBody?.message || "Phone number lookup failed on gateway.");
         }
 
-        const rawPhoneDetails = phoneBody.data?.details?.data || phoneBody.data?.details || phoneBody.data || {};
-        const discoveredNin =
+        const rawPhoneDetails =
+          phoneBody.data?.details?.data ||
+          phoneBody.data?.details ||
+          phoneBody.data ||
+          phoneBody;
+
+        // Ciro NIN daga amsar
+        let discoveredNin = String(
           rawPhoneDetails.nin ||
           rawPhoneDetails.ninNumber ||
           rawPhoneDetails.idNumber ||
-          phoneBody.nin;
+          rawPhoneDetails.vnin ||
+          rawPhoneDetails.identityNumber ||
+          phoneBody.nin ||
+          phoneBody.idNumber ||
+          ""
+        ).replace(/\D/g, "").trim();
 
-        // Mataki 2: Idan an samu NIN amma babu hoto ko cikakken suna, yi auto-lookup
-        if (discoveredNin && (!rawPhoneDetails.photo && !rawPhoneDetails.image && !rawPhoneDetails.firstname)) {
+        if (!discoveredNin && typeof phoneBody.data === "string" && phoneBody.data.replace(/\D/g, "").length === 11) {
+          discoveredNin = phoneBody.data.replace(/\D/g, "");
+        }
+
+        if (!discoveredNin || discoveredNin.length !== 11) {
+          throw new Error("Phone search succeeded, but NIMC returned no linked 11-digit NIN.");
+        }
+
+        targetIdentifier = discoveredNin;
+
+        // Mataki 2: Ciro cikakken Profile da asalin takardar PDF daga NIMC
+        try {
           const autoLookupRes = await axios.post(
             `${baseUrl}/identity/nin/verify`,
-            { nin: String(discoveredNin).trim(), slipType: "Standard Slip", reference: `AUTO-${reference}` },
-            { headers: getHeaders(), timeout: 45000 }
+            {
+              nin: discoveredNin,
+              slipType: resolvedSlipType,
+              format: "pdf",
+              generatePdf: true,
+              reference: `AUTO-${reference}`,
+            },
+            { headers: getHeaders(), timeout: 50000 }
           );
 
           if (autoLookupRes.data?.data) {
@@ -469,51 +523,61 @@ exports.submitNIMCRequest = async (req, res) => {
               autoLookupRes.data.data.details ||
               autoLookupRes.data.data;
           }
+        } catch (lookupErr) {
+          console.warn("Direct NIN lookup failed, using raw phone response:", lookupErr.message);
         }
 
         if (!resultPayload) {
           resultPayload = rawPhoneDetails;
         }
 
-        // Tabbatar da NIN ya fito
-        if (!resultPayload.nin && discoveredNin) {
-          resultPayload.nin = discoveredNin;
-        }
+        resultPayload.nin = discoveredNin;
+        resultPayload.ninNumber = discoveredNin;
+        resultPayload.telephoneno = cleanPhone;
+        resultPayload.phone = cleanPhone;
       } else {
-        // Direct NIN Verification
+        // Direct NIN Verification (Neman cikakken Profile da PDF Link)
         const ninRes = await axios.post(
           `${baseUrl}/identity/nin/verify`,
           {
             nin: finalNin,
-            slipType: finalServiceType === "premiumCard" ? "Premium Card" : "Standard Slip",
+            slipType: resolvedSlipType,
+            format: "pdf",
+            generatePdf: true,
+            downloadSlip: true,
             reference,
           },
-          { headers: getHeaders(), timeout: 45000 }
+          { headers: getHeaders(), timeout: 50000 }
         );
 
         const resData = ninRes.data;
         if (!resData || (!resData.success && resData.status !== "success")) {
-          throw new Error(resData?.message || "Ayax Marketplace returned error.");
+          throw new Error(resData?.message || "NIMC Gateway returned error.");
         }
 
         resultPayload = resData.data?.details?.data || resData.data?.details || resData.data || {};
       }
 
-      // Gyara hanyar sauke PDF ko Slip
+      // Ciro ainihin link din PDF na asali
       const slipDocumentUrl =
         resultPayload.slipUrl ||
         resultPayload.pdfUrl ||
+        resultPayload.downloadUrl ||
+        resultPayload.fileUrl ||
         resultPayload.url ||
         resultPayload.slip ||
         null;
+
+      const finalResolvedNin = resultPayload.nin || resultPayload.ninNumber || targetIdentifier;
 
       await Transaction.findOneAndUpdate(
         { reference },
         {
           status: "success",
+          nin: finalResolvedNin,
           slipUrl: slipDocumentUrl,
           apiResponse: resultPayload,
-          details: `Completed: ${finalServiceType} processed successfully`,
+          details: `Completed: ${finalServiceType} processed successfully (NIN: ${finalResolvedNin})`,
         }
       );
 
@@ -522,6 +586,7 @@ exports.submitNIMCRequest = async (req, res) => {
           { reference },
           {
             status: "completed",
+            ninNumber: finalResolvedNin,
             resolvedAt: new Date(),
             slipUrl: slipDocumentUrl,
             pdfUrl: slipDocumentUrl,
@@ -533,7 +598,7 @@ exports.submitNIMCRequest = async (req, res) => {
       await sendNotification(
         userId,
         "NIMC Slip Ready 🎉",
-        `Your verification slip for ID (${targetIdentifier}) is ready for download.`,
+        `Your verification slip for ID (${finalResolvedNin}) is ready for download.`,
         "IDENTITY"
       );
 
@@ -545,11 +610,12 @@ exports.submitNIMCRequest = async (req, res) => {
       return res.status(200).json({
         success: true,
         status: "success",
-        message: "NIMC Slip retrieved successfully.",
+        message: "NIMC details retrieved successfully.",
         data: {
           ...resultPayload,
           fullName: computedFullName || "Verified Citizen",
-          nin: resultPayload.nin || finalNin || "N/A",
+          nin: finalResolvedNin,
+          ninNumber: finalResolvedNin,
           photo: resultPayload.photo || resultPayload.image || null,
           trackingId: resultPayload.trackingId || resultPayload.tracking_id || trackingId || "N/A",
           telephoneno: resultPayload.telephoneno || resultPayload.phone || cleanPhone || "N/A",
@@ -565,10 +631,10 @@ exports.submitNIMCRequest = async (req, res) => {
         newBalance: newBal,
       });
     } catch (apiErr) {
-      console.error("Ayax Marketplace API Error:", apiErr.response?.data || apiErr.message);
+      console.error("NIMC Gateway API Error:", apiErr.response?.data || apiErr.message);
 
       const failureReason =
-        apiErr.response?.data?.message || apiErr.message || "Failed to retrieve identity slip";
+        apiErr.response?.data?.message || apiErr.message || "Failed to retrieve identity details";
 
       const refundBal = await executeAutoRefund(
         userId,
@@ -622,8 +688,8 @@ exports.verifyNIMC = async (req, res) => {
 
     const payload =
       searchType === "phone"
-        ? { phone: targetQuery, slipType: "Standard Slip" }
-        : { nin: targetQuery, slipType: "Standard Slip" };
+        ? { phone: targetQuery, slipType: "Standard Slip", format: "pdf" }
+        : { nin: targetQuery, slipType: "Standard Slip", format: "pdf" };
 
     const response = await axios.post(endpoint, payload, {
       headers: getHeaders(),
