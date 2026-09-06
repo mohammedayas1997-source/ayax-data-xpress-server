@@ -2,6 +2,7 @@ const axios = require("axios");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 // Dynamic Imports
 let Activity;
@@ -18,25 +19,50 @@ try {
   Notification = null;
 }
 
+// Safely resolve User ID
+const resolveUserId = (req) => {
+  if (req.user?.id) return req.user.id;
+  if (req.user?._id) return req.user._id;
+  if (req.apiUser?.id) return req.apiUser.id;
+  if (req.apiUser?._id) return req.apiUser._id;
+  if (req.body?.userId) return req.body.userId;
+
+  if (req.headers?.authorization) {
+    try {
+      const parts = req.headers.authorization.split(" ");
+      const rawToken = parts.length === 2 ? parts[1] : parts[0];
+      const decoded = jwt.decode(rawToken);
+      return decoded?.id || decoded?._id || decoded?.userId || null;
+    } catch (_) {}
+  }
+  return null;
+};
+
 // 1. Ayax API Gateway Configuration
-const RAW_URL =
-  process.env.AYAX_API_BASE_URL ||
-  process.env.MARKETPLACE_API_URL ||
-  "https://ayax-api-marketplace.onrender.com";
+const getBaseUrl = () => {
+  const rawUrl =
+    process.env.AYAX_API_BASE_URL ||
+    process.env.MARKETPLACE_API_URL ||
+    "https://ayax-api-marketplace.onrender.com";
+  const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+  return `${cleanBase}/api/v1`;
+};
 
-const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
+const getHeaders = () => {
+  const activeKey = String(
+    process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
+  ).trim();
 
-const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
-
-const getHeaders = () => ({
-  "Content-Type": "application/json",
-  "x-api-key": AYAX_API_KEY,
-  Authorization: `Bearer ${AYAX_API_KEY}`,
-});
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": activeKey,
+    Authorization: `Bearer ${activeKey}`,
+  };
+};
 
 // Helper don tura Sanarwa
 const sendNotification = async (userId, title, message, category = "IDENTITY") => {
+  if (!userId) return;
   try {
     const user = await User.findById(userId);
     if (user) {
@@ -80,6 +106,7 @@ const sendNotification = async (userId, title, message, category = "IDENTITY") =
 
 // Automated Auto-Refund Processor
 const executeAutoRefund = async (userId, amountNum, reference, targetBvn, reason) => {
+  if (!userId) return 0;
   try {
     const user = await User.findByIdAndUpdate(
       userId,
@@ -92,7 +119,7 @@ const executeAutoRefund = async (userId, amountNum, reference, targetBvn, reason
       { new: true }
     );
 
-    if (!user) return;
+    if (!user) return 0;
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
@@ -142,6 +169,7 @@ const executeAutoRefund = async (userId, amountNum, reference, targetBvn, reason
     return currentBal;
   } catch (err) {
     console.error("BVN Auto-Refund Execution Error:", err.message);
+    return 0;
   }
 };
 
@@ -158,6 +186,7 @@ exports.verifyBVN = async (req, res) => {
       searchValue,
       number,
       identityNumber,
+      serviceType,
       pin,
       transactionPin,
       amount,
@@ -170,7 +199,15 @@ exports.verifyBVN = async (req, res) => {
     const targetBvn = rawBvn.replace(/\D/g, "");
     const finalPin = String(pin || transactionPin || "").trim();
     const amountNum = Number(amount || 150);
-    const userId = req.user?._id || req.user?.id;
+    const userId = resolveUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        status: "failed",
+        message: "User session expired or unauthorized. Please re-login.",
+      });
+    }
 
     if (!targetBvn || targetBvn.length !== 11) {
       return res.status(400).json({
@@ -191,7 +228,11 @@ exports.verifyBVN = async (req, res) => {
     const user = await User.findById(userId).select("+transactionPin +pin +walletBalance +balance");
 
     if (!user) {
-      return res.status(404).json({ success: false, message: "User account not found." });
+      return res.status(404).json({
+        success: false,
+        status: "failed",
+        message: "User account not found.",
+      });
     }
 
     // A. Verify PIN
@@ -243,7 +284,7 @@ exports.verifyBVN = async (req, res) => {
       { new: true }
     );
 
-    const newBal = Number(debitedUser.walletBalance ?? debitedUser.balance ?? 0);
+    const newBal = Number(debitedUser?.walletBalance ?? debitedUser?.balance ?? 0);
     const oldBal = Number((newBal + amountNum).toFixed(2));
 
     const transactionId = `BVN${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
@@ -268,73 +309,52 @@ exports.verifyBVN = async (req, res) => {
       details: `BVN Verification Query for ${targetBvn}`,
     });
 
-    // E. Dispatch to Ayax BVN Gateway (Updated Endpoints)
+    // E. Dispatch kai tsaye zuwa Ayax API Marketplace Identity Endpoint
     try {
-      let response;
-      const candidateEndpoints = [
-        `${AYAX_API_BASE_URL}/verification/bvn`,
-        `${AYAX_API_BASE_URL}/verification/bvn-verify`,
-        `${AYAX_API_BASE_URL}/services/bvn`,
-        `${AYAX_API_BASE_URL}/identity-verification/bvn`,
-        `${AYAX_API_BASE_URL}/vtu/verification/bvn`,
-        `${AYAX_API_BASE_URL}/identity/bvn/verify`,
-      ];
+      const baseUrl = getBaseUrl();
+      const endpoint = `${baseUrl}/identity/bvn/verify`;
 
-      let lastError = null;
-      for (const endpoint of candidateEndpoints) {
-        try {
-          response = await axios.post(
-            endpoint,
-            {
-              bvn: targetBvn,
-              bvnNumber: targetBvn,
-              idNumber: targetBvn,
-              id: targetBvn,
-              number: targetBvn,
-              searchValue: targetBvn,
-              service: "bvn",
-              serviceType: "bvn_verification",
-              type: "bvn",
-              reference,
-              ref_id: reference,
-              amount: amountNum,
-            },
-            {
-              headers: getHeaders(),
-              timeout: 30000,
-            }
-          );
-          if (response?.data) {
-            lastError = null;
-            break;
-          }
-        } catch (err) {
-          lastError = err;
-          console.log(`Failed endpoint [${endpoint}]:`, err.response?.data?.message || err.message);
+      const slipFormat =
+        serviceType === "bvn_premium" ? "Premium Card" : "Standard Slip";
+
+      const response = await axios.post(
+        endpoint,
+        {
+          bvn: targetBvn,
+          slipType: slipFormat,
+          reference: reference,
+        },
+        {
+          headers: getHeaders(),
+          timeout: 45000,
         }
-      }
-
-      if (!response && lastError) {
-        throw lastError;
-      }
+      );
 
       const resData = response?.data;
       const isSuccessful =
         resData &&
         (resData.success === true ||
           resData.status === "success" ||
-          resData.status === true ||
+          resData.code === "VERIFICATION_SUCCESSFUL" ||
           resData.code === 200 ||
           resData.code === "200");
 
       if (isSuccessful) {
-        const bvnData = resData.data || resData;
+        // Ciro ainihin bayanan BVN da hoto
+        const resultPayload = resData.data?.details?.data || resData.data?.details || resData.data || {};
+
+        const slipUrl =
+          resultPayload.slipUrl ||
+          resultPayload.pdfUrl ||
+          resultPayload.url ||
+          null;
 
         await Transaction.findOneAndUpdate(
           { reference },
           {
             status: "success",
-            apiResponse: bvnData,
+            slipUrl: slipUrl,
+            apiResponse: resultPayload,
             details: `Completed: BVN Verification for ${targetBvn}`,
           }
         );
@@ -361,7 +381,19 @@ exports.verifyBVN = async (req, res) => {
           success: true,
           status: "success",
           message: "BVN Verification successful.",
-          data: bvnData,
+          data: {
+            ...resultPayload,
+            fullName:
+              resultPayload.fullName ||
+              resultPayload.name ||
+              `${resultPayload.firstName || resultPayload.firstname || ""} ${resultPayload.middleName || ""} ${resultPayload.lastName || resultPayload.surname || ""}`.trim(),
+            bvn: resultPayload.bvn || targetBvn,
+            photo: resultPayload.photo || resultPayload.image || null,
+            pdfUrl: slipUrl,
+            slipUrl: slipUrl,
+          },
+          pdfUrl: slipUrl,
+          slipUrl: slipUrl,
           newBalance: newBal,
         });
       }
@@ -375,7 +407,7 @@ exports.verifyBVN = async (req, res) => {
       );
 
       const errMsg =
-        apiError.response?.data?.message || apiError.message || "BVN gateway timed out";
+        apiError.response?.data?.message || apiError.message || "BVN gateway communication failed";
 
       const refundBal = await executeAutoRefund(
         userId,
@@ -403,3 +435,6 @@ exports.verifyBVN = async (req, res) => {
     });
   }
 };
+
+// Aliases don dacewa da router
+exports.verifyAndGenerate = exports.verifyBVN;
