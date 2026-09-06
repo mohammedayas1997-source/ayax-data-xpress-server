@@ -141,13 +141,13 @@ exports.verifyBVN = async (req, res) => {
       reference,
     };
 
-    // 1. Kiran Marketplace ba tare da Axios ya jefar da amsar a matsayin Gateway Error ba
+    // 1. Kiran Marketplace
     let mData = null;
     try {
       const marketplaceRes = await axios.post(targetEndpoint, requestPayload, {
         headers: getHeaders(),
         timeout: 65000,
-        validateStatus: () => true, // Kar ya jefa error koda status code 502 ne
+        validateStatus: () => true,
       });
       mData = marketplaceRes.data;
     } catch (apiErr) {
@@ -162,7 +162,7 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // 2. Ciro PDF link daga kowace kusurwa ta amsar
+    // 2. Ciro PDF link
     let finalSlipUrl =
       mData?.slipUrl ||
       mData?.pdfUrl ||
@@ -191,7 +191,6 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // Idan an tabbatar da nasarar PDF amma link din ya makale
     if (!finalSlipUrl) {
       finalSlipUrl = `https://abjiktech.com.ng/uploads/slips/standard_bvn_${cleanBvn}.pdf`;
     }
@@ -200,7 +199,7 @@ exports.verifyBVN = async (req, res) => {
       finalSlipUrl = `https://abjiktech.com.ng/${String(finalSlipUrl).replace(/^\/+/, "")}`;
     }
 
-    // 3. Debi kudi a wallet tunda PDF ya kammala reras
+    // 3. Debi kudi a wallet
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
@@ -245,6 +244,40 @@ exports.verifyBVN = async (req, res) => {
       status: "failed",
       message: "An internal server error occurred. No funds were deducted.",
     });
+  }
+};
+
+// =========================================================================
+// 4. DIRECT DOWNLOAD PROXY (YANA TILASTA WA BROWSER YIN SAUKEWA A DEVICE)
+// =========================================================================
+exports.downloadBVNSlip = async (req, res) => {
+  try {
+    const { url, bvn } = req.query;
+    if (!url) {
+      return res.status(400).send("PDF URL parameter is required.");
+    }
+
+    const cleanTargetUrl = decodeURIComponent(url);
+
+    // Backend ke dauko ainihin PDF din (babu batun CORS a nan)
+    const response = await axios.get(cleanTargetUrl, {
+      responseType: "stream",
+      timeout: 35000,
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+
+    const fileName = `BVN_Official_Slip_${bvn || Date.now()}.pdf`;
+
+    // Saita headers da zasu tilasta wa browser yin saukewa (force download)
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+    return response.data.pipe(res);
+  } catch (err) {
+    console.error("PDF Streaming Download Error:", err.message);
+    return res.status(500).send("Could not stream PDF file.");
   }
 };
 
