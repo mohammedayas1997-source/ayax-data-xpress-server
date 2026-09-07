@@ -297,8 +297,10 @@ exports.register = async (req, res) => {
     const activeRef = String(referralCode || referredBy || supervisorId || "").trim();
     let assignedSupId = null;
     let assignedSupName = null;
-    let finalState = state ? String(state).trim() : "Kano";
-    let finalLga = lga ? String(lga).trim() : "Ajingi";
+    
+    // GYARA: Ba za a tilasta Kano ko Ajingi/Jengre ba
+    let finalState = state ? String(state).trim() : "";
+    let finalLga = lga ? String(lga).trim() : "";
 
     if (activeRef) {
       const phoneDigits = activeRef.replace(/[^0-9]/g, "");
@@ -314,8 +316,8 @@ exports.register = async (req, res) => {
       if (supervisor) {
         assignedSupId = supervisor._id;
         assignedSupName = supervisor.name || `${supervisor.firstName || ""} ${supervisor.surname || ""}`.trim();
-        finalState = supervisor.state || finalState;
-        finalLga = supervisor.lga || finalLga;
+        if (!finalState) finalState = supervisor.state || "";
+        if (!finalLga) finalLga = supervisor.lga || "";
       }
     }
 
@@ -332,8 +334,8 @@ exports.register = async (req, res) => {
       }
     }
 
-    const first = firstName || (name ? name.trim().split(" ")[0] : "Retail");
-    const sur = surname || (name ? name.trim().split(" ").slice(1).join(" ") : "Agent");
+    const first = firstName || (name ? name.trim().split(" ")[0] : "Customer");
+    const sur = surname || (name ? name.trim().split(" ").slice(1).join(" ") : "Member");
     const fullName = name || `${first} ${sur}`.trim();
 
     const salt = await bcrypt.genSalt(10);
@@ -352,7 +354,7 @@ exports.register = async (req, res) => {
       role: role && role.toLowerCase() === "agent" ? "agent" : (activeRef ? "agent" : "user"),
       state: finalState,
       lga: finalLga,
-      address: address || `${finalLga} LGA`,
+      address: address ? String(address).trim() : "",
       referredBy: activeRef || undefined,
       supervisorId: activeRef || undefined,
       assignedSupervisor: assignedSupId,
