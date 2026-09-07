@@ -27,98 +27,33 @@ try {
 exports.getMyNotifications = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
-    const userRole = req.user.role || "user";
-    const userLga = req.user.lga || "";
-    const userState = req.user.state || "";
+    const userCreatedAt = req.user.createdAt || new Date(0);
 
-    const user = await User.findById(userId).select("notifications role lga state").lean();
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        status: "failed",
-        message: "User account not found.",
-      });
-    }
-
-    // 1. Dauko personal notifications daga User document array
-    let userDirectNotifications = (user.notifications || []).map((n) => ({
-      _id: n._id || n.id || Math.random().toString(),
-      id: n._id || n.id,
-      title: n.title || "Alert",
-      message: n.message || n.body || "",
-      category: n.category || "DIRECT",
-      type: n.type || "info",
-      actionRoute: n.actionRoute || null,
-      isRead: Boolean(n.isRead || n.read),
-      createdAt: n.createdAt || n.date || new Date(),
-      date: n.createdAt || n.date || new Date(),
-    }));
-
-    // 2. Dauko dukkan sanarwa daga Notification Collection (ciki har da na Webhook da Broadcasts)
-    const directAndBroadcastNotifications = await Notification.find({
+    const notifications = await Notification.find({
       $or: [
+        // 1. Sakonnin wannan mai amfani kadai
         { recipient: userId },
         { user: userId },
         { userId: userId },
-        { isBroadcast: true },
-        { isGeneral: true },
-        { target: "all" },
-        { target: userRole },
-        { targetRole: userRole },
-        ...(userLga ? [{ lga: new RegExp(`^${userLga}$`, "i") }] : []),
-        ...(userState ? [{ state: new RegExp(`^${userState}$`, "i") }] : []),
-      ],
-    })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
 
-    // 3. Tsara su don su yi daidai da Frontend
-    const formattedCollectionNotifications = directAndBroadcastNotifications.map((b) => ({
-      _id: b._id,
-      id: b._id,
-      title: b.title || "Notification",
-      message: b.message || b.body || "",
-      category: b.category || b.type || "SYSTEM_ALERT",
-      type: b.type || "info",
-      actionRoute: b.actionRoute || null,
-      isRead: Array.isArray(b.readBy)
-        ? b.readBy.some((r) => String(r.userId || r) === String(userId))
-        : Boolean(b.isRead || b.read),
-      createdAt: b.createdAt || b.date || new Date(),
-      date: b.createdAt || b.date || new Date(),
-    }));
-
-    // 4. Hadawa, Tace kwafi (Remove Duplicates), da Jerawa daga sabo zuwa tsoho
-    const allCombined = [...userDirectNotifications, ...formattedCollectionNotifications];
-    const uniqueMap = new Map();
-
-    allCombined.forEach((item) => {
-      const key = `${item.title}-${item.message}-${new Date(item.createdAt).getMinutes()}`;
-      if (!uniqueMap.has(key)) {
-        uniqueMap.set(key, item);
-      }
-    });
-
-    const combinedList = Array.from(uniqueMap.values()).sort(
-      (a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date)
-    );
+        // 2. Sakonnin broadcast da aka tura bayan ranar da yayi rijista
+        {
+          $or: [{ isBroadcast: true }, { isGeneral: true }, { target: "all" }],
+          createdAt: { $gte: userCreatedAt }
+        }
+      ]
+    }).sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
-      status: "success",
-      count: combinedList.length,
-      notifications: combinedList,
-      data: combinedList,
+      data: notifications,
+      notifications
     });
   } catch (error) {
-    console.error("Fetch Notifications Error:", error);
+    console.error("Get Notifications Error:", error);
     return res.status(500).json({
       success: false,
-      status: "failed",
-      message: "Failed to fetch notifications.",
-      error: error.message,
+      message: error.message || "Failed to fetch notifications."
     });
   }
 };
