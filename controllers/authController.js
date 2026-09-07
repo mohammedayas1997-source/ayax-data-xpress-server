@@ -195,19 +195,32 @@ const createDedicatedAccount = async (user) => {
     },
   };
 
+  // Tabbatar da samun sahihiyar lambar waya mai tsawo
+  let userPhone = String(user.phone || "").replace(/[^0-9]/g, "").trim();
+  if (!userPhone || userPhone.length < 10) {
+    userPhone = "09033738409";
+  } else if (userPhone.length === 10) {
+    userPhone = `0${userPhone}`;
+  }
+
+  const firstName = user.firstName || (user.name ? user.name.split(" ")[0] : "Customer");
+  const surname = user.surname || (user.name && user.name.split(" ")[1] ? user.name.split(" ")[1] : "Ayax");
+
+  // 1. Kirkiro ko nemi Customer a Paystack
   const customerResponse = await axios.post(
     "https://api.paystack.co/customer",
     {
       email: user.email,
-      first_name: user.firstName,
-      last_name: user.surname,
-      phone: user.phone,
+      first_name: firstName,
+      last_name: surname,
+      phone: userPhone,
     },
     axiosConfig
   );
 
   const customerCode = customerResponse.data.data.customer_code;
 
+  // 2. Nemi Dedicated Virtual Account
   const accountResponse = await axios.post(
     "https://api.paystack.co/dedicated_account",
     {
@@ -219,13 +232,19 @@ const createDedicatedAccount = async (user) => {
 
   const bankData = accountResponse.data.data;
 
+  // 3. Adana a cikin Database na User
   return await User.findByIdAndUpdate(
     user._id,
     {
       paystackCustomerCode: customerCode,
-      bankName: bankData.bank.name,
+      bankName: bankData.bank?.name || "Wema Bank",
       accountNumber: bankData.account_number,
-      accountName: bankData.account_name,
+      accountName: bankData.account_name || `${firstName} ${surname}`,
+      virtualAccount: {
+        bankName: bankData.bank?.name || "Wema Bank",
+        accountNumber: bankData.account_number,
+        accountName: bankData.account_name || `${firstName} ${surname}`,
+      },
     },
     { new: true }
   );
