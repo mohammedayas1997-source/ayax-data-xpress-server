@@ -110,5 +110,11 @@ router.put("/create-pin", safeAuth("createPin"));
 
 router.post("/update-pin", safeAuth("updatePin"));
 router.put("/update-pin", safeAuth("updatePin"));
+// ==========================================
+// 4. VIRTUAL ACCOUNT GENERATION
+// ==========================================
+router.post("/generate-virtual-account", safeAuth("generateVirtualAccount"));
+router.post("/create-virtual-account", safeAuth("generateVirtualAccount"));
+router.post("/virtual-account", safeAuth("generateVirtualAccount"));
 
 module.exports = router;

@@ -1068,3 +1068,34 @@ exports.updatePin = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// POST /api/v1/auth/generate-virtual-account
+exports.generateVirtualAccount = async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?._id || req.body.userId;
+    let user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    const updatedUser = await createDedicatedAccount(user);
+
+    return res.status(200).json({
+      success: true,
+      message: "Virtual account generated successfully.",
+      bankName: updatedUser.bankName,
+      accountNumber: updatedUser.accountNumber,
+      accountName: updatedUser.accountName,
+    });
+  } catch (error) {
+    console.error("Dedicated Account Error:", error.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.response?.data?.message || "Could not generate virtual account. Please try again later.",
+    });
+  }
+};
