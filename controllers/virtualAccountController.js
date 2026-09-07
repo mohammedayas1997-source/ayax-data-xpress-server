@@ -8,14 +8,15 @@ const User = require("../models/User");
  */
 exports.getOrCreateVirtualAccount = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const userId = req.user?._id || req.user?.id;
+    const user = await User.findById(userId);
 
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Idan har user yana da account riga, a dawo masa da shi kai tsaye
-    if (user.paystackCustomerCode && user.virtualAccount && user.virtualAccount.accountNumber) {
+    // 1. Idan har user yana da account a riga, a dawo masa da shi kai tsaye
+    if (user.virtualAccount && user.virtualAccount.accountNumber) {
       return res.status(200).json({
         success: true,
         message: "Virtual account already exists",
@@ -23,14 +24,25 @@ exports.getOrCreateVirtualAccount = async (req, res) => {
       });
     }
 
-    // 1. Ƙirƙirar Customer a Paystack
+    // 2. Tabbatar da samun lambar waya mai inganci
+    let userPhone = String(user.phone || "").replace(/[^0-9]/g, "").trim();
+    if (!userPhone || userPhone.length < 10) {
+      userPhone = "09033738409";
+    } else if (userPhone.length === 10) {
+      userPhone = `0${userPhone}`;
+    }
+
+    const firstName = user.firstName || (user.name ? user.name.split(" ")[0] : "Customer");
+    const surname = user.surname || (user.name && user.name.split(" ")[1] ? user.name.split(" ")[1] : "Ayax");
+
+    // 3. Ƙirƙirar Customer a Paystack
     const customerResponse = await axios.post(
       "https://api.paystack.co/customer",
       {
         email: user.email,
-        first_name: user.name ? user.name.split(" ")[0] : "User",
-        last_name: user.name && user.name.split(" ")[1] ? user.name.split(" ")[1] : "Customer",
-        phone: user.phone || "08000000000",
+        first_name: firstName,
+        last_name: surname,
+        phone: userPhone,
       },
       {
         headers: {
@@ -42,12 +54,12 @@ exports.getOrCreateVirtualAccount = async (req, res) => {
 
     const customerCode = customerResponse.data.data.customer_code;
 
-    // 2. Ƙirƙirar Dedicated Virtual Account (DVA)
+    // 4. Ƙirƙirar Dedicated Virtual Account (DVA)
     const dvaResponse = await axios.post(
       "https://api.paystack.co/dedicated_account",
       {
         customer: customerCode,
-        preferred_bank: "wema-bank", // Zaka iya canza bankin idan kana so
+        preferred_bank: "wema-bank",
       },
       {
         headers: {
@@ -59,14 +71,18 @@ exports.getOrCreateVirtualAccount = async (req, res) => {
 
     const accountData = dvaResponse.data.data;
 
-    // 3. Ajiye bayanan a cikin Database na User
+    // 5. Ajiye bayanan a cikin Database na User
     user.paystackCustomerCode = customerCode;
+    user.bankName = accountData.bank?.name || "Wema Bank";
+    user.accountNumber = accountData.account_number;
+    user.accountName = accountData.account_name || `${firstName} ${surname}`;
     user.virtualAccount = {
       accountNumber: accountData.account_number,
-      accountName: accountData.account_name,
-      bankName: accountData.bank.name,
+      accountName: accountData.account_name || `${firstName} ${surname}`,
+      bankName: accountData.bank?.name || "Wema Bank",
     };
-    await user.save();
+
+    await user.save({ validateBeforeSave: false });
 
     return res.status(200).json({
       success: true,
@@ -77,8 +93,8 @@ exports.getOrCreateVirtualAccount = async (req, res) => {
     console.error("Create Virtual Account Error:", error.response?.data || error.message);
     return res.status(500).json({
       success: false,
-      message: "Ba a samu nasarar ƙirƙirar Virtual Account ba",
-      error: error.response?.data?.message || error.message,
+      message: error.response?.data?.message || "Could not generate virtual account.",
+      error: error.response?.data || error.message,
     });
   }
 };
