@@ -23,6 +23,8 @@ app.use(
   })
 );
 
+
+
 // --- 3. PERMISSIVE & SECURE CORS CONFIGURATION ---
 const allowedOrigins = [
   "https://www.ayaxdata.online",
@@ -32,6 +34,8 @@ const allowedOrigins = [
   "http://localhost:19006",
   "http://localhost:3000",
   "http://localhost:5173",
+  "http://localhost:5500", // VS Code Live Server
+  "http://127.0.0.1:5500",
 ];
 
 const corsOptions = {
