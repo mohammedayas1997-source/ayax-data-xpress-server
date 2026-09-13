@@ -195,7 +195,6 @@ const createDedicatedAccount = async (user) => {
     },
   };
 
-  // Tabbatar da samun sahihiyar lambar waya mai tsawo
   let userPhone = String(user.phone || "").replace(/[^0-9]/g, "").trim();
   if (!userPhone || userPhone.length < 10) {
     userPhone = "09033738409";
@@ -206,7 +205,6 @@ const createDedicatedAccount = async (user) => {
   const firstName = user.firstName || (user.name ? user.name.split(" ")[0] : "Customer");
   const surname = user.surname || (user.name && user.name.split(" ")[1] ? user.name.split(" ")[1] : "Ayax");
 
-  // 1. Kirkiro ko nemi Customer a Paystack
   const customerResponse = await axios.post(
     "https://api.paystack.co/customer",
     {
@@ -220,7 +218,6 @@ const createDedicatedAccount = async (user) => {
 
   const customerCode = customerResponse.data.data.customer_code;
 
-  // 2. Nemi Dedicated Virtual Account
   const accountResponse = await axios.post(
     "https://api.paystack.co/dedicated_account",
     {
@@ -232,7 +229,6 @@ const createDedicatedAccount = async (user) => {
 
   const bankData = accountResponse.data.data;
 
-  // 3. Adana a cikin Database na User
   return await User.findByIdAndUpdate(
     user._id,
     {
@@ -285,7 +281,7 @@ exports.register = async (req, res) => {
 
     let existingUser = await User.findOne({
       $or: [{ phone: cleanPhone }, { email: cleanEmail }],
-    });
+    }).lean();
 
     if (existingUser) {
       return res.status(400).json({
@@ -298,7 +294,6 @@ exports.register = async (req, res) => {
     let assignedSupId = null;
     let assignedSupName = null;
     
-    // GYARA: Ba za a tilasta Kano ko Ajingi/Jengre ba
     let finalState = state ? String(state).trim() : "";
     let finalLga = lga ? String(lga).trim() : "";
 
@@ -306,12 +301,11 @@ exports.register = async (req, res) => {
       const phoneDigits = activeRef.replace(/[^0-9]/g, "");
       const supervisor = await User.findOne({
         $or: [
-          { referralCode: new RegExp(`^${activeRef}$`, "i") },
-          { referralId: new RegExp(`^${activeRef}$`, "i") },
+          { referralCode: activeRef },
+          { referralId: activeRef.toUpperCase() },
           ...(phoneDigits.length >= 10 ? [{ phone: phoneDigits }, { phone: `0${phoneDigits.slice(-10)}` }] : []),
-          ...(phoneDigits.length >= 4 ? [{ phone: new RegExp(`${phoneDigits}$`, "i") }] : []),
         ],
-      });
+      }).lean();
 
       if (supervisor) {
         assignedSupId = supervisor._id;
@@ -324,9 +318,9 @@ exports.register = async (req, res) => {
     if (!assignedSupId && finalLga && finalState) {
       const lgaSupervisor = await User.findOne({
         role: { $in: ["supervisor", "field_supervisor"] },
-        lga: new RegExp(`^${finalLga}$`, "i"),
-        state: new RegExp(`^${finalState}$`, "i"),
-      });
+        lga: finalLga,
+        state: finalState,
+      }).lean();
 
       if (lgaSupervisor) {
         assignedSupId = lgaSupervisor._id;
@@ -371,7 +365,6 @@ exports.register = async (req, res) => {
       },
     });
 
-    // Automated Role-Based Welcome Notification Dispatch
     const welcome = getWelcomeMessageByRole(newUser);
     const welcomeNotifObj = {
       title: welcome.title,
@@ -388,7 +381,7 @@ exports.register = async (req, res) => {
     await newUser.save({ validateBeforeSave: false });
 
     if (Notification) {
-      await Notification.create({
+      Notification.create({
         recipient: newUser._id,
         user: newUser._id,
         userId: newUser._id,
@@ -405,7 +398,7 @@ exports.register = async (req, res) => {
 
     try {
       if (Activity && assignedSupId) {
-        await Activity.create({
+        Activity.create({
           staffId: assignedSupId,
           user: assignedSupId,
           lga: finalLga,
@@ -413,7 +406,7 @@ exports.register = async (req, res) => {
           action: "AGENT_REGISTERED",
           details: `Retail Agent ${newUser.name} (${cleanPhone}) registered under LGA supervision.`,
           targetUser: newUser._id,
-        });
+        }).catch(() => {});
       }
     } catch (logErr) {
       console.log("Activity log skipped:", logErr.message);
@@ -443,7 +436,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// @desc Universal Login Protocol
+// @desc Universal Login Protocol (OPTIMIZED FOR HIGH SPEED & ZERO LATENCY)
 exports.login = async (req, res) => {
   try {
     const { identifier, email, phone, username, password } = req.body;
@@ -513,10 +506,10 @@ exports.login = async (req, res) => {
           isVerified: true,
           status: "active",
         });
-      } else {
+      } else if (superUser.role !== "superadmin" || superUser.isSuspended) {
         superUser.role = "superadmin";
         superUser.isSuspended = false;
-        await superUser.save({ validateBeforeSave: false });
+        superUser.save({ validateBeforeSave: false }).catch(() => {});
       }
 
       return sendToken(superUser, 200, res);
@@ -551,10 +544,10 @@ exports.login = async (req, res) => {
           isVerified: true,
           status: "active",
         });
-      } else {
+      } else if (adminUser.role !== "admin" || adminUser.isSuspended) {
         adminUser.role = "admin";
         adminUser.isSuspended = false;
-        await adminUser.save({ validateBeforeSave: false });
+        adminUser.save({ validateBeforeSave: false }).catch(() => {});
       }
 
       return sendToken(adminUser, 200, res);
@@ -589,32 +582,33 @@ exports.login = async (req, res) => {
           isVerified: true,
           status: "active",
         });
-      } else {
+      } else if (supportUser.role !== "support" || supportUser.isSuspended) {
         supportUser.role = "support";
         supportUser.isSuspended = false;
-        await supportUser.save({ validateBeforeSave: false });
+        supportUser.save({ validateBeforeSave: false }).catch(() => {});
       }
 
       return sendToken(supportUser, 200, res);
     }
 
-    // 4. STANDARD DATABASE LOOKUP
-    const searchConditions = [
+    // 4. FAST INDEXED DATABASE LOOKUP (EXACT MATCHING WITHOUT SLOW REGEX)
+    const exactMatches = [
       { email: cleanEmail },
-      { email: new RegExp(`^${cleanEmail}$`, "i") },
       { phone: cleanInput },
     ];
 
     if (cleanPhone.length >= 10) {
-      searchConditions.push(
+      const tenDigits = cleanPhone.slice(-10);
+      exactMatches.push(
         { phone: cleanPhone },
-        { phone: `0${cleanPhone.slice(-10)}` },
-        { phone: `+234${cleanPhone.slice(-10)}` },
-        { phone: `234${cleanPhone.slice(-10)}` }
+        { phone: `0${tenDigits}` },
+        { phone: `+234${tenDigits}` },
+        { phone: `234${tenDigits}` }
       );
     }
 
-    const user = await User.findOne({ $or: searchConditions }).select(
+    // Neman user ta hanyar Index kai-tsaye ba tare da full collection scan ba
+    const user = await User.findOne({ $or: exactMatches }).select(
       "+password +pin +transactionPin"
     );
 
@@ -633,7 +627,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 6. PASSWORD MATCHING
+    // 6. FAST PASSWORD MATCHING
     let isMatch = false;
 
     if (user.password) {
@@ -655,7 +649,7 @@ exports.login = async (req, res) => {
     if (!isMatch && user.password === password) {
       isMatch = true;
       user.password = password;
-      await user.save({ validateBeforeSave: false });
+      user.save({ validateBeforeSave: false }).catch(() => {});
     }
 
     if (!isMatch) {
@@ -694,7 +688,7 @@ exports.forgotPassword = async (req, res) => {
     const cleanInput = rawInput.toLowerCase();
     const user = await User.findOne({
       $or: [
-        { email: new RegExp(`^${cleanInput}$`, "i") },
+        { email: cleanInput },
         { phone: rawInput },
         { phone: rawInput.replace(/^0/, "+234") },
         { phone: rawInput.replace(/^\+234/, "0") },
@@ -708,19 +702,15 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    // 1. Generate 4-digit OTP Code
     const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
-
-    // 2. Generate Secure Direct One-Click Token Link
     const resetToken = crypto.randomBytes(24).toString("hex");
     const tokenHash = crypto.createHash("sha256").update(resetToken).digest("hex");
 
     user.resetPasswordToken = otpCode;
     user.resetPasswordLinkToken = tokenHash;
-    user.resetPasswordExpire = Date.now() + 15 * 60 * 1000; // 15 minutes
+    user.resetPasswordExpire = Date.now() + 15 * 60 * 1000;
     await user.save({ validateBeforeSave: false });
 
-    // 3. Automated Server Verification Link
     const serverOrigin = process.env.CLIENT_URL || "https://ayaxdata.online";
     const directResetLink = `${serverOrigin}/reset-password?token=${resetToken}&email=${encodeURIComponent(user.email)}`;
 
@@ -748,7 +738,6 @@ exports.forgotPassword = async (req, res) => {
       </div>
     `;
 
-    // 4. Dispatch Email via Resend HTTP API (Zero Port Blocking)
     let emailDispatched = false;
 
     if (resend) {
@@ -759,16 +748,12 @@ exports.forgotPassword = async (req, res) => {
           subject: "Password Reset Authorization - Ayax Data Xpress",
           html: emailHtml,
         })
-        .then(() => {
-          console.log(`[RESEND SUCCESS]: OTP delivered to ${user.email}`);
-        })
         .catch((err) => {
           console.error("Resend API Error:", err.message);
         });
       emailDispatched = true;
     }
 
-    // 5. Fallback via Nodemailer (if Resend is not set)
     const emailUser = process.env.EMAIL_USER;
     const emailPass = process.env.EMAIL_PASS;
 
@@ -797,7 +782,6 @@ exports.forgotPassword = async (req, res) => {
         .catch((err) => console.error("SMTP Dispatch Error:", err.message));
     }
 
-    // Return instant success response to frontend immediately
     return res.status(200).json({
       success: true,
       message: `Password reset OTP has been dispatched to ${user.email}.`,
@@ -816,7 +800,7 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
-// @desc    Authorize and Set New Password (Accepts either 4-digit OTP OR Direct Link Token)
+// @desc    Authorize and Set New Password
 // @route   POST /api/v1/auth/reset-password
 exports.resetPassword = async (req, res) => {
   try {
@@ -832,7 +816,6 @@ exports.resetPassword = async (req, res) => {
 
     let user = null;
 
-    // 1. Authorization by Direct Link Token
     if (token) {
       const hashedToken = crypto.createHash("sha256").update(token.trim()).digest("hex");
       user = await User.findOne({
@@ -841,12 +824,11 @@ exports.resetPassword = async (req, res) => {
       });
     }
 
-    // 2. Authorization by 4-digit OTP code & Email/Identifier
     if (!user && otp) {
       const targetInput = String(email || identifier || "").trim().toLowerCase();
       user = await User.findOne({
         $or: [
-          { email: new RegExp(`^${targetInput}$`, "i") },
+          { email: targetInput },
           { phone: targetInput },
         ],
         resetPasswordToken: String(otp).trim(),
@@ -861,7 +843,6 @@ exports.resetPassword = async (req, res) => {
       });
     }
 
-    // Hash and update password securely
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(String(finalPassword), salt);
     user.resetPasswordToken = undefined;
@@ -908,7 +889,7 @@ exports.paystackWebhook = async (req, res) => {
       });
 
       if (user && amountPaid > 0) {
-        const alreadyExists = await Transaction.findOne({ reference });
+        const alreadyExists = await Transaction.findOne({ reference }).lean();
         if (!alreadyExists) {
           const previousBalance = Number(user.walletBalance || user.balance || 0);
           const newBalance = previousBalance + amountPaid;
@@ -933,7 +914,7 @@ exports.paystackWebhook = async (req, res) => {
           });
 
           if (Notification) {
-            await Notification.create({
+            Notification.create({
               user: user._id,
               recipient: user._id,
               userId: user._id,
@@ -944,7 +925,7 @@ exports.paystackWebhook = async (req, res) => {
               read: false,
               status: "unread",
               createdAt: new Date(),
-            });
+            }).catch(() => {});
           }
         }
       }
