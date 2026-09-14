@@ -246,7 +246,7 @@ const createDedicatedAccount = async (user) => {
   );
 };
 
-// @desc    Register / Signup User or Agent
+// @desc    Register / Signup User or Agent or Supervisor
 // @route   POST /api/v1/auth/register
 exports.register = async (req, res) => {
   try {
@@ -255,6 +255,7 @@ exports.register = async (req, res) => {
       surname,
       otherName,
       name,
+      fullName: reqFullName,
       email,
       phone,
       password,
@@ -267,10 +268,11 @@ exports.register = async (req, res) => {
       referredBy,
     } = req.body;
 
-    if (!phone || (!firstName && !name)) {
+    const rawFullName = (reqFullName || name || "").trim();
+    if (!phone || (!firstName && !rawFullName)) {
       return res.status(400).json({
         success: false,
-        message: "First Name and Phone Number are required.",
+        message: "First Name (or Full Name) and Phone Number are required.",
       });
     }
 
@@ -318,8 +320,8 @@ exports.register = async (req, res) => {
     if (!assignedSupId && finalLga && finalState) {
       const lgaSupervisor = await User.findOne({
         role: { $in: ["supervisor", "field_supervisor"] },
-        lga: finalLga,
-        state: finalState,
+        lga: new RegExp(`^${finalLga}$`, "i"),
+        state: new RegExp(`^${finalState}$`, "i"),
       }).lean();
 
       if (lgaSupervisor) {
@@ -328,24 +330,38 @@ exports.register = async (req, res) => {
       }
     }
 
-    const first = firstName || (name ? name.trim().split(" ")[0] : "Customer");
-    const sur = surname || (name ? name.trim().split(" ").slice(1).join(" ") : "Member");
-    const fullName = name || `${first} ${sur}`.trim();
+    // Gyaran rarrabe suna
+    const nameParts = rawFullName ? rawFullName.split(" ") : [];
+    const first = firstName || nameParts[0] || "Customer";
+    const sur = surname || (nameParts.length > 1 ? nameParts.slice(1).join(" ") : "Member");
+    const finalFullName = rawFullName || `${first} ${sur}`.trim();
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password || "Password123@", salt);
+
+    // GYARAN MATSAYI (ROLE ASSIGNMENT FIX)
+    let finalRole = "user";
+    const requestedRole = String(role || "").toLowerCase().trim();
+
+    if (requestedRole === "supervisor" || requestedRole === "field_supervisor") {
+      finalRole = "supervisor";
+    } else if (requestedRole === "agent" || activeRef) {
+      finalRole = "agent";
+    } else if (requestedRole) {
+      finalRole = requestedRole;
+    }
 
     const newUser = await User.create({
       firstName: first,
       surname: sur,
       otherName: otherName || "",
-      name: fullName.toUpperCase().trim(),
+      name: finalFullName.toUpperCase().trim(),
       email: cleanEmail,
       phone: cleanPhone,
       password: hashedPassword,
       pin: "2026",
       transactionPin: "2026",
-      role: role && role.toLowerCase() === "agent" ? "agent" : (activeRef ? "agent" : "user"),
+      role: finalRole,
       state: finalState,
       lga: finalLga,
       address: address ? String(address).trim() : "",
@@ -361,7 +377,7 @@ exports.register = async (req, res) => {
       targets: {
         dataGoal: 0,
         airtimeGoal: 0,
-        currentMonth: "August 2026",
+        currentMonth: "September 2026",
       },
     });
 
@@ -403,8 +419,8 @@ exports.register = async (req, res) => {
           user: assignedSupId,
           lga: finalLga,
           state: finalState,
-          action: "AGENT_REGISTERED",
-          details: `Retail Agent ${newUser.name} (${cleanPhone}) registered under LGA supervision.`,
+          action: finalRole === "supervisor" ? "SUPERVISOR_APPOINTED" : "AGENT_REGISTERED",
+          details: `${finalRole.toUpperCase()} ${newUser.name} (${cleanPhone}) registered in ${finalLga} LGA, ${finalState}.`,
           targetUser: newUser._id,
         }).catch(() => {});
       }
@@ -591,7 +607,7 @@ exports.login = async (req, res) => {
       return sendToken(supportUser, 200, res);
     }
 
-    // 4. FAST INDEXED DATABASE LOOKUP (EXACT MATCHING WITHOUT SLOW REGEX)
+    // 4. FAST INDEXED DATABASE LOOKUP
     const exactMatches = [
       { email: cleanEmail },
       { phone: cleanInput },
@@ -607,7 +623,6 @@ exports.login = async (req, res) => {
       );
     }
 
-    // Neman user ta hanyar Index kai-tsaye ba tare da full collection scan ba
     const user = await User.findOne({ $or: exactMatches }).select(
       "+password +pin +transactionPin"
     );
