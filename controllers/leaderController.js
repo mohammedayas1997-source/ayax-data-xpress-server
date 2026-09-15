@@ -13,10 +13,10 @@ try {
 // 1. Get State Manager (Leader) Dashboard Data
 exports.getLeaderDashboard = async (req, res) => {
   try {
-    const leaderId = req.user._id;
-    const leaderState = req.user.state || req.query.state || "Kano";
-
+    const leaderId = req.user._id || req.user.id;
     const leaderUser = await User.findById(leaderId).lean();
+    const leaderState = String(leaderUser?.state || req.query.state || req.user.state || "Kano").trim();
+
     const myTargets = leaderUser?.targets || {
       dataGoal: 5000,
       airtimeGoal: 500000,
@@ -24,11 +24,13 @@ exports.getLeaderDashboard = async (req, res) => {
       currentMonth: "August 2026",
     };
 
+    // Query don tabbatar da an kwaso duk wani supervisor na jihar ko wanda aka ɗaure wa leader
+    const stateRegex = new RegExp(`^${leaderState}$`, "i");
     const supervisorQuery = {
       role: { $in: ["supervisor", "field_supervisor"] },
       $or: [
         { assignedLeader: leaderId },
-        ...(leaderState ? [{ state: new RegExp(`^${leaderState}$`, "i") }] : []),
+        { state: stateRegex },
       ],
     };
 
@@ -154,6 +156,57 @@ exports.getLeaderDashboard = async (req, res) => {
   }
 };
 
+// 1B. GET SUPERVISORS LIST (Wanda ya bata a baya yana jawo rashin nuna adadi)
+exports.getSupervisors = async (req, res) => {
+  try {
+    const leaderState = String(req.query.state || req.user?.state || "").trim();
+    const query = {
+      role: { $in: ["supervisor", "field_supervisor"] },
+    };
+
+    if (leaderState && leaderState.toLowerCase() !== "all") {
+      query.$or = [
+        { state: new RegExp(`^${leaderState}$`, "i") },
+        { assignedLeader: req.user?._id },
+      ];
+    }
+
+    const supervisors = await User.find(query)
+      .select("-password -pin -transactionPin")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formatted = supervisors.map((s) => ({
+      id: s._id,
+      _id: s._id,
+      name: s.name || `${s.firstName || ""} ${s.surname || ""}`.trim() || "Field Supervisor",
+      fullName: s.name || `${s.firstName || ""} ${s.surname || ""}`.trim() || "Field Supervisor",
+      phone: s.phone,
+      email: s.email,
+      state: s.state,
+      lga: s.lga,
+      teamSize: s.teamSize || 0,
+      agentsCount: s.agentsCount || 0,
+      dataSold: s.dataSold || 0,
+      walletBalance: s.walletBalance || s.balance || 0,
+      targets: s.targets || {},
+      isSuspended: s.isSuspended || false,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      count: formatted.length,
+      supervisors: formatted,
+      data: formatted,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to retrieve supervisors.",
+    });
+  }
+};
+
 // 2. Get Agents Stream with Targets & Supervisor Details
 exports.getAgentsStream = async (req, res) => {
   try {
@@ -195,13 +248,13 @@ exports.getAgentsStream = async (req, res) => {
       };
     });
 
-    res.status(200).json({ success: true, count: formattedAgents.length, agents: formattedAgents });
+    res.status(200).json({ success: true, count: formattedAgents.length, agents: formattedAgents, data: formattedAgents });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// 3. Get All Agents (Function din da ya bace a baya)
+// 3. Get All Agents
 exports.getAllAgents = async (req, res) => {
   try {
     const leaderState = req.user.state || req.query.state || "";
@@ -575,6 +628,7 @@ exports.downloadSupervisorReport = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
+
 // @desc    Get SM State Quota & System Auto-Distribution Matrix
 // @route   GET /api/v1/leader/my-state-target
 exports.getMyStateTarget = async (req, res) => {
@@ -593,7 +647,6 @@ exports.getMyStateTarget = async (req, res) => {
       currentMonth: "August 2026",
     };
 
-    // Nemo Supervisors da Agents na wannan jihar
     const [supervisors, agents] = await Promise.all([
       User.find({ role: { $in: ["supervisor", "field_supervisor"] }, state: new RegExp(`^${stateName}$`, "i") })
         .select("name firstName surname phone lga targets")
@@ -619,6 +672,7 @@ exports.getMyStateTarget = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
 // @desc    State Manager (SM) Appoints / Enrolls a New Field Supervisor (FS)
 // @route   POST /api/v1/leader/create-supervisor
 exports.appointStateLeader = async (req, res) => {
@@ -639,7 +693,6 @@ exports.appointStateLeader = async (req, res) => {
       ? String(email).toLowerCase().trim()
       : `${cleanPhone}@ayaxdata.online`;
 
-    // 1. Duba idan mai wannan lambar ko email din ya riga ya wanzu
     let existingUser = await User.findOne({
       $or: [{ phone: cleanPhone }, { email: cleanEmail }],
     });
@@ -648,6 +701,7 @@ exports.appointStateLeader = async (req, res) => {
       existingUser.role = "supervisor";
       existingUser.state = cleanState;
       existingUser.lga = cleanLga;
+      existingUser.assignedLeader = req.user?._id || existingUser.assignedLeader;
       if (password) existingUser.password = password;
       existingUser.isSuspended = false;
       await existingUser.save({ validateBeforeSave: false });
@@ -656,15 +710,14 @@ exports.appointStateLeader = async (req, res) => {
         success: true,
         message: `Existing user profile promoted to Field Supervisor for ${cleanLga} LGA, ${cleanState} State.`,
         data: existingUser,
+        supervisor: existingUser,
       });
     }
 
-    // 2. Raba Suna
     const names = name.trim().split(" ");
     const firstName = names[0] || "Field";
     const surname = names.slice(1).join(" ") || "Supervisor";
 
-    // 3. Kirkiri Sabon Field Supervisor a Database
     const newSupervisor = await User.create({
       firstName,
       surname,
@@ -699,6 +752,7 @@ exports.appointStateLeader = async (req, res) => {
       success: true,
       message: `Supervisor ${newSupervisor.name} successfully deployed to ${cleanLga} LGA!`,
       data: newSupervisor,
+      supervisor: newSupervisor,
     });
   } catch (error) {
     console.error("Create Supervisor Error:", error);
@@ -713,6 +767,7 @@ exports.appointStateLeader = async (req, res) => {
 exports.createSupervisor = exports.appointStateLeader;
 exports.appointManager = exports.appointStateLeader;
 exports.appointSupervisor = exports.appointStateLeader;
+exports.appointSupervisorSubmit = exports.appointStateLeader;
 
 // @desc    Leader & State Manager Dashboard Data
 // @route   GET /api/v1/leader/dashboard
@@ -722,16 +777,19 @@ exports.getSuperLeaderDashboard = async (req, res) => {
     const myState = user?.state || "Kano";
     const stateRegex = new RegExp(`^${myState.trim()}$`, "i");
 
-    // 1. Kwaso dukkan Supervisors na jihar
+    // Kwaso dukkan Supervisors na jihar ko kuma wadanda aka daura a karkashin wannan jagoran
     const supervisors = await User.find({
       role: { $in: ["supervisor", "field_supervisor"] },
-      state: stateRegex,
+      $or: [
+        { state: stateRegex },
+        { assignedLeader: user?._id },
+      ],
     })
       .select("-password -pin -transactionPin")
       .sort({ createdAt: -1 })
       .lean();
 
-    // 2. Kwaso dukkan Agents na jihar
+    // Kwaso dukkan Agents na jihar
     const agents = await User.find({
       role: "agent",
       state: stateRegex,
@@ -740,7 +798,6 @@ exports.getSuperLeaderDashboard = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    // 3. Lissafa ainihin Data da Airtime da aka sayar a jihar (Real Sales)
     let actualStateDataSold = 0;
     let actualStateAirtimeSold = 0;
 
@@ -759,6 +816,8 @@ exports.getSuperLeaderDashboard = async (req, res) => {
 
       return {
         ...sup,
+        id: sup._id,
+        _id: sup._id,
         teamSize: team.length,
         agentsCount: team.length,
         dataGoal: sup.targets?.dataGoal || 0,
@@ -769,7 +828,6 @@ exports.getSuperLeaderDashboard = async (req, res) => {
       };
     });
 
-    // Tara tallace-tallacen agents da basu da supervisor
     agents.forEach((ag) => {
       if (!ag.assignedSupervisor) {
         actualStateDataSold += Number(ag.dataVolumeSold || ag.dataSold || 0);
@@ -777,11 +835,10 @@ exports.getSuperLeaderDashboard = async (req, res) => {
       }
     });
 
-    // 4. Activity logs
     let activityLogs = [];
     if (Activity) {
       activityLogs = await Activity.find({
-        $or: [{ state: stateRegex }, { user: user._id }],
+        $or: [{ state: stateRegex }, { user: user?._id }],
       })
         .sort({ createdAt: -1 })
         .limit(25)
@@ -800,10 +857,13 @@ exports.getSuperLeaderDashboard = async (req, res) => {
         networkStats: {
           totalSupervisors: supervisors.length,
           totalAgents: agents.length,
-          overallDataSold: actualStateDataSold, // Yanzu zai dawo 0 GB idan ba a sayar ba
+          overallDataSold: actualStateDataSold,
           overallAirtimeSold: actualStateAirtimeSold,
         },
       },
+      // Hakanan a tura shi a matakin waje don kar frontend ya rasa shi
+      supervisors: supervisorsWithTeam,
+      agents,
     });
   } catch (error) {
     console.error("Dashboard Sync Error:", error);
@@ -815,58 +875,6 @@ exports.getSuperLeaderDashboard = async (req, res) => {
   }
 };
 
-// @desc    Get Active Retail Agents Stream for State
-// @route   GET /api/v1/leader/agents-stream
-exports.getAgentsStream = async (req, res) => {
-  try {
-    const user = await User.findById(req.user?._id || req.user?.id);
-    const myState = user?.state || "Kano";
-    const stateRegex = new RegExp(`^${myState.trim()}$`, "i");
-
-    const agents = await User.find({
-      role: "agent",
-      state: stateRegex,
-    })
-      .select("-password -pin -transactionPin")
-      .sort({ createdAt: -1 })
-      .lean();
-
-    return res.status(200).json({
-      success: true,
-      count: agents.length,
-      agents,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// @desc    Get State Operational Audit Logs Stream
-// @route   GET /api/v1/leader/live-audit-stream
-exports.getLiveAuditStream = async (req, res) => {
-  try {
-    const user = await User.findById(req.user?._id || req.user?.id);
-    const myState = user?.state || "Kano";
-    const stateRegex = new RegExp(`^${myState.trim()}$`, "i");
-
-    let logs = [];
-    if (Activity) {
-      logs = await Activity.find({
-        $or: [{ state: stateRegex }, { user: user._id }],
-      })
-        .sort({ createdAt: -1 })
-        .limit(50)
-        .lean();
-    }
-
-    return res.status(200).json({
-      success: true,
-      logs,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
 /**
  * @desc    Smart Target Engine: Auto-Split, Bulk LGA, Supervisor Customizer & Single Agent Dispatch
  * @route   POST /api/v1/leader/assign-target
@@ -874,7 +882,7 @@ exports.getLiveAuditStream = async (req, res) => {
 exports.assignStateLeaderTarget = async (req, res) => {
   try {
     const {
-      mode, // 'auto_split_state' | 'lga_split' | 'single_supervisor' | 'single_agent' | 'custom_bulk'
+      mode,
       targetMonth,
       month,
       dataGoal = 0,
@@ -892,9 +900,7 @@ exports.assignStateLeaderTarget = async (req, res) => {
     const finalMonth = month || targetMonth || "August 2026";
     const myState = String(state || req.user?.state || "Kano").trim();
 
-    // ----------------------------------------------------
-    // CASE 1: SINGLE AGENT DISPATCH (Turawa Agent Guda Daya)
-    // ----------------------------------------------------
+    // CASE 1: SINGLE AGENT DISPATCH
     if (mode === "single_agent" || agentId) {
       const targetAgentId = agentId || req.body.agentId;
       const agent = await User.findById(targetAgentId);
@@ -920,9 +926,7 @@ exports.assignStateLeaderTarget = async (req, res) => {
       });
     }
 
-    // ----------------------------------------------------
-    // CASE 2: SINGLE SUPERVISOR (Gyara Target din Supervisor)
-    // ----------------------------------------------------
+    // CASE 2: SINGLE SUPERVISOR
     if (mode === "single_supervisor" || (supervisorId && !agentId)) {
       const targetSupId = supervisorId || req.body.supervisorId;
       const sup = await User.findById(targetSupId);
@@ -943,7 +947,6 @@ exports.assignStateLeaderTarget = async (req, res) => {
       sup.agentGoal = Number(agentGoal) || 10;
       await sup.save({ validateBeforeSave: false });
 
-      // Auto-Distribute to Supervisor's Retail Agents
       const supAgents = await User.find({
         role: "agent",
         $or: [
@@ -979,9 +982,7 @@ exports.assignStateLeaderTarget = async (req, res) => {
       });
     }
 
-    // ----------------------------------------------------
-    // CASE 3: AUTO-SPLIT ACROSS ENTIRE STATE (Rabawa Jihar Baki Daya)
-    // ----------------------------------------------------
+    // CASE 3: AUTO-SPLIT ACROSS ENTIRE STATE
     const stateSupervisors = await User.find({
       role: { $in: ["supervisor", "field_supervisor"] },
       state: new RegExp(`^${myState}$`, "i"),
@@ -996,7 +997,6 @@ exports.assignStateLeaderTarget = async (req, res) => {
     const perSupData = Math.round(totalDataQuota / stateSupervisors.length);
     const perSupAirtime = Math.round(totalAirtimeQuota / stateSupervisors.length);
 
-    // Kowane Supervisor da nasa Agents
     await Promise.all(
       stateSupervisors.map(async (sup) => {
         sup.targets = {
@@ -1010,7 +1010,6 @@ exports.assignStateLeaderTarget = async (req, res) => {
         sup.airtimeGoal = perSupAirtime;
         await sup.save({ validateBeforeSave: false });
 
-        // Nemo Agents na wannan Supervisor
         const underAgents = await User.find({
           role: "agent",
           $or: [
