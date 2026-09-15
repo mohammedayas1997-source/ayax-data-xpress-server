@@ -2,6 +2,7 @@ const User = require("../models/User");
 const TargetHistory = require("../models/TargetHistory");
 const Activity = require("../models/Activity");
 const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
 
 let Transaction;
 try {
@@ -506,7 +507,7 @@ exports.getLiveAuditStream = async (req, res) => {
   }
 };
 
-// 7. Create New Supervisor
+// 7. Create New Supervisor (Secured with Bcrypt Hash)
 exports.createNewSupervisor = async (req, res) => {
   try {
     const { email, phone, password, firstName, surname, name, state, lga, address } = req.body;
@@ -535,13 +536,18 @@ exports.createNewSupervisor = async (req, res) => {
     const finalFirstName = firstName || name.split(" ")[0] || "Supervisor";
     const finalSurname = surname || name.split(" ").slice(1).join(" ") || "Lead";
 
+    // Bcrypt Password Hash
+    const rawPass = String(password || "Password123@").trim();
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(rawPass, salt);
+
     const newSup = await User.create({
       firstName: finalFirstName,
       surname: finalSurname,
       name: (name || `${finalFirstName} ${finalSurname}`).toUpperCase().trim(),
       email: cleanEmail,
       phone: cleanPhone,
-      password: password || "Password123@",
+      password: hashedPassword,
       pin: "2026",
       transactionPin: "2026",
       role: "supervisor",
@@ -693,6 +699,11 @@ exports.appointStateLeader = async (req, res) => {
       ? String(email).toLowerCase().trim()
       : `${cleanPhone}@ayaxdata.online`;
 
+    // Bcrypt Password Hash Setup
+    const rawPass = String(password || "Ayax@12345").trim();
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(rawPass, salt);
+
     let existingUser = await User.findOne({
       $or: [{ phone: cleanPhone }, { email: cleanEmail }],
     });
@@ -702,7 +713,7 @@ exports.appointStateLeader = async (req, res) => {
       existingUser.state = cleanState;
       existingUser.lga = cleanLga;
       existingUser.assignedLeader = req.user?._id || existingUser.assignedLeader;
-      if (password) existingUser.password = password;
+      existingUser.password = hashedPassword;
       existingUser.isSuspended = false;
       await existingUser.save({ validateBeforeSave: false });
 
@@ -724,7 +735,7 @@ exports.appointStateLeader = async (req, res) => {
       name: name.toUpperCase().trim(),
       email: cleanEmail,
       phone: cleanPhone,
-      password: password || "Password123@",
+      password: hashedPassword,
       pin: "2026",
       transactionPin: "2026",
       role: "supervisor",
@@ -861,7 +872,6 @@ exports.getSuperLeaderDashboard = async (req, res) => {
           overallAirtimeSold: actualStateAirtimeSold,
         },
       },
-      // Hakanan a tura shi a matakin waje don kar frontend ya rasa shi
       supervisors: supervisorsWithTeam,
       agents,
     });
