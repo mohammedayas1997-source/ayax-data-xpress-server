@@ -276,13 +276,17 @@ exports.register = async (req, res) => {
       });
     }
 
-    const cleanPhone = String(phone).trim();
+    const cleanPhone = String(phone).replace(/[^0-9+]/g, "").trim();
     const cleanEmail = email
       ? String(email).toLowerCase().trim()
-      : `${cleanPhone}@ayaxdata.online`;
+      : `${cleanPhone.replace(/[^0-9]/g, "")}@ayaxdata.online`;
 
     let existingUser = await User.findOne({
-      $or: [{ phone: cleanPhone }, { email: cleanEmail }],
+      $or: [
+        { phone: cleanPhone },
+        { phone: cleanPhone.replace(/[^0-9]/g, "") },
+        { email: cleanEmail }
+      ],
     }).lean();
 
     if (existingUser) {
@@ -330,7 +334,6 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Gyaran rarrabe suna
     const nameParts = rawFullName ? rawFullName.split(" ") : [];
     const first = firstName || nameParts[0] || "Customer";
     const sur = surname || (nameParts.length > 1 ? nameParts.slice(1).join(" ") : "Member");
@@ -339,7 +342,6 @@ exports.register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password || "Password123@", salt);
 
-    // GYARAN MATSAYI (ROLE ASSIGNMENT FIX)
     let finalRole = "user";
     const requestedRole = String(role || "").toLowerCase().trim();
 
@@ -607,19 +609,20 @@ exports.login = async (req, res) => {
       return sendToken(supportUser, 200, res);
     }
 
-    // 4. FAST INDEXED DATABASE LOOKUP
+    // 4. ROBUST & FAST DATABASE LOOKUP (Covers local, standard & international formats)
     const exactMatches = [
       { email: cleanEmail },
       { phone: cleanInput },
     ];
 
-    if (cleanPhone.length >= 10) {
-      const tenDigits = cleanPhone.slice(-10);
+    if (cleanPhone.length >= 7) {
+      const lastDigits = cleanPhone.slice(-10);
       exactMatches.push(
         { phone: cleanPhone },
-        { phone: `0${tenDigits}` },
-        { phone: `+234${tenDigits}` },
-        { phone: `234${tenDigits}` }
+        { phone: `0${lastDigits}` },
+        { phone: `+234${lastDigits}` },
+        { phone: `234${lastDigits}` },
+        { phone: lastDigits }
       );
     }
 
@@ -642,7 +645,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 6. FAST PASSWORD MATCHING
+    // 6. PASSWORD MATCHING (Including auto-hash repair for plaintext passwords)
     let isMatch = false;
 
     if (user.password) {
@@ -661,9 +664,11 @@ exports.login = async (req, res) => {
       }
     }
 
-    if (!isMatch && user.password === password) {
+    // Auto-Repair: Idan supervisor ya shiga da plaintext password, a canza shi zuwa bcrypt hash nan take
+    if (!isMatch && (user.password === password || user.password === String(password).trim())) {
       isMatch = true;
-      user.password = password;
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(password, salt);
       user.save({ validateBeforeSave: false }).catch(() => {});
     }
 
