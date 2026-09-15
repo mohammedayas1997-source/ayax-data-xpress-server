@@ -1,7 +1,13 @@
 const express = require("express");
 const router = express.Router();
 
-const leaderController = require("../controllers/leaderController");
+let leaderController;
+try {
+  leaderController = require("../controllers/leaderController");
+} catch (e) {
+  leaderController = require("../controllers/leader.controller");
+}
+
 let authMiddleware;
 try {
   authMiddleware = require("../middleware/authMiddleware");
@@ -50,30 +56,37 @@ router.get("/super-dashboard", safeLeader("getSuperLeaderDashboard"));
 router.get("/my-state-target", safeLeader("getMyStateTarget"));
 
 // ==========================================
-// 2. LIVE FIELD STREAMS (AGENTS & AUDIT LOGS)
+// 2. SUPERVISORS LIST (Wanda ke goge 404 a Dashboard)
 // ==========================================
+router.get("/supervisors", safeLeader("getSupervisors"));
+router.get("/all-supervisors", safeLeader("getSupervisors"));
+
+// ==========================================
+// 3. LIVE FIELD STREAMS (AGENTS & AUDIT LOGS)
+// ==========================================
+router.get("/agents", safeLeader("getAllAgents"));
 router.get("/agents-stream", safeLeader("getAgentsStream"));
 router.get("/live-audit-stream", safeLeader("getLiveAuditStream"));
 
 // ==========================================
-// 3. TARGET DEPLOYMENT (NSD & STATE MANAGER)
+// 4. TARGET DEPLOYMENT (NSD & STATE MANAGER)
 // ==========================================
 router.post("/deploy-targets", safeLeader("assignStateLeaderTarget"));
 router.post("/assign-target", safeLeader("assignStateLeaderTarget"));
 
 // ==========================================
-// 4. APPOINT & ENROLL SUPERVISORS
+// 5. APPOINT & ENROLL SUPERVISORS
 // ==========================================
 router.post("/create-supervisor", safeLeader("appointStateLeader"));
 router.post("/appoint-supervisor", safeLeader("appointStateLeader"));
 router.post("/appoint-manager", safeLeader("appointStateLeader"));
-router.patch("/toggle-status/:staffId", safeLeader("toggleStaffSuspension"));
-router.patch("/toggle-status", safeLeader("toggleStaffSuspension"));
+router.patch("/toggle-status/:staffId", safeLeader("toggleSupervisorStatus"));
+router.patch("/toggle-status", safeLeader("toggleSupervisorStatus"));
 
 // ==========================================
-// 5. AUDIT REPORTS (CSV)
+// 6. AUDIT REPORTS (CSV)
 // ==========================================
-router.get("/download-full-report", safeLeader("downloadNationalReport"));
-router.get("/download-report", safeLeader("downloadNationalReport"));
+router.get("/download-full-report", safeLeader("downloadSupervisorReport"));
+router.get("/download-report", safeLeader("downloadSupervisorReport"));
 
 module.exports = router;

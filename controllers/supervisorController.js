@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
 
 let Activity = null;
 try {
@@ -26,7 +27,6 @@ try {
   Transaction = null;
 }
 
-
 const findUserByIdentifier = async (identifier) => {
   if (!identifier) return null;
   const clean = String(identifier).trim();
@@ -44,6 +44,7 @@ const findUserByIdentifier = async (identifier) => {
 
   return await User.findOne({ $or: queryConditions });
 };
+
 /**
  * @desc    Get Supervisor Dashboard Real-Time Telemetry & Agents
  * @route   GET /api/v1/supervisor/dashboard
@@ -112,7 +113,6 @@ exports.getSupervisorDashboard = async (req, res) => {
     let totalTeamAirtimeSold = 0;
 
     const formattedAgents = agents.map((ag) => {
-      // Tabbatar an duba ko an tura masa target ta User ko an ɗauki na LGA
       const tg = ag.targets || {};
       const agentDataSold = Number(ag.dataVolumeSold || ag.dataSold || 0);
       const agentAirtimeSold = Number(ag.airtimeSold || 0);
@@ -391,13 +391,18 @@ exports.createAgent = async (req, res) => {
     const sur = surname || (name ? name.trim().split(" ").slice(1).join(" ") : "Agent");
     const fullName = name || `${first} ${sur}`.trim();
 
+    // Bcrypt Password Hashing don tabbatar da tsaron shiga (Login Security)
+    const rawPassword = String(password || "Password123@").trim();
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(rawPassword, salt);
+
     const newAgent = await User.create({
       firstName: first,
       surname: sur,
       name: fullName.toUpperCase().trim(),
       email: cleanEmail,
       phone: cleanPhone,
-      password: password || "Password123@",
+      password: hashedPassword,
       pin: "2026",
       transactionPin: "2026",
       role: "agent",
@@ -507,7 +512,6 @@ exports.getAgentSalesSummary = async (req, res) => {
   }
 };
 
-
 // 1. Reassign all agents from one supervisor to another (Bulk Transfer via Ref Code or ID)
 exports.transferAllAgentsToNewSupervisor = async (req, res) => {
   try {
@@ -535,7 +539,6 @@ exports.transferAllAgentsToNewSupervisor = async (req, res) => {
       });
     }
 
-    // Nemo tsohon da sabon supervisor ta hanyar Ref Code, Phone, ko _id
     const [oldSupervisor, newSupervisor] = await Promise.all([
       findUserByIdentifier(sourceInput),
       findUserByIdentifier(destInput),
@@ -548,7 +551,6 @@ exports.transferAllAgentsToNewSupervisor = async (req, res) => {
       });
     }
 
-    // Tattara dukkan hanyoyin da za a gano wakilan tsohon mai kula
     const oldSupId = oldSupervisor ? oldSupervisor._id : (mongoose.Types.ObjectId.isValid(sourceInput) ? sourceInput : null);
     const oldSupRef = oldSupervisor?.referralCode || sourceInput.toUpperCase();
     const oldSupPhone = oldSupervisor?.phone;
