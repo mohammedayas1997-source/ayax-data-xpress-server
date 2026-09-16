@@ -108,23 +108,23 @@ const UserSchema = new mongoose.Schema(
 
     // --- ACCESS HIERARCHY ---
     role: {
-      type: String,
-      enum: [
-        "user",
-        "agent",
-        "supervisor",
-        "field_supervisor",
-        "state_manager",
-        "leader",
-        "national_sales_director",
-        "super_leader",
-        "admin",
-        "superadmin",
-        "support",
-      ],
-      default: "user",
-      index: true,
-    },
+  type: String,
+  enum: [
+    "user",
+    "agent",
+    "supervisor",
+    "field_supervisor",
+    "state_manager",
+    "leader",
+    "national_sales_director",
+    "super_leader",
+    "admin",
+    "superadmin",
+    "support",
+  ],
+  default: "user",
+  index: true,
+},
 
     // --- TOPOLOGICAL RELATIONSHIPS & REFERRALS ---
     assignedSupervisor: {
@@ -142,10 +142,11 @@ const UserSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
-    referralId: {
-      type: String,
-      default: null,
-    },
+   referralId: {
+  type: String,
+  sparse: true,
+  index: true,
+},
     referralCode: {
       type: String,
       trim: true,
