@@ -16,16 +16,25 @@ exports.getLeaderDashboard = async (req, res) => {
   try {
     const leaderId = req.user._id || req.user.id;
     const leaderUser = await User.findById(leaderId).lean();
-    const leaderState = String(leaderUser?.state || req.query.state || req.user.state || "Kano").trim();
+
+    // 1. Tabbatar da an dauko ainihin Jihar ba tare da tilasta Kano ba
+    const rawState =
+      leaderUser?.state ||
+      req.user?.state ||
+      req.query?.state ||
+      leaderUser?.targets?.state;
+
+    const leaderState = String(rawState || "Zamfara").trim();
 
     const myTargets = leaderUser?.targets || {
       dataGoal: 5000,
       airtimeGoal: 500000,
       supervisorGoal: 10,
-      currentMonth: "August 2026",
+      currentMonth: "September 2026",
+      state: leaderState,
     };
 
-    // Query don tabbatar da an kwaso duk wani supervisor na jihar ko wanda aka ɗaure wa leader
+    // 2. Query don kwaso supervisors na wannan jihar
     const stateRegex = new RegExp(`^${leaderState}$`, "i");
     const supervisorQuery = {
       role: { $in: ["supervisor", "field_supervisor"] },
@@ -46,7 +55,7 @@ exports.getLeaderDashboard = async (req, res) => {
           role: "agent",
           $or: [
             { assignedSupervisor: sup._id },
-            { lga: sup.lga, state: sup.state },
+            { lga: sup.lga, state: sup.state || leaderState },
           ],
         })
           .select("_id name firstName surname phone walletBalance balance state lga targets")
@@ -133,12 +142,20 @@ exports.getLeaderDashboard = async (req, res) => {
       })
     );
 
-    res.status(200).json({
+    // Mayar da state da managerState a root da cikin data don kowane frontend ya gansu
+    return res.status(200).json({
       success: true,
+      status: "success",
+      state: leaderState,
+      managerState: leaderState,
+      leaderState: leaderState,
       data: {
-        leaderState: leaderState || "National",
+        state: leaderState,
+        managerState: leaderState,
+        leaderState: leaderState,
         myTargets: {
           ...myTargets,
+          state: leaderState,
           dataSold: totalStateDataSold,
           airtimeSold: totalStateAirtimeSold,
         },
@@ -153,10 +170,9 @@ exports.getLeaderDashboard = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 // 1B. GET SUPERVISORS LIST (Wanda ya bata a baya yana jawo rashin nuna adadi)
 exports.getSupervisors = async (req, res) => {
   try {
