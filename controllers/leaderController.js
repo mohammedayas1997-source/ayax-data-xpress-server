@@ -512,18 +512,24 @@ exports.createNewSupervisor = async (req, res) => {
   try {
     const { email, phone, password, firstName, surname, name, state, lga, address } = req.body;
 
-    if (!phone || (!name && (!firstName || !surname))) {
+    const rawFullName = String(name || "").trim();
+    const cleanPhone = String(phone || "").replace(/[^0-9+]/g, "").trim();
+
+    if (!cleanPhone || (!rawFullName && !firstName)) {
       return res.status(400).json({
         success: false,
         message: "Please provide supervisor name, phone number, and LGA",
       });
     }
 
-    const cleanPhone = phone.trim();
-    const cleanEmail = email ? email.toLowerCase().trim() : `${cleanPhone}@ayaxdata.online`;
+    const cleanEmail = email ? email.toLowerCase().trim() : `${cleanPhone.replace(/[^0-9]/g, "")}@ayaxdata.online`;
 
     const existingUser = await User.findOne({
-      $or: [{ phone: cleanPhone }, { email: cleanEmail }],
+      $or: [
+        { phone: cleanPhone },
+        { phone: cleanPhone.replace(/[^0-9]/g, "") },
+        { email: cleanEmail }
+      ],
     });
 
     if (existingUser) {
@@ -533,10 +539,11 @@ exports.createNewSupervisor = async (req, res) => {
       });
     }
 
-    const finalFirstName = firstName || name.split(" ")[0] || "Supervisor";
-    const finalSurname = surname || name.split(" ").slice(1).join(" ") || "Lead";
+    const nameParts = rawFullName.split(/\s+/).filter(Boolean);
+    const finalFirstName = firstName ? String(firstName).trim() : (nameParts[0] || "Supervisor");
+    const finalSurname = surname ? String(surname).trim() : (nameParts.length > 1 ? nameParts.slice(1).join(" ") : "Lead");
+    const fullDisplayName = `${finalFirstName} ${finalSurname}`.toUpperCase().trim();
 
-    // Bcrypt Password Hash
     const rawPass = String(password || "Password123@").trim();
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(rawPass, salt);
@@ -544,17 +551,17 @@ exports.createNewSupervisor = async (req, res) => {
     const newSup = await User.create({
       firstName: finalFirstName,
       surname: finalSurname,
-      name: (name || `${finalFirstName} ${finalSurname}`).toUpperCase().trim(),
+      name: fullDisplayName,
       email: cleanEmail,
       phone: cleanPhone,
       password: hashedPassword,
       pin: "2026",
       transactionPin: "2026",
       role: "supervisor",
-      state: state || req.user.state || "Kano",
+      state: state || req.user?.state || "Kano",
       lga: lga || "Central",
       address: address || `${lga}, ${state}`,
-      assignedLeader: req.user._id,
+      assignedLeader: req.user?._id || null,
       walletBalance: 50000,
       balance: 50000,
       isSuspended: false,
@@ -562,12 +569,15 @@ exports.createNewSupervisor = async (req, res) => {
       status: "active",
     });
 
-    await Activity.create({
-      staffId: req.user._id,
-      action: "SUPERVISOR_ENROLLED",
-      details: `Appointed ${newSup.name} as Supervisor for ${newSup.lga} LGA, ${newSup.state} State`,
-      targetUser: newSup._id,
-    });
+    if (Activity && req.user?._id) {
+      Activity.create({
+        staffId: req.user._id,
+        user: req.user._id,
+        action: "SUPERVISOR_ENROLLED",
+        details: `Appointed ${newSup.name} as Supervisor for ${newSup.lga} LGA, ${newSup.state} State`,
+        targetUser: newSup._id,
+      }).catch(() => {});
+    }
 
     res.status(201).json({
       success: true,
@@ -683,21 +693,23 @@ exports.getMyStateTarget = async (req, res) => {
 // @route   POST /api/v1/leader/create-supervisor
 exports.appointStateLeader = async (req, res) => {
   try {
-    const { name, phone, email, state, lga, password } = req.body;
+    const { name, fullName, firstName, surname, phone, email, state, lga, password } = req.body;
 
-    if (!phone || !name) {
+    const rawFullName = String(name || fullName || "").trim();
+    const cleanPhone = String(phone || "").replace(/[^0-9+]/g, "").trim();
+
+    if (!cleanPhone || (!rawFullName && !firstName)) {
       return res.status(400).json({
         success: false,
         message: "Supervisor Name and Phone Number are required.",
       });
     }
 
-    const cleanPhone = String(phone).trim();
     const cleanState = String(state || req.user?.state || "Kano").trim();
     const cleanLga = String(lga || "Ajingi").trim();
     const cleanEmail = email
       ? String(email).toLowerCase().trim()
-      : `${cleanPhone}@ayaxdata.online`;
+      : `${cleanPhone.replace(/[^0-9]/g, "")}@ayaxdata.online`;
 
     // Bcrypt Password Hash Setup
     const rawPass = String(password || "Ayax@12345").trim();
@@ -705,7 +717,11 @@ exports.appointStateLeader = async (req, res) => {
     const hashedPassword = await bcrypt.hash(rawPass, salt);
 
     let existingUser = await User.findOne({
-      $or: [{ phone: cleanPhone }, { email: cleanEmail }],
+      $or: [
+        { phone: cleanPhone },
+        { phone: cleanPhone.replace(/[^0-9]/g, "") },
+        { email: cleanEmail }
+      ],
     });
 
     if (existingUser) {
@@ -725,14 +741,21 @@ exports.appointStateLeader = async (req, res) => {
       });
     }
 
-    const names = name.trim().split(" ");
-    const firstName = names[0] || "Field";
-    const surname = names.slice(1).join(" ") || "Supervisor";
+    // INGANNTACCEN RARRABE SUNAYE
+    const nameParts = rawFullName.split(/\s+/).filter(Boolean);
+    const finalFirstName = firstName ? String(firstName).trim() : (nameParts[0] || "Field");
+    let finalSurname = surname ? String(surname).trim() : "";
+
+    if (!finalSurname) {
+      finalSurname = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "Supervisor";
+    }
+
+    const fullDisplayName = `${finalFirstName} ${finalSurname}`.toUpperCase().trim();
 
     const newSupervisor = await User.create({
-      firstName,
-      surname,
-      name: name.toUpperCase().trim(),
+      firstName: finalFirstName,
+      surname: finalSurname,
+      name: fullDisplayName,
       email: cleanEmail,
       phone: cleanPhone,
       password: hashedPassword,
@@ -747,10 +770,16 @@ exports.appointStateLeader = async (req, res) => {
       isVerified: true,
       status: "active",
       assignedLeader: req.user?._id || null,
+      targets: {
+        dataGoal: 0,
+        airtimeGoal: 0,
+        agentGoal: 10,
+        currentMonth: "September 2026",
+      },
     });
 
     if (Activity && req.user?._id) {
-      await Activity.create({
+      Activity.create({
         staffId: req.user._id,
         user: req.user._id,
         action: "SUPERVISOR_ENROLLED",
@@ -788,7 +817,6 @@ exports.getSuperLeaderDashboard = async (req, res) => {
     const myState = user?.state || "Kano";
     const stateRegex = new RegExp(`^${myState.trim()}$`, "i");
 
-    // Kwaso dukkan Supervisors na jihar ko kuma wadanda aka daura a karkashin wannan jagoran
     const supervisors = await User.find({
       role: { $in: ["supervisor", "field_supervisor"] },
       $or: [
@@ -800,7 +828,6 @@ exports.getSuperLeaderDashboard = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    // Kwaso dukkan Agents na jihar
     const agents = await User.find({
       role: "agent",
       state: stateRegex,
