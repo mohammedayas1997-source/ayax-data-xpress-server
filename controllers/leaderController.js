@@ -741,7 +741,7 @@ exports.appointStateLeader = async (req, res) => {
       });
     }
 
-    // INGANNTACCEN RARRABE SUNAYE
+    // Rarrabe Sunaye
     const nameParts = rawFullName.split(/\s+/).filter(Boolean);
     const finalFirstName = firstName ? String(firstName).trim() : (nameParts[0] || "Field");
     let finalSurname = surname ? String(surname).trim() : "";
@@ -751,6 +751,8 @@ exports.appointStateLeader = async (req, res) => {
     }
 
     const fullDisplayName = `${finalFirstName} ${finalSurname}`.toUpperCase().trim();
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const uniqueRef = `AYX-${cleanLga.toUpperCase().slice(0, 3)}-${randomSuffix}`;
 
     const newSupervisor = await User.create({
       firstName: finalFirstName,
@@ -764,6 +766,8 @@ exports.appointStateLeader = async (req, res) => {
       role: "supervisor",
       state: cleanState,
       lga: cleanLga,
+      referralId: uniqueRef,
+      referralCode: uniqueRef,
       walletBalance: 0,
       balance: 0,
       isSuspended: false,
@@ -795,7 +799,7 @@ exports.appointStateLeader = async (req, res) => {
       supervisor: newSupervisor,
     });
   } catch (error) {
-    console.error("Create Supervisor Error:", error);
+    console.error("Create Supervisor Detailed Error:", error);
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to create supervisor account.",
