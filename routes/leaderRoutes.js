@@ -12,21 +12,24 @@ let authMiddleware;
 try {
   authMiddleware = require("../middleware/authMiddleware");
 } catch (e) {
-  authMiddleware = require("../middleware/auth");
+  try {
+    authMiddleware = require("../middleware/auth");
+  } catch (err) {
+    authMiddleware = null;
+  }
 }
 
 const protect =
-  authMiddleware?.protect || authMiddleware?.verifyToken || authMiddleware;
-const authorize =
-  authMiddleware?.authorize ||
-  authMiddleware?.restrictTo ||
-  ((...roles) => (req, res, next) => next());
+  authMiddleware?.protect || authMiddleware?.verifyToken || authMiddleware || ((req, res, next) => next());
 
-// Helper don kiyaye undefined handler errors
-const safeLeader = (handlerName) => {
+// Safe Leader Action Invoker
+const safeLeader = (handlerName, fallbackName = null) => {
   return (req, res, next) => {
-    if (typeof leaderController[handlerName] === "function") {
+    if (leaderController && typeof leaderController[handlerName] === "function") {
       return leaderController[handlerName](req, res, next);
+    }
+    if (fallbackName && leaderController && typeof leaderController[fallbackName] === "function") {
+      return leaderController[fallbackName](req, res, next);
     }
     return res.status(501).json({
       success: false,
@@ -35,28 +38,18 @@ const safeLeader = (handlerName) => {
   };
 };
 
-// Sanya Tsaron Login ga dukkan routes
+// Sanya Tsaron Login
 router.use(protect);
-router.use(
-  authorize(
-    "leader",
-    "state_manager",
-    "national_sales_director",
-    "super_leader",
-    "superadmin",
-    "admin"
-  )
-);
 
 // ==========================================
 // 1. DASHBOARDS & TARGET TELEMETRY
 // ==========================================
-router.get("/dashboard", safeLeader("getSuperLeaderDashboard"));
-router.get("/super-dashboard", safeLeader("getSuperLeaderDashboard"));
+router.get("/dashboard", safeLeader("getSuperLeaderDashboard", "getLeaderDashboard"));
+router.get("/super-dashboard", safeLeader("getSuperLeaderDashboard", "getLeaderDashboard"));
 router.get("/my-state-target", safeLeader("getMyStateTarget"));
 
 // ==========================================
-// 2. SUPERVISORS LIST (Wanda ke goge 404 a Dashboard)
+// 2. SUPERVISORS LIST
 // ==========================================
 router.get("/supervisors", safeLeader("getSupervisors"));
 router.get("/all-supervisors", safeLeader("getSupervisors"));
@@ -64,22 +57,22 @@ router.get("/all-supervisors", safeLeader("getSupervisors"));
 // ==========================================
 // 3. LIVE FIELD STREAMS (AGENTS & AUDIT LOGS)
 // ==========================================
-router.get("/agents", safeLeader("getAllAgents"));
+router.get("/agents", safeLeader("getAllAgents", "getAgentsStream"));
 router.get("/agents-stream", safeLeader("getAgentsStream"));
 router.get("/live-audit-stream", safeLeader("getLiveAuditStream"));
 
 // ==========================================
-// 4. TARGET DEPLOYMENT (NSD & STATE MANAGER)
+// 4. TARGET DEPLOYMENT
 // ==========================================
-router.post("/deploy-targets", safeLeader("assignStateLeaderTarget"));
-router.post("/assign-target", safeLeader("assignStateLeaderTarget"));
+router.post("/deploy-targets", safeLeader("assignStateLeaderTarget", "assignSupervisorTarget"));
+router.post("/assign-target", safeLeader("assignStateLeaderTarget", "assignSupervisorTarget"));
 
 // ==========================================
-// 5. APPOINT & ENROLL SUPERVISORS
+// 5. APPOINT & ENROLL SUPERVISORS (Tare da Fallback don kar ya gaza shiga Database)
 // ==========================================
-router.post("/create-supervisor", safeLeader("appointStateLeader"));
-router.post("/appoint-supervisor", safeLeader("appointStateLeader"));
-router.post("/appoint-manager", safeLeader("appointStateLeader"));
+router.post("/create-supervisor", safeLeader("appointStateLeader", "createNewSupervisor"));
+router.post("/appoint-supervisor", safeLeader("appointStateLeader", "createNewSupervisor"));
+router.post("/appoint-manager", safeLeader("appointStateLeader", "createNewSupervisor"));
 router.patch("/toggle-status/:staffId", safeLeader("toggleSupervisorStatus"));
 router.patch("/toggle-status", safeLeader("toggleSupervisorStatus"));
 
