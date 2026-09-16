@@ -70,9 +70,10 @@ exports.getSupervisorDashboard = async (req, res) => {
       `AYX-${myLga.toUpperCase()}-${myPhone.slice(-4)}`
     ).trim();
 
-    // 1. Kwaso dukkan Agents na LGA ko da Referral Code
+    // 1. Kwaso dukkan Agents na LGA ko da Referral Code (An tsare domin dauko ainihin Agents kadai)
     const agents = await User.find({
       _id: { $ne: supervisor._id },
+      role: "agent",
       $or: [
         { assignedSupervisor: supervisor._id },
         { assignedSupervisor: String(supervisor._id) },
@@ -289,6 +290,7 @@ exports.getMyAgents = async (req, res) => {
 
     const agents = await User.find({
       _id: { $ne: supervisor._id },
+      role: "agent",
       $or: [
         { assignedSupervisor: supervisorId },
         { assignedSupervisor: String(supervisorId) },
