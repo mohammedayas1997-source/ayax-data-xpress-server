@@ -160,30 +160,33 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
   const errors = [];
 
   // ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME
+  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME (PHP SPEC MATCH)
   // ==========================================
-  const alihsanToken =
+  const rawAlihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
     process.env.ALIHSAN_TOKEN ||
     process.env.ALIHSAN_API_KEY ||
     process.env.VTU_API_KEY ||
-    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
+   "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x"
+  // Cire kalmar Token ko Bearer idan tana ciki
+  const cleanToken = String(rawAlihsanToken)
+    .replace(/^Token\s+/i, "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
 
-  if (alihsanToken) {
+  if (cleanToken) {
     try {
-      const baseUrl = process.env.ALIHSAN_BASE_URL || "https://alihsandatasub.com.ng/api";
       const res = await axios.post(
-        `${baseUrl}/topup/`,
+        "https://alihsandatasub.com.ng/api/v1/airtime.php",
         {
-          network: netMapNumeric[normNet] || 1,
-          amount: Number(amount),
+          network: String(netMapNumeric[normNet] || "1"),
+          amount: String(amount),
           mobile_number: formattedPhone,
-          Ported_number: true,
-          airtime_type: "VTU",
+          request_id: String(reference),
         },
         {
           headers: {
-            Authorization: formatAlihsanAuth(alihsanToken),
+            Authorization: cleanToken,
             "Content-Type": "application/json",
             Accept: "application/json",
           },
@@ -192,10 +195,16 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
       );
 
       const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
-      if (statusText === "success" || statusText === "successful" || statusText === "true") {
+      if (
+        statusText === "success" ||
+        statusText === "successful" ||
+        statusText === "true" ||
+        res.data?.code === "200" ||
+        res.data?.code === 200
+      ) {
         return { success: true, provider: "ALIHSAN", data: res.data };
       }
-      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || res.data?.msg || "Topup rejected"}`);
+      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || res.data?.msg || "Airtime rejected"}`);
     } catch (err) {
       errors.push(`ALIHSAN: ${err.response?.data?.message || err.message}`);
     }
