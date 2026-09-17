@@ -269,32 +269,30 @@ const alihsanNetMap = {
   // ==========================================
   // GATEWAY: AL-IHSAN DATASUB
   // ==========================================
-  var alihsanNetMap = {
+  // Idan an riga an sa const alihsanNetMap a sama, kawai assigning za a yi:
+  const networkMap = {
     MTN: "1",
     GLO: "2",
     "9MOBILE": "3",
     AIRTEL: "4",
   };
 
-  var rawAlihsanToken =
+  const alihsanToken = String(
     process.env.ALIHSAN_AUTH_TOKEN ||
     process.env.ALIHSAN_TOKEN ||
     process.env.ALIHSAN_API_KEY ||
     process.env.VTU_API_KEY ||
-    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
-
-  var cleanToken = String(rawAlihsanToken)
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x"
+  )
     .replace(/^Token\s+/i, "")
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  function resolveAlihsanPlanId(rawCode, net) {
-    var c = String(rawCode || "").toLowerCase().trim();
+  const resolvePlanId = (rawCode, net) => {
+    const c = String(rawCode || "").toLowerCase().trim();
 
-    // 1. Idan lambar ID ce kai-tsaye (140, 27, 262, 17, etc.)
     if (/^\d{1,4}$/.test(c)) return c;
 
-    // 2. Fallbacks ga sunaye
     if (net === "MTN") {
       if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0") || c.includes("1000"))) return "140";
       if (c.includes("dc") && c.includes("2gb")) return "134";
@@ -323,19 +321,19 @@ const alihsanNetMap = {
     }
 
     return String(rawCode || "27");
-  }
+  };
 
-  if (cleanToken) {
+  if (alihsanToken) {
     try {
-      var currentNetKey = String(normNet || network || "MTN").toUpperCase().trim();
-      var selectedNet = alihsanNetMap[currentNetKey] || "1";
-      var incomingPlanCode = String(planCode || (typeof plan !== "undefined" ? plan : "") || "27");
-      var selectedPlanId = resolveAlihsanPlanId(incomingPlanCode, currentNetKey);
-      var reqId = String(reference || ("DATA_" + Date.now()));
+      const currentNetKey = String(normNet || network || "MTN").toUpperCase().trim();
+      const selectedNet = networkMap[currentNetKey] || "1";
+      const incomingPlanCode = String(planCode || (typeof plan !== "undefined" ? plan : "") || "27");
+      const selectedPlanId = resolvePlanId(incomingPlanCode, currentNetKey);
+      const reqId = String(reference || `DATA_${Date.now()}`);
 
-      var targetPhone = cleanLocalPhone(phone);
+      const targetPhone = cleanLocalPhone(phone);
 
-      var payload = {
+      const payload = {
         network: String(selectedNet),
         plan_id: String(selectedPlanId),
         mobile_number: targetPhone,
@@ -344,12 +342,12 @@ const alihsanNetMap = {
 
       console.log("📤 [ALIHSAN DATA REQ]:", payload);
 
-      var res = await axios.post(
+      const res = await axios.post(
         "https://alihsandatasub.com.ng/api/v1/data.php",
         payload,
         {
           headers: {
-            Authorization: cleanToken,
+            Authorization: alihsanToken,
             "Content-Type": "application/json",
             Accept: "application/json",
           },
@@ -359,11 +357,11 @@ const alihsanNetMap = {
 
       console.log("📥 [ALIHSAN DATA RES]:", res.data);
 
-      var resData = res.data || {};
-      var successFlag = String(resData.success || "").toLowerCase();
-      var descText = String(resData.desc || resData.message || "").toLowerCase();
+      const resData = res.data || {};
+      const successFlag = String(resData.success || "").toLowerCase();
+      const descText = String(resData.desc || resData.message || "").toLowerCase();
 
-      var isSuccess =
+      const isSuccess =
         successFlag === "true" ||
         resData.success === true ||
         descText.includes("successful") ||
@@ -376,10 +374,10 @@ const alihsanNetMap = {
         return { success: true, provider: "ALIHSAN", data: resData };
       }
 
-      var failMsg = resData.desc || resData.message || JSON.stringify(resData);
+      const failMsg = resData.desc || resData.message || JSON.stringify(resData);
       errors.push("ALIHSAN: " + failMsg);
     } catch (err) {
-      var errMsg = err.response && err.response.data && (err.response.data.desc || err.response.data.message)
+      const errMsg = err.response && err.response.data && (err.response.data.desc || err.response.data.message)
         ? (err.response.data.desc || err.response.data.message)
         : err.message;
       console.error("❌ [ALIHSAN DATA ERROR]:", errMsg);
