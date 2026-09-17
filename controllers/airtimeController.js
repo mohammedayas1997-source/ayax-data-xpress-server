@@ -154,7 +154,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
  */
 const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) => {
   const normNet = String(network).toUpperCase().trim();
-  formattedPhone = cleanLocalPhone(phone);
+  const formattedPhone = cleanLocalPhone(phone);
   const netMapNumeric = { MTN: 1, GLO: 2, "9MOBILE": 3, AIRTEL: 4 };
 
   const errors = [];
@@ -167,22 +167,21 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
     process.env.ALIHSAN_TOKEN ||
     process.env.ALIHSAN_API_KEY ||
     process.env.VTU_API_KEY ||
-    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x"; // Token dinka na Al-Ihsan
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
+
   const cleanToken = String(rawAlihsanToken)
     .replace(/^Token\s+/i, "")
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  // Taswirar layukan waya zuwa lambobin Al-Ihsan
   const alihsanNetMap = {
     MTN: "1",
     GLO: "2",
     "9MOBILE": "3",
-    AIRTEL: "4"
+    AIRTEL: "4",
   };
 
   const selectedNetworkId = alihsanNetMap[normNet] || "1";
-  const formattedPhone = cleanLocalPhone(phone);
   const airtimeAmount = String(Math.floor(Number(amount)));
   const reqId = String(reference || `AIRT_${Date.now()}`);
 
@@ -229,7 +228,6 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
         return { success: true, provider: "ALIHSAN", data: resData };
       }
 
-      // Ɗauko ainihin kuskuren da Al-Ihsan ya bayar
       const failureMsg =
         resData.message ||
         resData.error ||
@@ -479,7 +477,6 @@ exports.buyAirtime = async (req, res) => {
     const transactionId = `AIRT${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
     const reference = `AYAX-AIRT-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
-    // Ajiye Transaction a matsayin 'pending'
     await Transaction.create({
       user: userId,
       userId: userId,
@@ -580,7 +577,7 @@ exports.buyAirtime = async (req, res) => {
     console.error("Buy Airtime Controller Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Airtime processing error occurred.",
+      message: error.message || "Airtime processing error occurred.",
       error: error.message,
     });
   }
