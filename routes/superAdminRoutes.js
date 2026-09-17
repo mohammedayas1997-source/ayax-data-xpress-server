@@ -28,8 +28,6 @@ try {
   supervisorController = superAdminController;
 }
 
-// Kari don pricing da plans na superadmin
-const superAdminController = require("../controllers/superAdminController");
 
 // Safeguard don hana kuskuren callback undefined
 const handleCreatePlan =
