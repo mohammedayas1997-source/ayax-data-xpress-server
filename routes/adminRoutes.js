@@ -202,6 +202,7 @@ router.get(
   safe(adminController.getNIMCPrice, "getNIMCPrice")
 );
 
+router.post("/nin/update-price", adminController.updateNinPrice);
 // ==========================================
 // 9. BVN REQUESTS & VERIFICATIONS
 // ==========================================
