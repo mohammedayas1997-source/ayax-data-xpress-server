@@ -32,11 +32,10 @@ const dataPlanSchema = new mongoose.Schema(
     },
     // Rarraba kalar data (Misali: SME, CG, Gifting, Direct)
     planType: {
-      type: String,
-      default: "SME",
-      enum: ["SME", "GIFTING", "CG", "CORPORATE_GIFTING", "DIRECT"],
-      index: true,
-    },
+  type: String,
+  required: true,
+  trim: true,
+},
     userPrice: {
       type: Number,
       required: true,
