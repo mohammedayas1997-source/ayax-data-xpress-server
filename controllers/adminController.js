@@ -1122,33 +1122,59 @@ exports.updatePlanPricing = async (req, res) => {
   }
 };
 
-// Aikin Goge Plan Dindindin (Delete)
 exports.deleteDataPlan = async (req, res) => {
   try {
-    const targetId = String(req.params.id || "").trim();
+    const { id } = req.params;
 
-    const queryConditions = [
-      { planId: targetId },
-      { planCode: targetId },
-      { code: targetId },
-      { name: targetId }
-    ];
-
-    if (mongoose.Types.ObjectId.isValid(targetId) && targetId.length === 24) {
-      queryConditions.unshift({ _id: new mongoose.Types.ObjectId(targetId) });
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Plan ID is required to delete.",
+      });
     }
 
-    if (DataPlanModel) {
-      await DataPlanModel.findOneAndDelete({ $or: queryConditions });
+    // Dynamic model lookup don gujewa rashin gano model
+    let DataPlan;
+    try {
+      DataPlan = mongoose.model("DataPlan");
+    } catch (e) {
+      try {
+        DataPlan = require("../models/DataPlan");
+      } catch (err) {
+        DataPlan = mongoose.model("Plan");
+      }
+    }
+
+    // Bincika da goge plan ta hanyar _id, planId, ko planCode
+    let deletedPlan = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      deletedPlan = await DataPlan.findByIdAndDelete(id);
+    }
+
+    if (!deletedPlan) {
+      deletedPlan = await DataPlan.findOneAndDelete({
+        $or: [
+          { _id: id },
+          { id: id },
+          { planId: id },
+          { planCode: id },
+          { code: id }
+        ]
+      });
     }
 
     return res.status(200).json({
       success: true,
-      message: "Plan deleted successfully from database!",
+      message: "Data plan deleted successfully from the database.",
+      deletedId: id,
     });
   } catch (error) {
-    console.error("deleteDataPlan Error:", error);
-    return res.status(500).json({ success: false, message: error.message });
+    console.error("Delete Plan Error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Server failed to delete plan.",
+      error: error.message,
+    });
   }
 };
 
