@@ -1713,18 +1713,19 @@ exports.createDataPlan = async (req, res) => {
     };
     const netId = networkIdMap[net] || 1;
 
-    // 2. Daidaita planType don Enum Schema
-    let normalizedPlanType = String(planType || "SME").trim();
-    const lowerType = normalizedPlanType.toLowerCase();
-    if (lowerType.includes("corporate") || lowerType === "cg") {
-      normalizedPlanType = "CG"; // ko "CORPORATE" dangane da schema
-    } else if (lowerType.includes("gift")) {
-      normalizedPlanType = "GIFTING";
-    } else if (lowerType.includes("direct") || lowerType.includes("sme2")) {
-      normalizedPlanType = "SME2";
-    } else if (lowerType.includes("sme")) {
-      normalizedPlanType = "SME";
-    }
+    // Daidaita planType
+let normalizedPlanType = String(planType || "SME").trim();
+const lowerType = normalizedPlanType.toLowerCase();
+
+if (lowerType.includes("corporate") || lowerType === "cg") {
+  normalizedPlanType = "CORPORATE";
+} else if (lowerType.includes("gift")) {
+  normalizedPlanType = "GIFTING";
+} else if (lowerType.includes("direct")) {
+  normalizedPlanType = "DIRECT";
+} else {
+  normalizedPlanType = "SME";
+}
 
     const planVolume = String(plan || name || "1.0 GB").trim();
     const planValidity = String(validity || "30 Days").trim();
