@@ -177,62 +177,54 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
  // ==========================================
   // GATEWAY 1: AL-IHSAN DATASUB
   // ==========================================
-  const alihsanToken =
+  const rawAlihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
     process.env.ALIHSAN_TOKEN ||
     process.env.ALIHSAN_API_KEY ||
     process.env.VTU_API_KEY ||
-    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x" // Token dinka na Al-Ihsan
 
-  if (alihsanToken) {
-    const candidateUrls = [
-      "https://alihsandatasub.com.ng/api/data/",
-      "https://alihsandatasub.com.ng/api/v1/data.php",
-      "https://alihsandatasub.com.ng/api/data.php"
-    ];
+  // Cire kalmar Token/Bearer idan tana ciki, saboda Al-Ihsan ba ya bukatarta a PHP script din
+  const cleanToken = String(rawAlihsanToken)
+    .replace(/^Token\s+/i, "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
 
-    let alihsanSuccess = false;
-    let lastAlihsanErr = null;
-
-    for (const targetUrl of candidateUrls) {
-      try {
-        const res = await axios.post(
-          targetUrl,
-          {
-            network: netMapNumeric[normNet] || 1,
-            plan: Number(planCode),
-            mobile_number: formattedPhone,
-            Ported_number: true,
-            reference: reference,
+  if (cleanToken) {
+    try {
+      const res = await axios.post(
+        "https://alihsandatasub.com.ng/api/v1/data.php",
+        {
+          network: String(netMapNumeric[normNet] || "1"),
+          plan_id: String(planCode),
+          mobile_number: formattedPhone,
+          request_id: String(reference),
+        },
+        {
+          headers: {
+            Authorization: cleanToken,
+            "Content-Type": "application/json",
+            Accept: "application/json",
           },
-          {
-            headers: {
-              Authorization: formatAlihsanAuth(alihsanToken),
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            timeout: 35000,
-          }
-        );
+          timeout: 35000,
+        }
+      );
 
-        const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
-        if (statusText === "success" || statusText === "successful" || statusText === "true") {
-          return { success: true, provider: "ALIHSAN", data: res.data };
-        }
-        lastAlihsanErr = res.data?.message || res.data?.error || res.data?.msg || "Dispatch rejected";
-      } catch (err) {
-        // Idan 404 ne, bar shi ya gwada URL na gaba a jerin
-        if (err.response?.status !== 404) {
-          lastAlihsanErr = err.response?.data?.message || err.message;
-        }
+      const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
+      if (
+        statusText === "success" ||
+        statusText === "successful" ||
+        statusText === "true" ||
+        res.data?.code === "200" ||
+        res.data?.code === 200
+      ) {
+        return { success: true, provider: "ALIHSAN", data: res.data };
       }
-    }
-
-    if (!alihsanSuccess && lastAlihsanErr) {
-      errors.push(`ALIHSAN: ${lastAlihsanErr}`);
+      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || res.data?.msg || "Dispatch rejected"}`);
+    } catch (err) {
+      errors.push(`ALIHSAN: ${err.response?.data?.message || err.message}`);
     }
   }
-
   // ==========================================
   // GATEWAY 2: AYAX MARKETPLACE GATEWAY
   // ==========================================
