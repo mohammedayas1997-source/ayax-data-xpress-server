@@ -171,21 +171,21 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
 
   const errors = [];
 
-  // ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB (ACCURATE PLAN MAP)
+// ==========================================
+  // GATEWAY 1: AL-IHSAN DATASUB (OFFICIAL SPEC)
   // ==========================================
   const rawAlihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
     process.env.ALIHSAN_TOKEN ||
     process.env.ALIHSAN_API_KEY ||
-    process.env.VTU_API_KEY;
+    process.env.VTU_API_KEY ||
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
 
-  const cleanToken = String(rawAlihsanToken || "")
+  const cleanToken = String(rawAlihsanToken)
     .replace(/^Token\s+/i, "")
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  // 1. Network ID Mapping na Al-Ihsan
   const alihsanNetMap = {
     MTN: "1",
     GLO: "2",
@@ -193,47 +193,33 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
     AIRTEL: "4",
   };
 
-  // 2. Dynamic Plan ID Resolver na Al-Ihsan (SME & Corporate Gifting)
+  // Madaidaicin taswirar Al-Ihsan Plan IDs daga Teburinsu
   const resolveAlihsanPlanId = (rawCode, net) => {
-    const code = String(rawCode || "").toLowerCase().trim();
+    const c = String(rawCode || "").toLowerCase().trim();
 
-    // Idan riga lamba ce karama (1 - 99), tura ta kai-tsaye
-    if (/^\d{1,2}$/.test(code)) return code;
+    // Idan an riga an turo lambar ID kai tsaye daga frontend
+    if (/^\d{1,2}$/.test(c)) return c;
 
-    // MTN DATA PLANS
     if (net === "MTN") {
-      if (code.includes("500")) return "1"; // 500MB SME
-      if (code.includes("1gb") || code.includes("1.0") || code.includes("1000")) return "2"; // 1GB SME
-      if (code.includes("2gb") || code.includes("2000")) return "3"; // 2GB SME
-      if (code.includes("3gb") || code.includes("3000")) return "4"; // 3GB SME
-      if (code.includes("5gb") || code.includes("5000")) return "5"; // 5GB SME
-      if (code.includes("10gb") || code.includes("10000")) return "6"; // 10GB SME
+      if (c.includes("500") && c.includes("sme")) return "17"; // 500MB SME
+      if (c.includes("500")) return "26";                      // 500MB CG
+      if (c.includes("1gb") || c.includes("1.0") || c.includes("1000")) return "27"; // 1.0GB CG (Price: 400)
+      if (c.includes("2gb") || c.includes("2.0") || c.includes("2000")) return "28"; // 2.0GB CG (Price: 810)
+      if (c.includes("5gb") || c.includes("5000")) return "38"; // 5.0GB CG (Price: 1900)
+      return "27"; // Default MTN zuwa 1GB CG
     }
 
-    // AIRTEL DATA PLANS
-    if (net === "AIRTEL") {
-      if (code.includes("500")) return "15";
-      if (code.includes("1gb") || code.includes("1000")) return "16";
-      if (code.includes("2gb") || code.includes("2000")) return "17";
-      if (code.includes("5gb") || code.includes("5000")) return "19";
-    }
-
-    // GLO DATA PLANS
-    if (net === "GLO") {
-      if (code.includes("1gb") || code.includes("1000")) return "28";
-      if (code.includes("2gb") || code.includes("2000")) return "29";
-      if (code.includes("3gb") || code.includes("3000")) return "30";
-      if (code.includes("5gb") || code.includes("5000")) return "31";
-    }
-
-    // 9MOBILE PLANS
     if (net === "9MOBILE") {
-      if (code.includes("1gb") || code.includes("1000")) return "34";
-      if (code.includes("2gb") || code.includes("2000")) return "35";
+      if (c.includes("1.5") || c.includes("1500")) return "11";
+      if (c.includes("500")) return "45";
     }
 
-    // Fallback ga standard plans
-    return "2"; 
+    if (net === "AIRTEL") {
+      if (c.includes("2gb") || c.includes("2000")) return "50";
+      if (c.includes("3gb") || c.includes("3000")) return "51";
+    }
+
+    return String(rawCode || "27");
   };
 
   if (cleanToken) {
@@ -245,11 +231,11 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
       const payload = {
         network: String(selectedNet),
         plan_id: String(selectedPlanId),
-        mobile_number: String(formattedPhone),
+        mobile_number: cleanLocalPhone(phone),
         request_id: reqId,
       };
 
-      console.log("📤 [ALIHSAN DATA REQUEST]:", payload);
+      console.log("📤 [ALIHSAN DATA REQ]:", payload);
 
       const res = await axios.post(
         "https://alihsandatasub.com.ng/api/v1/data.php",
@@ -264,43 +250,28 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
         }
       );
 
-      console.log("📥 [ALIHSAN DATA RESPONSE]:", res.data);
+      console.log("📥 [ALIHSAN DATA RES]:", res.data);
 
       const resData = res.data || {};
-      const statusText = String(
-        resData.status || resData.Status || resData.success || ""
-      ).toLowerCase();
-      const messageText = String(
-        resData.message || resData.msg || resData.desc || ""
-      ).toLowerCase();
+      const successFlag = String(resData.success || "").toLowerCase();
+      const descText = String(resData.desc || "").toLowerCase();
 
-      // Sharadin Nasara
+      // Sharadin Nasara Daidai da Tsarin Al-Ihsan
       const isSuccess =
-        statusText === "success" ||
-        statusText === "successful" ||
-        statusText === "true" ||
+        successFlag === "true" ||
         resData.success === true ||
-        resData.success === "true" ||
-        resData.code === 200 ||
-        resData.code === "200" ||
-        messageText.includes("successful") ||
-        messageText.includes("success");
+        descText.includes("successful") ||
+        descText.includes("success") ||
+        resData.info?.status?.toLowerCase() === "success";
 
       if (isSuccess) {
         return { success: true, provider: "ALIHSAN", data: resData };
       }
 
-      const failMsg =
-        resData.desc ||
-        resData.message ||
-        resData.msg ||
-        JSON.stringify(resData);
-
+      const failMsg = resData.desc || resData.message || JSON.stringify(resData);
       errors.push(`ALIHSAN: ${failMsg}`);
     } catch (err) {
-      const errRes = err.response?.data;
-      const errMsg = errRes?.desc || errRes?.message || errRes?.msg || err.message;
-      console.error("❌ [ALIHSAN DATA DISPATCH ERROR]:", errRes || err.message);
+      const errMsg = err.response?.data?.desc || err.response?.data?.message || err.message;
       errors.push(`ALIHSAN: ${errMsg}`);
     }
   }
