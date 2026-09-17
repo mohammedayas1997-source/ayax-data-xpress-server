@@ -1768,17 +1768,12 @@ if (lowerType.includes("corporate") || lowerType === "cg") {
   }
 };
 
-// Aikin Update Tier Pricing
+// Aikin Sabuntawa (Tare da Gyaran Suna)
 exports.updatePlanPricing = async (req, res) => {
   try {
-    const { id, planId, userPrice, agentPrice, status } = req.body;
+    const { id, planId, userPrice, agentPrice, status, name, plan, planLabel } = req.body;
     const targetId = String(planId || id || "").trim();
 
-    if (!targetId) {
-      return res.status(400).json({ success: false, message: "Plan identifier is required." });
-    }
-
-    // Samar da yanayin query ba tare da karya ObjectId ba
     const queryConditions = [
       { planId: targetId },
       { planCode: targetId },
@@ -1786,7 +1781,6 @@ exports.updatePlanPricing = async (req, res) => {
       { name: targetId }
     ];
 
-    // Idan targetId din ingantaccen ObjectId ne mai haruffa 24, sai a saka _id
     if (mongoose.Types.ObjectId.isValid(targetId) && targetId.length === 24) {
       queryConditions.unshift({ _id: new mongoose.Types.ObjectId(targetId) });
     }
@@ -1795,30 +1789,67 @@ exports.updatePlanPricing = async (req, res) => {
     const aPrice = Number(agentPrice || userPrice);
     const isActive = status === "active";
 
+    const updateFields = {
+      userPrice: uPrice,
+      price: uPrice,
+      agentPrice: aPrice,
+      status: status || "active",
+      isActive: isActive,
+    };
+
+    if (name || plan || planLabel) {
+      const finalName = name || plan || planLabel;
+      updateFields.name = finalName;
+      updateFields.plan = finalName;
+      updateFields.planLabel = finalName;
+    }
+
     let updated = null;
     if (DataPlanModel) {
       updated = await DataPlanModel.findOneAndUpdate(
         { $or: queryConditions },
-        {
-          $set: {
-            userPrice: uPrice,
-            price: uPrice,
-            agentPrice: aPrice,
-            status: status || "active",
-            isActive: isActive,
-          },
-        },
+        { $set: updateFields },
         { new: true }
       );
     }
 
     return res.status(200).json({
       success: true,
-      message: "Tariff updated successfully across terminals!",
+      message: "Plan updated successfully!",
       plan: updated,
     });
   } catch (error) {
     console.error("updatePlanPricing Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Aikin Goge Plan Dindindin (Delete)
+exports.deleteDataPlan = async (req, res) => {
+  try {
+    const targetId = String(req.params.id || "").trim();
+
+    const queryConditions = [
+      { planId: targetId },
+      { planCode: targetId },
+      { code: targetId },
+      { name: targetId }
+    ];
+
+    if (mongoose.Types.ObjectId.isValid(targetId) && targetId.length === 24) {
+      queryConditions.unshift({ _id: new mongoose.Types.ObjectId(targetId) });
+    }
+
+    if (DataPlanModel) {
+      await DataPlanModel.findOneAndDelete({ $or: queryConditions });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Plan deleted successfully from database!",
+    });
+  } catch (error) {
+    console.error("deleteDataPlan Error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
