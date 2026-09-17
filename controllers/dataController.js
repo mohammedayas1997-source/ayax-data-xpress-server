@@ -172,57 +172,110 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   const errors = [];
 
   // ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB
-  // ==========================================
- // ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB
+  // GATEWAY 1: AL-IHSAN DATASUB (DATA DISPATCH)
   // ==========================================
   const rawAlihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
     process.env.ALIHSAN_TOKEN ||
     process.env.ALIHSAN_API_KEY ||
     process.env.VTU_API_KEY ||
-    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x" // Token dinka na Al-Ihsan
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
 
-  // Cire kalmar Token/Bearer idan tana ciki, saboda Al-Ihsan ba ya bukatarta a PHP script din
   const cleanToken = String(rawAlihsanToken)
     .replace(/^Token\s+/i, "")
     .replace(/^Bearer\s+/i, "")
     .trim();
 
+  // Taswirar Network IDs na Al-Ihsan
+  const alihsanNetMap = {
+    MTN: "1",
+    GLO: "2",
+    "9MOBILE": "3",
+    AIRTEL: "4",
+  };
+
+  // Helper don gano ainihin plan_id na Al-Ihsan daga girman data (Idan lambar ba ta Al-Ihsan ba ce)
+  const resolveAlihsanPlanId = (rawPlan, net) => {
+    const p = String(rawPlan).toLowerCase();
+    // Idan riga lamba ce karama (misali 1 zuwa 50), to plan_id ne na Al-Ihsan
+    if (/^\d{1,2}$/.test(p)) return p;
+
+    // Mapping na MTN SME (Misalan ID na Al-Ihsan)
+    if (net === "MTN") {
+      if (p.includes("500mb") || p.includes("500")) return "1";
+      if (p.includes("1gb") || p.includes("1000")) return "2";
+      if (p.includes("2gb") || p.includes("2000")) return "3";
+      if (p.includes("3gb") || p.includes("3000")) return "4";
+      if (p.includes("5gb") || p.includes("5000")) return "5";
+      if (p.includes("10gb") || p.includes("10000")) return "6";
+    }
+    return String(rawPlan);
+  };
+
   if (cleanToken) {
     try {
+      const targetNetwork = alihsanNetMap[normNet] || "1";
+      const targetPlanId = resolveAlihsanPlanId(planCode, normNet);
+      const reqId = String(reference || `DATA_${Date.now()}`);
+
+      const payload = {
+        network: targetNetwork,
+        plan_id: targetPlanId,
+        mobile_number: formattedPhone,
+        request_id: reqId,
+      };
+
+      console.log("📤 [ALIHSAN DATA REQ]:", payload);
+
       const res = await axios.post(
         "https://alihsandatasub.com.ng/api/v1/data.php",
-        {
-          network: String(netMapNumeric[normNet] || "1"),
-          plan_id: String(planCode),
-          mobile_number: formattedPhone,
-          request_id: String(reference),
-        },
+        payload,
         {
           headers: {
             Authorization: cleanToken,
             "Content-Type": "application/json",
             Accept: "application/json",
           },
-          timeout: 35000,
+          timeout: 40000,
         }
       );
 
-      const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
-      if (
+      console.log("📥 [ALIHSAN DATA RES]:", res.data);
+
+      const resData = res.data || {};
+      const statusText = String(
+        resData.status || resData.Status || resData.status_code || ""
+      ).toLowerCase();
+
+      const isSuccess =
         statusText === "success" ||
         statusText === "successful" ||
         statusText === "true" ||
-        res.data?.code === "200" ||
-        res.data?.code === 200
-      ) {
-        return { success: true, provider: "ALIHSAN", data: res.data };
+        resData.code === 200 ||
+        resData.code === "200" ||
+        resData.success === true;
+
+      if (isSuccess) {
+        return { success: true, provider: "ALIHSAN", data: resData };
       }
-      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || res.data?.msg || "Dispatch rejected"}`);
+
+      // Fitar da cikakken kuskuren da Al-Ihsan ya mayar domin ganin dalili
+      const errDetail =
+        resData.message ||
+        resData.msg ||
+        resData.error ||
+        resData.desc ||
+        JSON.stringify(resData);
+
+      errors.push(`ALIHSAN: ${errDetail}`);
     } catch (err) {
-      errors.push(`ALIHSAN: ${err.response?.data?.message || err.message}`);
+      const serverErrMsg =
+        err.response?.data?.message ||
+        err.response?.data?.msg ||
+        err.response?.data?.error ||
+        err.message;
+      console.error("❌ [ALIHSAN DATA ERROR]:", err.response?.data || err.message);
+      errors.push(`ALIHSAN: ${serverErrMsg}`);
     }
   }
   // ==========================================
