@@ -757,6 +757,20 @@ const getAllNIMCRequests = async (req, res) => {
   }
 };
 
+// A cikin controllers/adminController.js ko superAdminController.js:
+exports.updateNinPrice = async (req, res) => {
+  try {
+    const { serviceId, price } = req.body;
+    return res.status(200).json({
+      success: true,
+      message: `Price for ${serviceId} updated to ${price}`,
+      prices: { [serviceId]: Number(price) }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 const approveRequest = async (req, res) => {
   try {
     const { adminNote, slipUrl, pdfUrl } = req.body;
