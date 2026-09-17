@@ -266,20 +266,35 @@ const alihsanNetMap = {
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  const alihsanNetMap = {
+  // ==========================================
+  // GATEWAY: AL-IHSAN DATASUB
+  // ==========================================
+  var alihsanNetMap = {
     MTN: "1",
     GLO: "2",
     "9MOBILE": "3",
     AIRTEL: "4",
   };
 
-  const resolveAlihsanPlanId = (rawCode, net) => {
-    const c = String(rawCode || "").toLowerCase().trim();
+  var rawAlihsanToken =
+    process.env.ALIHSAN_AUTH_TOKEN ||
+    process.env.ALIHSAN_TOKEN ||
+    process.env.ALIHSAN_API_KEY ||
+    process.env.VTU_API_KEY ||
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
 
-    // 1. Idan an turo lamba (digits) kai-tsaye
+  var cleanToken = String(rawAlihsanToken)
+    .replace(/^Token\s+/i, "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+
+  function resolveAlihsanPlanId(rawCode, net) {
+    var c = String(rawCode || "").toLowerCase().trim();
+
+    // 1. Idan lambar ID ce kai-tsaye (140, 27, 262, 17, etc.)
     if (/^\d{1,4}$/.test(c)) return c;
 
-    // 2. Fallbacks ga tsofaffin sunaye
+    // 2. Fallbacks ga sunaye
     if (net === "MTN") {
       if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0") || c.includes("1000"))) return "140";
       if (c.includes("dc") && c.includes("2gb")) return "134";
@@ -308,26 +323,28 @@ const alihsanNetMap = {
     }
 
     return String(rawCode || "27");
-  };
+  }
 
   if (cleanToken) {
     try {
-      const selectedNet = alihsanNetMap[normNet] || "1";
-      
-      // AN GYARA: Amfani da planCode kai-tsaye ba tare da kiran 'req' da babu shi a ciki ba
-      const selectedPlanId = resolveAlihsanPlanId(planCode, normNet);
-      const reqId = String(reference || `DATA_${Date.now()}`);
+      var currentNetKey = String(normNet || network || "MTN").toUpperCase().trim();
+      var selectedNet = alihsanNetMap[currentNetKey] || "1";
+      var incomingPlanCode = String(planCode || (typeof plan !== "undefined" ? plan : "") || "27");
+      var selectedPlanId = resolveAlihsanPlanId(incomingPlanCode, currentNetKey);
+      var reqId = String(reference || ("DATA_" + Date.now()));
 
-      const payload = {
+      var targetPhone = cleanLocalPhone(phone);
+
+      var payload = {
         network: String(selectedNet),
         plan_id: String(selectedPlanId),
-        mobile_number: cleanLocalPhone(phone),
+        mobile_number: targetPhone,
         request_id: reqId,
       };
 
       console.log("📤 [ALIHSAN DATA REQ]:", payload);
 
-      const res = await axios.post(
+      var res = await axios.post(
         "https://alihsandatasub.com.ng/api/v1/data.php",
         payload,
         {
@@ -342,16 +359,16 @@ const alihsanNetMap = {
 
       console.log("📥 [ALIHSAN DATA RES]:", res.data);
 
-      const resData = res.data || {};
-      const successFlag = String(resData.success || "").toLowerCase();
-      const descText = String(resData.desc || resData.message || "").toLowerCase();
+      var resData = res.data || {};
+      var successFlag = String(resData.success || "").toLowerCase();
+      var descText = String(resData.desc || resData.message || "").toLowerCase();
 
-      const isSuccess =
+      var isSuccess =
         successFlag === "true" ||
         resData.success === true ||
         descText.includes("successful") ||
         descText.includes("success") ||
-        resData.info?.status?.toLowerCase() === "success" ||
+        (resData.info && String(resData.info.status).toLowerCase() === "success") ||
         resData.code === 200 ||
         resData.code === "200";
 
@@ -359,15 +376,16 @@ const alihsanNetMap = {
         return { success: true, provider: "ALIHSAN", data: resData };
       }
 
-      const failMsg = resData.desc || resData.message || JSON.stringify(resData);
-      errors.push(`ALIHSAN: ${failMsg}`);
+      var failMsg = resData.desc || resData.message || JSON.stringify(resData);
+      errors.push("ALIHSAN: " + failMsg);
     } catch (err) {
-      const errMsg = err.response?.data?.desc || err.response?.data?.message || err.message;
-      console.error("❌ [ALIHSAN DATA ERROR]:", err.response?.data || err.message);
-      errors.push(`ALIHSAN: ${errMsg}`);
+      var errMsg = err.response && err.response.data && (err.response.data.desc || err.response.data.message)
+        ? (err.response.data.desc || err.response.data.message)
+        : err.message;
+      console.error("❌ [ALIHSAN DATA ERROR]:", errMsg);
+      errors.push("ALIHSAN: " + errMsg);
     }
   }
-
       console.log("📥 [ALIHSAN DATA RES]:", res.data);
 
       const resData = res.data || {};
