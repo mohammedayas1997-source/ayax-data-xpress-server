@@ -1854,23 +1854,75 @@ exports.deleteDataPlan = async (req, res) => {
   }
 };
 
-// Aikin Set Global Pricing (NIMC, BVN & Bills)
+// Aikin Adanawa / Sabunta NIMC, BVN da Bills
 exports.setGlobalPricing = async (req, res) => {
   try {
-    const { serviceCategory, serviceKey, name, userPrice, agentPrice } = req.body;
+    const { serviceCategory, serviceKey, name, userPrice, agentPrice, amount } = req.body;
+    const targetKey = String(serviceKey || "").trim();
+
+    if (!targetKey) {
+      return res.status(400).json({ success: false, message: "serviceKey is required." });
+    }
+
+    const uPrice = Number(userPrice || amount || 0);
+    const aPrice = Number(agentPrice || uPrice);
+
+    // Idan akwai Model na musamman na GlobalService ko Pricing
+    let ServiceModel;
+    try { ServiceModel = require("../models/ServicePricing"); } catch (_) {}
+
+    if (ServiceModel) {
+      await ServiceModel.findOneAndUpdate(
+        { serviceKey: targetKey },
+        {
+          $set: {
+            name: name || targetKey,
+            serviceCategory: serviceCategory || "nimc",
+            userPrice: uPrice,
+            agentPrice: aPrice,
+            amount: uPrice,
+            isActive: true
+          }
+        },
+        { upsert: true, new: true }
+      );
+    }
 
     return res.status(200).json({
       success: true,
-      message: `${name || serviceKey} tariff synchronized successfully!`,
+      message: `${name || targetKey} tariff synchronized successfully!`,
       data: {
         serviceCategory,
-        serviceKey,
-        userPrice: Number(userPrice || 0),
-        agentPrice: Number(agentPrice || userPrice || 0),
-      },
+        serviceKey: targetKey,
+        name,
+        userPrice: uPrice,
+        agentPrice: aPrice
+      }
     });
   } catch (error) {
     console.error("setGlobalPricing Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Aikin Goge NIMC/BVN Service Dindindin
+exports.deleteGlobalPricing = async (req, res) => {
+  try {
+    const targetKey = String(req.params.serviceKey || "").trim();
+
+    let ServiceModel;
+    try { ServiceModel = require("../models/ServicePricing"); } catch (_) {}
+
+    if (ServiceModel) {
+      await ServiceModel.findOneAndDelete({ serviceKey: targetKey });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Service ${targetKey} deleted successfully from database!`
+    });
+  } catch (error) {
+    console.error("deleteGlobalPricing Error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
