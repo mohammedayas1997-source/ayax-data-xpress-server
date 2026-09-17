@@ -2,6 +2,7 @@ const axios = require("axios");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const bcrypt = require("bcryptjs");
+const mongoose = require("mongoose");
 
 // Dynamic DataPlan Model Loader
 let DataPlan;
@@ -41,7 +42,7 @@ const cleanLocalPhone = (phone = "") => {
   return digits;
 };
 
-// Helper: Tabbatar da tsarin Token na Al-Ihsan (Token xxxxxxxxx)
+// Helper: Tabbatar da tsarin Token na Al-Ihsan
 const formatAlihsanAuth = (rawToken) => {
   if (!rawToken) return "";
   const token = String(rawToken).trim();
@@ -162,7 +163,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
 
 /**
  * Helper: Universal Multi-Gateway Data Dispatcher
- * Yana gwada Al-Ihsan, Ayax Gateway, Husmodata, SmartSMS, Clubkonnect, BilalSada
  */
 const dispatchToExternalGateways = async ({ network, phone, planCode, amount, reference }) => {
   const normNet = String(network).toUpperCase().trim();
@@ -171,9 +171,16 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
 
   const errors = [];
 
-// ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB (OFFICIAL SPEC)
   // ==========================================
+  // GATEWAY 1: AL-IHSAN DATASUB
+  // ==========================================
+  const gatewayNetMap = {
+    MTN: "1",
+    GLO: "2",
+    "9MOBILE": "3",
+    AIRTEL: "4",
+  };
+
   const rawAlihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
     process.env.ALIHSAN_TOKEN ||
@@ -186,37 +193,38 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  const alihsanNetMap = {
-    MTN: "1",
-    GLO: "2",
-    "9MOBILE": "3",
-    AIRTEL: "4",
-  };
-
-  // Madaidaicin taswirar Al-Ihsan Plan IDs daga Teburinsu
   const resolveAlihsanPlanId = (rawCode, net) => {
     const c = String(rawCode || "").toLowerCase().trim();
 
-    // Idan an riga an turo lambar ID kai tsaye daga frontend
-    if (/^\d{1,2}$/.test(c)) return c;
+    // 1. Idan lambar ID ce kai-tsaye (140, 27, 262, 17, etc.)
+    if (/^\d{1,4}$/.test(c)) return c;
 
+    // 2. Fallbacks ga sunaye
     if (net === "MTN") {
-      if (c.includes("500") && c.includes("sme")) return "17"; // 500MB SME
-      if (c.includes("500")) return "26";                      // 500MB CG
-      if (c.includes("1gb") || c.includes("1.0") || c.includes("1000")) return "27"; // 1.0GB CG (Price: 400)
-      if (c.includes("2gb") || c.includes("2.0") || c.includes("2000")) return "28"; // 2.0GB CG (Price: 810)
-      if (c.includes("5gb") || c.includes("5000")) return "38"; // 5.0GB CG (Price: 1900)
-      return "27"; // Default MTN zuwa 1GB CG
+      if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0") || c.includes("1000"))) return "140";
+      if (c.includes("dc") && c.includes("2gb")) return "134";
+      if (c.includes("500") && c.includes("sme")) return "17";
+      if (c.includes("500")) return "26";
+      if (c.includes("1gb") || c.includes("1.0") || c.includes("1000")) return "27";
+      if (c.includes("2gb") || c.includes("2.0") || c.includes("2000")) return "28";
+      return "27";
+    }
+
+    if (net === "AIRTEL") {
+      if (c.includes("awoof") && c.includes("2gb")) return "157";
+      if (c.includes("cg") && c.includes("1.2")) return "262";
+      if (c.includes("sme") && c.includes("1gb")) return "200";
+      return "200";
     }
 
     if (net === "9MOBILE") {
       if (c.includes("1.5") || c.includes("1500")) return "11";
-      if (c.includes("500")) return "45";
+      return "45";
     }
 
-    if (net === "AIRTEL") {
-      if (c.includes("2gb") || c.includes("2000")) return "50";
-      if (c.includes("3gb") || c.includes("3000")) return "51";
+    if (net === "GLO") {
+      if (c.includes("2gb")) return "29";
+      return "28";
     }
 
     return String(rawCode || "27");
@@ -224,18 +232,18 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
 
   if (cleanToken) {
     try {
-      const selectedNet = alihsanNetMap[normNet] || "1";
+      const selectedNet = gatewayNetMap[normNet] || "1";
       const selectedPlanId = resolveAlihsanPlanId(planCode, normNet);
       const reqId = String(reference || `DATA_${Date.now()}`);
 
       const payload = {
         network: String(selectedNet),
         plan_id: String(selectedPlanId),
-        mobile_number: cleanLocalPhone(phone),
+        mobile_number: String(formattedPhone),
         request_id: reqId,
       };
 
-      console.log("📤 [ALIHSAN DATA REQ]:", payload);
+      console.log("📤 [ALIHSAN DATA REQUEST]:", payload);
 
       const res = await axios.post(
         "https://alihsandatasub.com.ng/api/v1/data.php",
@@ -250,31 +258,47 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
         }
       );
 
-      console.log("📥 [ALIHSAN DATA RES]:", res.data);
+      console.log("📥 [ALIHSAN DATA RESPONSE]:", res.data);
 
       const resData = res.data || {};
-      const successFlag = String(resData.success || "").toLowerCase();
-      const descText = String(resData.desc || "").toLowerCase();
+      const statusText = String(
+        resData.status || resData.Status || resData.success || ""
+      ).toLowerCase();
+      const messageText = String(
+        resData.message || resData.msg || resData.desc || ""
+      ).toLowerCase();
 
-      // Sharadin Nasara Daidai da Tsarin Al-Ihsan
       const isSuccess =
-        successFlag === "true" ||
+        statusText === "success" ||
+        statusText === "successful" ||
+        statusText === "true" ||
         resData.success === true ||
-        descText.includes("successful") ||
-        descText.includes("success") ||
-        resData.info?.status?.toLowerCase() === "success";
+        resData.success === "true" ||
+        resData.code === 200 ||
+        resData.code === "200" ||
+        messageText.includes("successful") ||
+        messageText.includes("success") ||
+        (resData.info && String(resData.info.status).toLowerCase() === "success");
 
       if (isSuccess) {
         return { success: true, provider: "ALIHSAN", data: resData };
       }
 
-      const failMsg = resData.desc || resData.message || JSON.stringify(resData);
+      const failMsg =
+        resData.desc ||
+        resData.message ||
+        resData.msg ||
+        JSON.stringify(resData);
+
       errors.push(`ALIHSAN: ${failMsg}`);
     } catch (err) {
-      const errMsg = err.response?.data?.desc || err.response?.data?.message || err.message;
+      const errRes = err.response?.data;
+      const errMsg = errRes?.desc || errRes?.message || errRes?.msg || err.message;
+      console.error("❌ [ALIHSAN DATA DISPATCH ERROR]:", errRes || err.message);
       errors.push(`ALIHSAN: ${errMsg}`);
     }
   }
+
   // ==========================================
   // GATEWAY 2: AYAX MARKETPLACE GATEWAY
   // ==========================================
@@ -321,7 +345,7 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   }
 
   // ==========================================
-  // GATEWAY 3: HUSMODATA (Optional Secondary)
+  // GATEWAY 3: HUSMODATA
   // ==========================================
   const husmoToken = process.env.HUSMODATA_API_KEY || process.env.HUSMODATA_TOKEN;
   if (husmoToken) {
@@ -420,7 +444,7 @@ exports.buyData = async (req, res) => {
 
     const targetPhone = cleanLocalPhone(phoneNumber || phone || phoneNo || "");
     const finalNetwork = String(network || "").trim().toUpperCase();
-    const cleanPlanCode = String(planCode || planId || plan || "1000").trim();
+    const cleanPlanCode = String(planId || planCode || plan || "27").trim();
     const amountNum = Number(amount);
     const userPin = String(transactionPin || pin || "").trim();
 
@@ -524,7 +548,7 @@ exports.buyData = async (req, res) => {
     });
 
     // =========================================================================
-    // MULTI-GATEWAY EXECUTION (Al-Ihsan, Ayax Marketplace, Husmo, SmartSMS, etc)
+    // MULTI-GATEWAY EXECUTION
     // =========================================================================
     const dispatchResult = await dispatchToExternalGateways({
       network: finalNetwork,
@@ -667,11 +691,13 @@ exports.getDataPlans = async (req, res) => {
 
     if (!plans || plans.length === 0) {
       plans = [
-        { id: "mtn_sme_1gb", network: "MTN", planType: "SME", plan: "1.0 GB", validity: "30 Days", costPrice: 245, userPrice: 285, agentPrice: 265, supervisorPrice: 255, apiPrice: 250, status: "active" },
-        { id: "mtn_cg_1gb", network: "MTN", planType: "Corporate Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 255, userPrice: 295, agentPrice: 280, supervisorPrice: 270, apiPrice: 265, status: "active" },
-        { id: "airtel_cg_1gb", network: "AIRTEL", planType: "Corporate Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 240, userPrice: 280, agentPrice: 265, supervisorPrice: 255, apiPrice: 250, status: "active" },
-        { id: "glo_data_1gb", network: "GLO", planType: "Data Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 220, userPrice: 265, agentPrice: 250, supervisorPrice: 240, apiPrice: 235, status: "active" },
-        { id: "9mobile_sme_1gb", network: "9MOBILE", planType: "SME", plan: "1.0 GB", validity: "30 Days", costPrice: 180, userPrice: 230, agentPrice: 210, supervisorPrice: 200, apiPrice: 195, status: "active" },
+        { id: "140", planId: "140", network: "MTN", planType: "DC", plan: "1.0 GB", validity: "30 Days", costPrice: 189, userPrice: 230, agentPrice: 210, status: "active" },
+        { id: "27", planId: "27", network: "MTN", planType: "CG", plan: "1.0 GB", validity: "30 Days", costPrice: 400, userPrice: 450, agentPrice: 425, status: "active" },
+        { id: "17", planId: "17", network: "MTN", planType: "SME", plan: "500 MB", validity: "1 Day", costPrice: 250, userPrice: 290, agentPrice: 270, status: "active" },
+        { id: "262", planId: "262", network: "AIRTEL", planType: "CG", plan: "1.2 GB", validity: "7 Days", costPrice: 230, userPrice: 280, agentPrice: 260, status: "active" },
+        { id: "200", planId: "200", network: "AIRTEL", planType: "SME", plan: "1.0 GB", validity: "7 Days", costPrice: 300, userPrice: 350, agentPrice: 330, status: "active" },
+        { id: "28", planId: "28", network: "GLO", planType: "Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 450, userPrice: 480, agentPrice: 460, status: "active" },
+        { id: "45", planId: "45", network: "9MOBILE", planType: "Gifting", plan: "500 MB", validity: "30 Days", costPrice: 480, userPrice: 550, agentPrice: 510, status: "active" }
       ];
     }
 
@@ -687,6 +713,65 @@ exports.getDataPlans = async (req, res) => {
       success: false,
       message: "Failed to fetch data plans",
       error: error.message,
+    });
+  }
+};
+
+// @desc    Delete Data Plan
+// @route   DELETE /api/v1/data/plans/:id
+// @access  Private (Admin)
+exports.deleteDataPlan = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, message: "Plan ID is required to delete." });
+    }
+
+    let Model = DataPlan;
+    if (!Model) {
+      try {
+        Model = mongoose.model("DataPlan");
+      } catch (e) {
+        try {
+          Model = mongoose.model("Plan");
+        } catch (err) {
+          Model = null;
+        }
+      }
+    }
+
+    if (!Model) {
+      return res.status(500).json({ success: false, message: "DataPlan model is not registered." });
+    }
+
+    let deletedPlan = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      deletedPlan = await Model.findByIdAndDelete(id);
+    }
+
+    if (!deletedPlan) {
+      deletedPlan = await Model.findOneAndDelete({
+        $or: [
+          { _id: id },
+          { id: id },
+          { planId: id },
+          { planCode: id },
+          { code: id }
+        ]
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Data plan deleted successfully.",
+      deletedId: id
+    });
+  } catch (err) {
+    console.error("deleteDataPlan Error:", err.message);
+    return res.status(500).json({
+      success: false,
+      message: "Server failed to delete plan.",
+      error: err.message
     });
   }
 };
