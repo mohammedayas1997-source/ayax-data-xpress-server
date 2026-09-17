@@ -186,37 +186,62 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  const alihsanNetMap = {
+const alihsanNetMap = {
     MTN: "1",
     GLO: "2",
     "9MOBILE": "3",
     AIRTEL: "4",
   };
 
-  // Madaidaicin taswirar Al-Ihsan Plan IDs daga Teburinsu
+  // Madaidaicin taswirar Al-Ihsan Plan IDs
   const resolveAlihsanPlanId = (rawCode, net) => {
     const c = String(rawCode || "").toLowerCase().trim();
 
-    // Idan an riga an turo lambar ID kai tsaye daga frontend
-    if (/^\d{1,2}$/.test(c)) return c;
+    // 1. Idan lambar ID ce kai-tsaye (1 zuwa 4 digits: e.g. 17, 27, 140, 262)
+    // Wannan zai ba kowace lambar Al-Ihsan damar wucewa kai-tsaye ba tare da an canza ta ba
+    if (/^\d{1,4}$/.test(c)) {
+      return c;
+    }
 
+    // 2. Fallbacks idan kalmomi aka turo daga tsofaffin clients (e.g. "1gb", "sme")
     if (net === "MTN") {
-      if (c.includes("500") && c.includes("sme")) return "17"; // 500MB SME
-      if (c.includes("500")) return "26";                      // 500MB CG
-      if (c.includes("1gb") || c.includes("1.0") || c.includes("1000")) return "27"; // 1.0GB CG (Price: 400)
-      if (c.includes("2gb") || c.includes("2.0") || c.includes("2000")) return "28"; // 2.0GB CG (Price: 810)
-      if (c.includes("5gb") || c.includes("5000")) return "38"; // 5.0GB CG (Price: 1900)
-      return "27"; // Default MTN zuwa 1GB CG
+      if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0") || c.includes("1000"))) return "140";
+      if (c.includes("dc") && c.includes("2gb")) return "134";
+      if (c.includes("dc") && c.includes("3gb")) return "135";
+      if (c.includes("dc") && c.includes("5gb")) return "136";
+      if (c.includes("500") && c.includes("sme")) return "17";
+      if (c.includes("500")) return "26";
+      if (c.includes("1gb") || c.includes("1.0") || c.includes("1000")) return "27";
+      if (c.includes("2gb") || c.includes("2.0") || c.includes("2000")) return "28";
+      if (c.includes("3gb") || c.includes("3000")) return "78";
+      if (c.includes("5gb") || c.includes("5000")) return "38";
+      if (c.includes("10gb") || c.includes("10000")) return "64";
+      return "27"; // Default MTN CG 1GB
+    }
+
+    if (net === "AIRTEL") {
+      if (c.includes("awoof") && c.includes("2gb")) return "157";
+      if (c.includes("awoof") && c.includes("3gb")) return "158";
+      if (c.includes("awoof") && c.includes("4gb")) return "159";
+      if (c.includes("cg") && c.includes("1.2")) return "262";
+      if (c.includes("cg") && c.includes("1.5")) return "240";
+      if (c.includes("sme") && c.includes("1gb")) return "200";
+      if (c.includes("sme") && c.includes("2gb")) return "253";
+      if (c.includes("2gb")) return "50";
+      if (c.includes("3gb")) return "51";
+      return "200"; // Default Airtel 1GB SME
     }
 
     if (net === "9MOBILE") {
       if (c.includes("1.5") || c.includes("1500")) return "11";
       if (c.includes("500")) return "45";
+      return "11";
     }
 
-    if (net === "AIRTEL") {
-      if (c.includes("2gb") || c.includes("2000")) return "50";
-      if (c.includes("3gb") || c.includes("3000")) return "51";
+    if (net === "GLO") {
+      if (c.includes("1gb") || c.includes("1000")) return "28";
+      if (c.includes("2gb") || c.includes("2000")) return "29";
+      return "28";
     }
 
     return String(rawCode || "27");
@@ -225,7 +250,10 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   if (cleanToken) {
     try {
       const selectedNet = alihsanNetMap[normNet] || "1";
-      const selectedPlanId = resolveAlihsanPlanId(planCode, normNet);
+      
+      // Duba ko 'plan_id' ko 'planCode' ne aka turo daga frontend
+      const incomingPlan = req.body?.plan_id || req.body?.planCode || planCode;
+      const selectedPlanId = resolveAlihsanPlanId(incomingPlan, normNet);
       const reqId = String(reference || `DATA_${Date.now()}`);
 
       const payload = {
@@ -254,15 +282,17 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
 
       const resData = res.data || {};
       const successFlag = String(resData.success || "").toLowerCase();
-      const descText = String(resData.desc || "").toLowerCase();
+      const descText = String(resData.desc || resData.message || "").toLowerCase();
 
-      // Sharadin Nasara Daidai da Tsarin Al-Ihsan
+      // Sharadin duba nasara daidai da sample na Al-Ihsan
       const isSuccess =
         successFlag === "true" ||
         resData.success === true ||
         descText.includes("successful") ||
         descText.includes("success") ||
-        resData.info?.status?.toLowerCase() === "success";
+        resData.info?.status?.toLowerCase() === "success" ||
+        resData.code === 200 ||
+        resData.code === "200";
 
       if (isSuccess) {
         return { success: true, provider: "ALIHSAN", data: resData };
@@ -272,6 +302,7 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
       errors.push(`ALIHSAN: ${failMsg}`);
     } catch (err) {
       const errMsg = err.response?.data?.desc || err.response?.data?.message || err.message;
+      console.error("❌ [ALIHSAN DATA ERROR]:", err.response?.data || err.message);
       errors.push(`ALIHSAN: ${errMsg}`);
     }
   }
