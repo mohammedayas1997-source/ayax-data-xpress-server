@@ -216,18 +216,27 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
         resData.status || resData.Status || resData.status_code || ""
       ).toLowerCase();
 
+      const messageText = String(
+        resData.message || resData.msg || resData.desc || ""
+      ).toLowerCase();
+
+      // Gyaran Success Check: Idan status "success" ne KO kuma message din yana dauke da kalmar "successful"
       const isSuccess =
         statusText === "success" ||
         statusText === "successful" ||
         statusText === "true" ||
         resData.code === 200 ||
         resData.code === "200" ||
-        resData.success === true;
+        resData.success === true ||
+        resData.success === "true" ||
+        messageText.includes("successful") ||
+        messageText.includes("success");
 
       if (isSuccess) {
         return { success: true, provider: "ALIHSAN", data: resData };
       }
 
+      // Idan ba nasara ba ne kadai zai zo nan
       const failureMsg =
         resData.message ||
         resData.error ||
