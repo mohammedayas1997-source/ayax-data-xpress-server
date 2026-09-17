@@ -18,6 +18,25 @@ try {
   Notification = null;
 }
 
+// Helper: Tsaftace lambar waya zuwa 080...
+const cleanLocalPhone = (phone = "") => {
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.startsWith("234") && digits.length === 13) {
+    return `0${digits.slice(3)}`;
+  }
+  if (digits.length === 10 && !digits.startsWith("0")) {
+    return `0${digits}`;
+  }
+  return digits;
+};
+
+// Helper: Tabbatar da tsarin Authorization Token na Al-Ihsan (Token xxxxxxxxx)
+const formatAlihsanAuth = (rawToken) => {
+  if (!rawToken) return "";
+  const token = String(rawToken).trim();
+  return token.startsWith("Token ") ? token : `Token ${token}`;
+};
+
 // Helper don tura sanarwa (In-App & DB Notification)
 const sendNotification = async (userId, title, message, category = "AIRTIME") => {
   try {
@@ -75,7 +94,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
       { new: true }
     );
 
-    if (!user) return;
+    if (!user) return 0;
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
@@ -121,14 +140,203 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
       "REFUND"
     );
 
+    console.log(`💸 [AIRTIME AUTO-REFUND] ₦${amountNum} refunded to User ${userId} (Ref: ${reference})`);
     return currentBal;
   } catch (err) {
     console.error("Auto-Refund Execution Error:", err.message);
+    return 0;
   }
 };
 
 /**
- * @desc    Sayen Airtime (VTU) via Ayax API Gateway tare da Auto-Refund
+ * Helper: Universal Multi-Gateway Airtime Dispatcher
+ * Yana gwada Al-Ihsan, Ayax Gateway, Husmodata, SmartSMS, BilalSada
+ */
+const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) => {
+  const normNet = String(network).toUpperCase().trim();
+  const formattedPhone = cleanLocalPhone(phone);
+  const netMapNumeric = { MTN: 1, GLO: 2, "9MOBILE": 3, AIRTEL: 4 };
+
+  const errors = [];
+
+  // ==========================================
+  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME
+  // ==========================================
+  const alihsanToken =
+    process.env.ALIHSAN_AUTH_TOKEN ||
+    process.env.ALIHSAN_TOKEN ||
+    process.env.ALIHSAN_API_KEY ||
+    process.env.VTU_API_KEY ||
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
+
+  if (alihsanToken) {
+    try {
+      const baseUrl = process.env.ALIHSAN_BASE_URL || "https://alihsandatasub.com.ng/api";
+      const res = await axios.post(
+        `${baseUrl}/topup/`,
+        {
+          network: netMapNumeric[normNet] || 1,
+          amount: Number(amount),
+          mobile_number: formattedPhone,
+          Ported_number: true,
+          airtime_type: "VTU",
+        },
+        {
+          headers: {
+            Authorization: formatAlihsanAuth(alihsanToken),
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          timeout: 35000,
+        }
+      );
+
+      const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
+      if (statusText === "success" || statusText === "successful" || statusText === "true") {
+        return { success: true, provider: "ALIHSAN", data: res.data };
+      }
+      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || res.data?.msg || "Topup rejected"}`);
+    } catch (err) {
+      errors.push(`ALIHSAN: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 2: AYAX MARKETPLACE GATEWAY
+  // ==========================================
+  const ayaxApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
+  const ayaxBaseUrl = (process.env.AYAX_API_BASE_URL || "https://www.ayaxapis.com").replace(/\/+$/, "");
+
+  if (ayaxApiKey) {
+    try {
+      const res = await axios.post(
+        `${ayaxBaseUrl}/api/v1/airtime/buy`,
+        {
+          network: normNet,
+          phone: formattedPhone,
+          phoneNumber: formattedPhone,
+          amount: Number(amount),
+          reference: reference,
+        },
+        {
+          headers: {
+            "x-api-key": ayaxApiKey,
+            Authorization: `Bearer ${ayaxApiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 40000,
+        }
+      );
+
+      const resData = res.data;
+      const isSuccessful =
+        resData &&
+        (resData.success === true ||
+          resData.status === "success" ||
+          resData.status === "SUCCESSFUL" ||
+          resData.status === 200 ||
+          resData.code === 200);
+
+      if (isSuccessful) {
+        return { success: true, provider: "AYAX_GATEWAY", data: resData };
+      }
+      errors.push(`AYAX: ${resData?.message || "Delivery rejected"}`);
+    } catch (err) {
+      errors.push(`AYAX: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 3: HUSMODATA AIRTIME
+  // ==========================================
+  const husmoToken = process.env.HUSMODATA_API_KEY || process.env.HUSMODATA_TOKEN;
+  if (husmoToken) {
+    try {
+      const res = await axios.post(
+        "https://husmodata.com/api/topup/",
+        {
+          network: netMapNumeric[normNet] || 1,
+          amount: Number(amount),
+          mobile_number: formattedPhone,
+          Ported_number: true,
+          airtime_type: "VTU",
+        },
+        {
+          headers: {
+            Authorization: `Token ${husmoToken}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 35000,
+        }
+      );
+      if (res.data?.status === "successful" || res.data?.status === "success") {
+        return { success: true, provider: "HUSMODATA", data: res.data };
+      }
+      errors.push(`HUSMODATA: ${res.data?.message || "Husmo topup failed"}`);
+    } catch (err) {
+      errors.push(`HUSMODATA: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 4: SMARTSMS SOLUTIONS AIRTIME
+  // ==========================================
+  if (process.env.SMARTSMS_API_TOKEN) {
+    try {
+      const netMapSmart = { MTN: "1", AIRTEL: "2", GLO: "3", "9MOBILE": "4" };
+      const res = await axios.post(
+        "https://smartsmssolutions.com/api/json.php",
+        {
+          token: process.env.SMARTSMS_API_TOKEN,
+          type: "airtime",
+          network: netMapSmart[normNet] || "1",
+          phone: formattedPhone,
+          amount: Number(amount),
+          ref: reference,
+        },
+        { timeout: 35000 }
+      );
+      if (res.data?.code === "1000" || res.data?.status === "success") {
+        return { success: true, provider: "SMARTSMS", data: res.data };
+      }
+      errors.push(`SMARTSMS: ${res.data?.message || "SmartSMS airtime failed"}`);
+    } catch (err) {
+      errors.push(`SMARTSMS: ${err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 5: BILALSADASUB AIRTIME
+  // ==========================================
+  if (process.env.BILALSADA_API_TOKEN) {
+    try {
+      const res = await axios.post(
+        "https://bilalsadasub.com/api/topup",
+        {
+          network: netMapNumeric[normNet] || 1,
+          phone: formattedPhone,
+          amount: Number(amount),
+          "request-id": reference,
+        },
+        {
+          headers: { Authorization: `Token ${process.env.BILALSADA_API_TOKEN}` },
+          timeout: 35000,
+        }
+      );
+      if (res.data?.status === "success" || res.data?.status === "process") {
+        return { success: true, provider: "BILALSADA", data: res.data };
+      }
+      errors.push(`BILALSADA: ${res.data?.message || "Bilalsada airtime failed"}`);
+    } catch (err) {
+      errors.push(`BILALSADA: ${err.message}`);
+    }
+  }
+
+  return { success: false, errors };
+};
+
+/**
+ * @desc    Sayen Airtime (VTU) via Multi-Gateway tare da Auto-Refund
  * @route   POST /api/v1/airtime/buy
  * @access  Private (User)
  */
@@ -137,8 +345,8 @@ exports.buyAirtime = async (req, res) => {
     const { network, phone, phoneNo, phoneNumber, amount, pin } = req.body;
     const userId = req.user?._id || req.user?.id;
 
-    const targetPhone = String(phone || phoneNo || phoneNumber || "").trim();
-    const finalNetwork = String(network || "").trim().toLowerCase();
+    const targetPhone = cleanLocalPhone(phone || phoneNo || phoneNumber || "");
+    const finalNetwork = String(network || "").trim().toUpperCase();
     const amountNum = Number(amount);
 
     if (!finalNetwork || !targetPhone || !amountNum) {
@@ -231,7 +439,7 @@ exports.buyAirtime = async (req, res) => {
       reference,
       type: "airtime",
       category: "AIRTIME",
-      service: `${finalNetwork.toUpperCase()} Airtime`,
+      service: `${finalNetwork} Airtime`,
       amount: amountNum,
       oldBalance: oldBal,
       newBalance: newBal,
@@ -239,80 +447,30 @@ exports.buyAirtime = async (req, res) => {
       recipient: targetPhone,
       phoneNumber: targetPhone,
       status: "pending",
-      details: `${finalNetwork.toUpperCase()} ₦${amountNum} Airtime Recharge for ${targetPhone}`,
+      details: `${finalNetwork} ₦${amountNum} Airtime Recharge for ${targetPhone}`,
     });
 
-    // Haɗa ainihin Gateway Base URL (tare da fallback zuwa www.ayaxapis.com)
-    const rawBaseUrl = process.env.AYAX_API_BASE_URL || "https://www.ayaxapis.com";
-    const cleanBaseUrl = rawBaseUrl.replace(/\/+$/, "");
-    const targetUrl = `${cleanBaseUrl}/api/v1/airtime/buy`;
-    const activeApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
+    // =========================================================================
+    // MULTI-GATEWAY EXECUTION (Al-Ihsan, Ayax Gateway, Husmodata, SmartSMS, etc)
+    // =========================================================================
+    const dispatchResult = await dispatchToAirtimeGateways({
+      network: finalNetwork,
+      phone: targetPhone,
+      amount: amountNum,
+      reference,
+    });
 
-    let response;
-    try {
-      response = await axios.post(
-        targetUrl,
-        {
-          network: finalNetwork,
-          phone: targetPhone,
-          phoneNumber: targetPhone,
-          amount: amountNum,
-          reference: reference,
-        },
-        {
-          headers: {
-            "x-api-key": activeApiKey,
-            Authorization: `Bearer ${activeApiKey}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 45000,
-        }
-      );
-    } catch (apiError) {
-      console.error("Ayax Gateway Dispatch Error:", apiError.response?.data || apiError.message);
-
-      const errMsg =
-        apiError.response?.data?.message ||
-        apiError.response?.data?.error ||
-        apiError.message ||
-        "Gateway connection error";
-
-      const refundBalance = await executeAutoRefund(
-        userId,
-        amountNum,
-        reference,
-        finalNetwork,
-        targetPhone,
-        errMsg
-      );
-
-      return res.status(422).json({
-        success: false,
-        status: "failed",
-        refunded: true,
-        message: `Provider Error (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
-        newBalance: refundBalance,
-      });
-    }
-
-    const resData = response.data;
-    const isSuccessful =
-      resData &&
-      (resData.success === true ||
-        resData.status === "success" ||
-        resData.status === "SUCCESSFUL" ||
-        resData.status === 200 ||
-        resData.code === 200);
-
-    if (isSuccessful) {
-      const providerData = resData.data || resData;
+    // 1. IDAN YA YI NASARA
+    if (dispatchResult.success) {
+      const providerData = dispatchResult.data || {};
+      const providerName = dispatchResult.provider || "GATEWAY";
 
       await Transaction.findOneAndUpdate(
         { reference },
         {
           status: "success",
           reference: providerData.reference || providerData.orderId || reference,
-          details: `Success: ${finalNetwork.toUpperCase()} ₦${amountNum} Airtime to ${targetPhone}`,
+          details: `Success: ${finalNetwork} ₦${amountNum} Airtime to ${targetPhone} via ${providerName}`,
         }
       );
 
@@ -321,7 +479,7 @@ exports.buyAirtime = async (req, res) => {
           user: userId,
           staffId: userId,
           action: "BUY_AIRTIME",
-          details: `Purchased ₦${amountNum} ${finalNetwork.toUpperCase()} airtime for ${targetPhone}`,
+          details: `Purchased ₦${amountNum} ${finalNetwork} airtime for ${targetPhone} via ${providerName}`,
           targetUser: userId,
         }).catch((err) => console.warn("Activity log skipped:", err.message));
       }
@@ -329,40 +487,47 @@ exports.buyAirtime = async (req, res) => {
       await sendNotification(
         userId,
         "Airtime Recharge Successful 📱",
-        `Your ${finalNetwork.toUpperCase()} airtime recharge of ₦${amountNum.toLocaleString()} to ${targetPhone} was delivered successfully.`,
+        `Your ${finalNetwork} airtime recharge of ₦${amountNum.toLocaleString()} to ${targetPhone} was delivered successfully.`,
         "AIRTIME"
       );
 
       return res.status(200).json({
         success: true,
         status: "success",
-        message: "Airtime Recharge Successful!",
+        message: `Airtime Recharge Successful via ${providerName}!`,
         orderId: providerData.reference || reference,
         network: finalNetwork,
         phone: targetPhone,
         amount: amountNum,
         newBalance: newBal,
-      });
-    } else {
-      const failReason = resData.message || resData.error || "Provider declined transaction";
-
-      const refundBalance = await executeAutoRefund(
-        userId,
-        amountNum,
-        reference,
-        finalNetwork,
-        targetPhone,
-        failReason
-      );
-
-      return res.status(422).json({
-        success: false,
-        status: "failed",
-        refunded: true,
-        message: `Purchase failed: ${failReason}. Your wallet was refunded automatically.`,
-        newBalance: refundBalance,
+        provider: providerName,
       });
     }
+
+    // 2. IDAN DUK GATEWAYS SUN GAZA: AUTO-REFUND NAN TAKE
+    const combinedErrors = dispatchResult.errors.length > 0
+      ? dispatchResult.errors.join(" | ")
+      : "All gateway providers rejected this transaction";
+
+    console.error(`🚨 [ALL AIRTIME GATEWAYS FAILED]: Refunding User ${userId}. Errors: ${combinedErrors}`);
+
+    const refundBalance = await executeAutoRefund(
+      userId,
+      amountNum,
+      reference,
+      finalNetwork,
+      targetPhone,
+      combinedErrors
+    );
+
+    return res.status(422).json({
+      success: false,
+      status: "failed",
+      refunded: true,
+      message: `Delivery Error (${combinedErrors}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
+      newBalance: refundBalance,
+    });
+
   } catch (error) {
     console.error("Buy Airtime Controller Error:", error);
     return res.status(500).json({

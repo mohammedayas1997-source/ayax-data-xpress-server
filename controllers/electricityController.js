@@ -18,6 +18,35 @@ try {
   Notification = null;
 }
 
+// Helper: Tsaftace lambar waya zuwa 080...
+const cleanLocalPhone = (phone = "") => {
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.startsWith("234") && digits.length === 13) {
+    return `0${digits.slice(3)}`;
+  }
+  if (digits.length === 10 && !digits.startsWith("0")) {
+    return `0${digits}`;
+  }
+  return digits;
+};
+
+// Helper: Al-Ihsan Token Auth Formatter
+const formatAlihsanAuth = (rawToken) => {
+  if (!rawToken) return "";
+  const token = String(rawToken).trim();
+  return token.startsWith("Token ") ? token : `Token ${token}`;
+};
+
+const getAlihsanToken = () => {
+  return (
+    process.env.ALIHSAN_AUTH_TOKEN ||
+    process.env.ALIHSAN_TOKEN ||
+    process.env.ALIHSAN_API_KEY ||
+    process.env.VTU_API_KEY ||
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x"
+  );
+};
+
 // Ayax Standard API Headers Generator
 const getHeaders = () => {
   const activeKey = String(
@@ -38,6 +67,23 @@ const getBaseUrl = () => {
     "https://www.ayaxapis.com";
   const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
   return `${cleanBase}/api/v1`;
+};
+
+// Helper: Taswirar Disco zuwa ID na Al-Ihsan da VTpass
+const mapDiscoCode = (discoName = "") => {
+  const d = String(discoName).toLowerCase();
+  if (d.includes("ikeja") || d.includes("ikedc")) return { id: 1, vtpass: "ikeja-electric", name: "IKEDC" };
+  if (d.includes("eko") || d.includes("ekedc")) return { id: 2, vtpass: "eko-electric", name: "EKEDC" };
+  if (d.includes("abuja") || d.includes("aedc")) return { id: 3, vtpass: "abuja-electric", name: "AEDC" };
+  if (d.includes("kano") || d.includes("kedco")) return { id: 4, vtpass: "kano-electric", name: "KEDCO" };
+  if (d.includes("portharcourt") || d.includes("phedc") || d.includes("phed")) return { id: 5, vtpass: "portharcourt-electric", name: "PHED" };
+  if (d.includes("jos") || d.includes("jedc")) return { id: 6, vtpass: "jos-electric", name: "JEDC" };
+  if (d.includes("ibadan") || d.includes("ibedc")) return { id: 7, vtpass: "ibadan-electric", name: "IBEDC" };
+  if (d.includes("kaduna") || d.includes("kaedco")) return { id: 8, vtpass: "kaduna-electric", name: "KAEDCO" };
+  if (d.includes("enugu") || d.includes("eedc")) return { id: 9, vtpass: "enugu-electric", name: "EEDC" };
+  if (d.includes("benin") || d.includes("bedc")) return { id: 10, vtpass: "benin-electric", name: "BEDC" };
+  if (d.includes("aba")) return { id: 11, vtpass: "aba-electric", name: "ABA" };
+  return { id: 1, vtpass: "ikeja-electric", name: "IKEDC" };
 };
 
 // Helper don tura Notification
@@ -97,7 +143,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalDisco, final
       { new: true }
     );
 
-    if (!user) return;
+    if (!user) return 0;
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
@@ -146,14 +192,16 @@ const executeAutoRefund = async (userId, amountNum, reference, finalDisco, final
       "REFUND"
     );
 
+    console.log(`💸 [ELECTRICITY REFUND] ₦${amountNum} refunded to User ${userId} (Ref: ${reference})`);
     return currentBal;
   } catch (err) {
     console.error("Electricity Auto-Refund Execution Error:", err.message);
+    return 0;
   }
 };
 
 /**
- * 1. VERIFY METER NUMBER VIA AYAX API GATEWAY
+ * 1. MULTI-GATEWAY METER NUMBER VERIFICATION
  */
 exports.verifyMeter = async (req, res) => {
   const { electricCompany, disco, serviceId, meterNo, meterNumber, meterType } = req.body;
@@ -169,112 +217,272 @@ exports.verifyMeter = async (req, res) => {
     });
   }
 
-  try {
-    const userId = req.user ? req.user._id || req.user.id : null;
-    const baseUrl = getBaseUrl();
+  const discoInfo = mapDiscoCode(finalDisco);
+  const userId = req.user ? req.user._id || req.user.id : null;
+  let verifiedCustomerName = "";
+  let verifiedAddress = "N/A";
 
-    let response;
-    const candidateEndpoints = [
-      `${baseUrl}/bills/electricity/verify`,
-      `${baseUrl}/electricity/verify`,
-      `${baseUrl}/vtu/electricity/verify`,
-    ];
+  // ROUTE 1: AL-IHSAN DATASUB METER VERIFICATION
+  const rawAlihsanToken = getAlihsanToken();
+  if (rawAlihsanToken) {
+    try {
+      const baseUrl = process.env.ALIHSAN_BASE_URL || "https://alihsandatasub.com.ng/api";
+      const alihsanRes = await axios.get(`${baseUrl}/validatemeter`, {
+        params: {
+          meter_number: finalMeterNo,
+          disconame: discoInfo.id,
+          mtype: finalMeterType === "prepaid" ? 1 : 2,
+        },
+        headers: {
+          Authorization: formatAlihsanAuth(rawAlihsanToken),
+          Accept: "application/json",
+        },
+        timeout: 20000,
+      });
 
-    for (const endpoint of candidateEndpoints) {
-      try {
-        response = await axios.post(
-          endpoint,
-          {
-            disco: finalDisco,
-            serviceId: finalDisco,
-            meterNo: finalMeterNo,
-            meterNumber: finalMeterNo,
-            meterType: finalMeterType,
-          },
-          {
-            headers: getHeaders(),
-            timeout: 25000,
+      if (alihsanRes.data?.name || alihsanRes.data?.customer_name || alihsanRes.data?.Customer_Name) {
+        verifiedCustomerName =
+          alihsanRes.data.name ||
+          alihsanRes.data.customer_name ||
+          alihsanRes.data.Customer_Name;
+        verifiedAddress = alihsanRes.data.address || "N/A";
+      }
+    } catch (_) {}
+  }
+
+  // ROUTE 2: AYAX MARKETPLACE GATEWAY VERIFICATION
+  if (!verifiedCustomerName) {
+    try {
+      const baseUrl = getBaseUrl();
+      const candidateEndpoints = [
+        `${baseUrl}/bills/electricity/verify`,
+        `${baseUrl}/electricity/verify`,
+        `${baseUrl}/vtu/electricity/verify`,
+      ];
+
+      for (const endpoint of candidateEndpoints) {
+        try {
+          const ayaxRes = await axios.post(
+            endpoint,
+            {
+              disco: finalDisco,
+              serviceId: finalDisco,
+              meterNo: finalMeterNo,
+              meterNumber: finalMeterNo,
+              meterType: finalMeterType,
+            },
+            {
+              headers: getHeaders(),
+              timeout: 20000,
+            }
+          );
+
+          if (ayaxRes.data?.data?.customerName || ayaxRes.data?.customerName || ayaxRes.data?.name) {
+            verifiedCustomerName =
+              ayaxRes.data.data?.customerName ||
+              ayaxRes.data.customerName ||
+              ayaxRes.data.name;
+            verifiedAddress = ayaxRes.data.data?.customerAddress || ayaxRes.data.address || "N/A";
+            break;
           }
-        );
-        if (response.data) break;
-      } catch (e) {
-        if (endpoint === candidateEndpoints[candidateEndpoints.length - 1]) throw e;
+        } catch (e) {}
       }
+    } catch (_) {}
+  }
+
+  // ROUTE 3: VTPASS METER VERIFICATION
+  if (!verifiedCustomerName && process.env.VTPASS_API_KEY) {
+    try {
+      const vtpassRes = await axios.post(
+        "https://api-service.vtpass.com/api/merchant-verify",
+        {
+          billersCode: finalMeterNo,
+          serviceID: discoInfo.vtpass,
+          type: finalMeterType,
+        },
+        {
+          headers: {
+            "api-key": process.env.VTPASS_API_KEY,
+            "secret-key": process.env.VTPASS_SECRET_KEY,
+          },
+          timeout: 20000,
+        }
+      );
+      if (vtpassRes.data?.content?.Customer_Name) {
+        verifiedCustomerName = vtpassRes.data.content.Customer_Name;
+        verifiedAddress = vtpassRes.data.content.Address || "N/A";
+      }
+    } catch (_) {}
+  }
+
+  if (verifiedCustomerName) {
+    if (userId && Activity) {
+      await Activity.create({
+        user: userId,
+        staffId: userId,
+        action: "METER_VERIFIED",
+        category: "VTU",
+        details: `Verified meter ${finalMeterNo} (${discoInfo.name}) - Name: ${verifiedCustomerName}`,
+        targetUser: userId,
+      }).catch(() => {});
     }
 
-    const resData = response.data;
-    const isSuccessful =
-      resData &&
-      (resData.success === true ||
-        resData.status === "success" ||
-        resData.status === true ||
-        resData.code === 200 ||
-        resData.code === "200");
-
-    if (isSuccessful) {
-      const customerInfo = resData.data || resData;
-      const verifiedName =
-        customerInfo.customerName ||
-        customerInfo.customer_name ||
-        customerInfo.name ||
-        customerInfo.accountName ||
-        "Verified Customer";
-
-      const verifiedAddress =
-        customerInfo.customerAddress ||
-        customerInfo.address ||
-        customerInfo.customer_address ||
-        "N/A";
-
-      if (userId && Activity) {
-        await Activity.create({
-          user: userId,
-          staffId: userId,
-          action: "METER_VERIFIED",
-          category: "VTU",
-          details: `Verified meter ${finalMeterNo} (${finalDisco.toUpperCase()}) - Name: ${verifiedName}`,
-          targetUser: userId,
-        }).catch(() => {});
-      }
-
-      return res.status(200).json({
-        success: true,
-        status: "success",
-        customerName: verifiedName,
-        name: verifiedName,
-        address: verifiedAddress,
-        meterNo: finalMeterNo,
-        meterNumber: finalMeterNo,
-        electricCompany: finalDisco,
-        disco: finalDisco,
-        meterType: finalMeterType,
-        serviceFee: 50,
-      });
-    } else {
-      return res.status(400).json({
-        success: false,
-        status: "failed",
-        message: resData.message || "Invalid Meter Number or Electricity Company.",
-      });
-    }
-  } catch (error) {
-    console.error(
-      "Meter Verification Error:",
-      error.response?.status,
-      error.response?.data || error.message
-    );
-    return res.status(error.response?.status || 500).json({
-      success: false,
-      status: "failed",
-      message:
-        error.response?.data?.message ||
-        "Meter verification server unavailable. Please check the number and retry.",
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      customerName: verifiedCustomerName,
+      name: verifiedCustomerName,
+      address: verifiedAddress,
+      meterNo: finalMeterNo,
+      meterNumber: finalMeterNo,
+      electricCompany: finalDisco,
+      disco: finalDisco,
+      meterType: finalMeterType,
+      serviceFee: 50,
     });
   }
+
+  return res.status(400).json({
+    success: false,
+    status: "failed",
+    message: "Could not verify meter number. Please verify the meter digits and DISCO company.",
+  });
 };
 
 /**
- * 2. PROCESS ELECTRICITY PAYMENT (NAIRA 50 SERVICE FEE APPLIED)
+ * Helper: Universal Dispatcher for Electricity Token Generation
+ */
+const dispatchElectricityPayment = async ({ disco, meterNo, meterType, amount, phone, reference }) => {
+  const discoInfo = mapDiscoCode(disco);
+  const formattedPhone = cleanLocalPhone(phone);
+  const errors = [];
+
+  // 1. AL-IHSAN DATASUB
+  const rawAlihsanToken = getAlihsanToken();
+  if (rawAlihsanToken) {
+    try {
+      const baseUrl = process.env.ALIHSAN_BASE_URL || "https://alihsandatasub.com.ng/api";
+      const res = await axios.post(
+        `${baseUrl}/bill/`,
+        {
+          disco_name: discoInfo.id,
+          amount: Number(amount),
+          meter_number: meterNo,
+          MeterType: meterType.toLowerCase() === "prepaid" ? 1 : 2,
+          customer_phone: formattedPhone,
+          reference: reference,
+        },
+        {
+          headers: {
+            Authorization: formatAlihsanAuth(rawAlihsanToken),
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          timeout: 45000,
+        }
+      );
+
+      const status = String(res.data?.status || res.data?.Status || "").toLowerCase();
+      if (status === "success" || status === "successful" || status === "true") {
+        const token =
+          res.data?.token ||
+          res.data?.meter_token ||
+          res.data?.mainToken ||
+          res.data?.token_code ||
+          "Token Generated Successfully";
+        const units = res.data?.units || res.data?.unit || "";
+
+        return { success: true, provider: "ALIHSAN", token, units, data: res.data };
+      }
+      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || "Al-Ihsan token generation declined"}`);
+    } catch (err) {
+      errors.push(`ALIHSAN: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // 2. AYAX MARKETPLACE GATEWAY
+  const ayaxApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
+  if (ayaxApiKey) {
+    try {
+      const baseUrl = getBaseUrl();
+      const res = await axios.post(
+        `${baseUrl}/electricity/buy`,
+        {
+          disco,
+          serviceId: disco,
+          meterNo,
+          meterNumber: meterNo,
+          meterType,
+          amount: Number(amount),
+          phone: formattedPhone,
+          reference,
+        },
+        {
+          headers: getHeaders(),
+          timeout: 45000,
+        }
+      );
+
+      const resData = res.data;
+      if (resData?.success === true || resData?.status === "success") {
+        const providerData = resData.data || resData;
+        const token =
+          providerData.token ||
+          providerData.meterToken ||
+          providerData.tokenCode ||
+          "Token Generated";
+        const units = providerData.units || providerData.unit || "";
+
+        return { success: true, provider: "AYAX_GATEWAY", token, units, data: providerData };
+      }
+      errors.push(`AYAX: ${resData?.message || "Ayax Gateway failed"}`);
+    } catch (err) {
+      errors.push(`AYAX: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // 3. VTPASS ELECTRICITY
+  if (process.env.VTPASS_API_KEY && process.env.VTPASS_SECRET_KEY) {
+    try {
+      const res = await axios.post(
+        "https://api-service.vtpass.com/api/pay",
+        {
+          request_id: reference,
+          serviceID: discoInfo.vtpass,
+          billersCode: meterNo,
+          variation_code: meterType,
+          amount: Number(amount),
+          phone: formattedPhone,
+        },
+        {
+          headers: {
+            "api-key": process.env.VTPASS_API_KEY,
+            "secret-key": process.env.VTPASS_SECRET_KEY,
+          },
+          timeout: 45000,
+        }
+      );
+
+      if (res.data?.code === "000") {
+        const token =
+          res.data?.token ||
+          res.data?.purchased_code ||
+          res.data?.mainToken ||
+          "Token Generated";
+        const units = res.data?.units || "";
+        return { success: true, provider: "VTPASS", token, units, data: res.data };
+      }
+      errors.push(`VTPASS: ${res.data?.response_description || "VTpass declined"}`);
+    } catch (err) {
+      errors.push(`VTPASS: ${err.message}`);
+    }
+  }
+
+  return { success: false, errors };
+};
+
+/**
+ * 2. PROCESS ELECTRICITY PAYMENT (MULTI-GATEWAY + ₦50 SERVICE FEE + INSTANT AUTO-REFUND)
  */
 exports.buyElectricity = async (req, res) => {
   try {
@@ -296,12 +504,11 @@ exports.buyElectricity = async (req, res) => {
     const finalDisco = String(disco || electricCompany || serviceId || "").toLowerCase().trim();
     const finalMeterNo = String(meterNo || meterNumber || "").trim();
     const finalMeterType = String(meterType || "prepaid").toLowerCase().trim();
-    const finalPhone = String(phoneNo || phone || phoneNumber || "").trim();
+    const finalPhone = cleanLocalPhone(phoneNo || phone || phoneNumber || "");
     const finalPin = String(transactionPin || pin || "").trim();
-    const tokenAmount = Number(amount); // Ainihin kudin wutar lantarki
+    const tokenAmount = Number(amount);
     const userId = req.user?._id || req.user?.id;
 
-    // SAITA SERVICE FEE ZUWA 50 NAIRA
     const SERVICE_FEE = 50;
     const totalAmountToDebit = Number((tokenAmount + SERVICE_FEE).toFixed(2));
 
@@ -327,7 +534,7 @@ exports.buyElectricity = async (req, res) => {
       return res.status(404).json({ success: false, message: "User account not found." });
     }
 
-    // PIN Authentication
+    // PIN Verification
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
 
@@ -356,7 +563,6 @@ exports.buyElectricity = async (req, res) => {
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
 
-    // Duba idan balance ya isa (Token Amount + 50 Naira Service Fee)
     if (currentBal < totalAmountToDebit) {
       return res.status(400).json({
         success: false,
@@ -365,7 +571,7 @@ exports.buyElectricity = async (req, res) => {
       });
     }
 
-    // Cire kudi a wallet (Total Amount = Token + 50 Naira)
+    // Atomic Debit daga Wallet
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       {
@@ -403,99 +609,21 @@ exports.buyElectricity = async (req, res) => {
       details: `${finalDisco.toUpperCase()} Meter ${finalMeterNo} (Token: ₦${tokenAmount} + Fee: ₦${SERVICE_FEE})`,
     });
 
-    const baseUrl = getBaseUrl();
-    let response;
-    const candidatePurchaseEndpoints = [
-      `${baseUrl}/bills/electricity/buy`,
-      `${baseUrl}/electricity/buy`,
-      `${baseUrl}/vtu/electricity/pay`,
-    ];
+    // MULTI-GATEWAY EXECUTION (Al-Ihsan, Ayax Gateway, VTpass)
+    const dispatchResult = await dispatchElectricityPayment({
+      disco: finalDisco,
+      meterNo: finalMeterNo,
+      meterType: finalMeterType,
+      amount: tokenAmount,
+      phone: finalPhone,
+      reference,
+    });
 
-    try {
-      for (const endpoint of candidatePurchaseEndpoints) {
-        try {
-          // LURA: Ainihin kudin wutar zalla (tokenAmount) ake tura wa API, ba a hada kudin sabis na 50 ba
-          response = await axios.post(
-            endpoint,
-            {
-              disco: finalDisco,
-              serviceId: finalDisco,
-              meterNo: finalMeterNo,
-              meterNumber: finalMeterNo,
-              meterType: finalMeterType,
-              amount: tokenAmount,
-              phone: finalPhone,
-              reference: reference,
-              ref_id: reference,
-            },
-            {
-              headers: getHeaders(),
-              timeout: 45000,
-            }
-          );
-          if (response.data) break;
-        } catch (e) {
-          if (endpoint === candidatePurchaseEndpoints[candidatePurchaseEndpoints.length - 1]) throw e;
-        }
-      }
-    } catch (apiError) {
-      console.error(
-        "Ayax Electricity API Connection Failure:",
-        apiError.response?.status,
-        apiError.response?.data || apiError.message
-      );
-
-      const errMsg =
-        apiError.response?.data?.message ||
-        apiError.response?.data?.error ||
-        apiError.message ||
-        "Electricity gateway timed out";
-
-      // Mayar wa mai amfani da duka kudin sa har da 50 Naira idan transaction ya fadi
-      const refundBal = await executeAutoRefund(
-        userId,
-        totalAmountToDebit,
-        reference,
-        finalDisco,
-        finalMeterNo,
-        finalPhone,
-        errMsg
-      );
-
-      return res.status(422).json({
-        success: false,
-        status: "failed",
-        refunded: true,
-        message: `Failed to generate token (${errMsg}). ₦${totalAmountToDebit.toLocaleString()} has been refunded to your wallet instantly.`,
-        newBalance: refundBal,
-      });
-    }
-
-    const resData = response.data;
-    const isSuccessful =
-      resData &&
-      (resData.success === true ||
-        resData.status === "success" ||
-        resData.status === true ||
-        resData.code === 200 ||
-        resData.code === "200");
-
-    if (isSuccessful) {
-      const providerData = resData.data || resData;
-
-      const tokenValue =
-        providerData.token ||
-        providerData.meterToken ||
-        providerData.metertoken ||
-        providerData.tokenCode ||
-        providerData.mainToken ||
-        "Token Generated";
-
-      const unitsValue =
-        providerData.units ||
-        providerData.unitsPurchased ||
-        providerData.unit ||
-        "";
+    // 1. NASARA: AN SAMU TOKEN
+    if (dispatchResult.success) {
+      const tokenValue = dispatchResult.token || "Token Generated";
+      const unitsValue = dispatchResult.units || "";
+      const providerName = dispatchResult.provider || "GATEWAY";
 
       await Transaction.findOneAndUpdate(
         { reference },
@@ -503,9 +631,9 @@ exports.buyElectricity = async (req, res) => {
           status: "success",
           token: tokenValue,
           units: unitsValue,
-          apiReference: providerData.orderid || providerData.reference || reference,
-          apiResponse: providerData,
-          details: `Success: Token (${tokenValue}) for Meter ${finalMeterNo} (Charged: ₦${totalAmountToDebit})`,
+          apiReference: reference,
+          apiResponse: dispatchResult.data,
+          details: `Success: Token (${tokenValue}) for Meter ${finalMeterNo} via ${providerName}`,
         }
       );
 
@@ -515,7 +643,7 @@ exports.buyElectricity = async (req, res) => {
           staffId: userId,
           action: "ELECTRICITY_PURCHASED",
           category: "VTU",
-          details: `Purchased electricity token worth ₦${tokenAmount} (Fee: ₦${SERVICE_FEE}) for meter ${finalMeterNo} - Token: ${tokenValue}`,
+          details: `Purchased electricity token worth ₦${tokenAmount} (Fee: ₦${SERVICE_FEE}) for meter ${finalMeterNo} via ${providerName} - Token: ${tokenValue}`,
           targetUser: userId,
         }).catch(() => {});
       }
@@ -531,7 +659,7 @@ exports.buyElectricity = async (req, res) => {
         success: true,
         status: "success",
         message: "Electricity token generated successfully.",
-        orderId: providerData.orderid || reference,
+        orderId: reference,
         reference: reference,
         token: tokenValue,
         unit: unitsValue,
@@ -540,28 +668,34 @@ exports.buyElectricity = async (req, res) => {
         serviceFee: SERVICE_FEE,
         totalCharged: totalAmountToDebit,
         newBalance: newBal,
-      });
-    } else {
-      const failureReason = resData?.message || resData?.error || "Ayax provider declined transaction";
-
-      const refundBal = await executeAutoRefund(
-        userId,
-        totalAmountToDebit,
-        reference,
-        finalDisco,
-        finalMeterNo,
-        finalPhone,
-        failureReason
-      );
-
-      return res.status(422).json({
-        success: false,
-        status: "failed",
-        refunded: true,
-        message: `${failureReason}. Your wallet balance has been refunded automatically.`,
-        newBalance: refundBal,
+        provider: providerName,
       });
     }
+
+    // 2. RASHIN NASARA: AUTO-REFUND NAN TAKE
+    const combinedErrors = dispatchResult.errors.length > 0
+      ? dispatchResult.errors.join(" | ")
+      : "Electricity gateway delivery failure";
+
+    console.error(`🚨 [ELECTRICITY DISPATCH FAILED]: Refunding User ${userId}. Errors: ${combinedErrors}`);
+
+    const refundBal = await executeAutoRefund(
+      userId,
+      totalAmountToDebit,
+      reference,
+      finalDisco,
+      finalMeterNo,
+      finalPhone,
+      combinedErrors
+    );
+
+    return res.status(422).json({
+      success: false,
+      status: "failed",
+      refunded: true,
+      message: `Failed to generate token (${combinedErrors}). ₦${totalAmountToDebit.toLocaleString()} has been refunded to your wallet instantly.`,
+      newBalance: refundBal,
+    });
   } catch (error) {
     console.error("Buy Electricity Processing Error:", error);
     return res.status(500).json({

@@ -29,6 +29,25 @@ try {
   Notification = null;
 }
 
+// Helper: Tsaftace lambar waya zuwa 080...
+const cleanLocalPhone = (phone = "") => {
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.startsWith("234") && digits.length === 13) {
+    return `0${digits.slice(3)}`;
+  }
+  if (digits.length === 10 && !digits.startsWith("0")) {
+    return `0${digits}`;
+  }
+  return digits;
+};
+
+// Helper: Tabbatar da tsarin Token na Al-Ihsan (Token xxxxxxxxx)
+const formatAlihsanAuth = (rawToken) => {
+  if (!rawToken) return "";
+  const token = String(rawToken).trim();
+  return token.startsWith("Token ") ? token : `Token ${token}`;
+};
+
 // Helper don tura Notification a Database da App
 const sendNotification = async (userId, title, message, category = "DATA") => {
   try {
@@ -86,7 +105,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
       { new: true }
     );
 
-    if (!user) return;
+    if (!user) return 0;
 
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     const prevBal = Number((currentBal - amountNum).toFixed(2));
@@ -137,11 +156,198 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
     return currentBal;
   } catch (err) {
     console.error("Data Auto-Refund Execution Error:", err.message);
+    return 0;
   }
 };
 
 /**
- * @desc    Sayen Data Bundle (VTU) via Ayax Gateway tare da Auto-Refund
+ * Helper: Universal Multi-Gateway Data Dispatcher
+ * Yana gwada Al-Ihsan, Ayax Gateway, Husmodata, SmartSMS, Clubkonnect, BilalSada
+ */
+const dispatchToExternalGateways = async ({ network, phone, planCode, amount, reference }) => {
+  const normNet = String(network).toUpperCase().trim();
+  const formattedPhone = cleanLocalPhone(phone);
+  const netMapNumeric = { MTN: 1, GLO: 2, "9MOBILE": 3, AIRTEL: 4 };
+
+  const errors = [];
+
+  // ==========================================
+  // GATEWAY 1: AL-IHSAN DATASUB
+  // ==========================================
+  const alihsanToken =
+    process.env.ALIHSAN_AUTH_TOKEN ||
+    process.env.ALIHSAN_TOKEN ||
+    process.env.ALIHSAN_API_KEY ||
+    process.env.VTU_API_KEY ||
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
+
+  if (alihsanToken) {
+    try {
+      const baseUrl = process.env.ALIHSAN_BASE_URL || "https://alihsandatasub.com.ng/api";
+      const res = await axios.post(
+        `${baseUrl}/data/`,
+        {
+          network: netMapNumeric[normNet] || 1,
+          plan: Number(planCode),
+          mobile_number: formattedPhone,
+          Ported_number: true,
+          reference: reference,
+        },
+        {
+          headers: {
+            Authorization: formatAlihsanAuth(alihsanToken),
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          timeout: 35000,
+        }
+      );
+
+      const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
+      if (statusText === "success" || statusText === "successful" || statusText === "true") {
+        return { success: true, provider: "ALIHSAN", data: res.data };
+      }
+      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || res.data?.msg || "Dispatch rejected"}`);
+    } catch (err) {
+      errors.push(`ALIHSAN: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 2: AYAX MARKETPLACE GATEWAY
+  // ==========================================
+  const ayaxApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
+  const ayaxBaseUrl = (process.env.AYAX_API_BASE_URL || "https://www.ayaxapis.com").replace(/\/+$/, "");
+
+  if (ayaxApiKey) {
+    try {
+      const res = await axios.post(
+        `${ayaxBaseUrl}/api/v1/data/purchase`,
+        {
+          network: normNet,
+          phone: formattedPhone,
+          phoneNumber: formattedPhone,
+          planCode: planCode,
+          planId: planCode,
+          amount: amount,
+          reference: reference,
+        },
+        {
+          headers: {
+            "x-api-key": ayaxApiKey,
+            Authorization: `Bearer ${ayaxApiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 40000,
+        }
+      );
+
+      const resData = res.data;
+      const providerStatus = String(resData?.status || "").toUpperCase();
+      if (
+        resData?.success === true ||
+        providerStatus === "SUCCESSFUL" ||
+        providerStatus === "SUCCESS" ||
+        res.status === 200
+      ) {
+        return { success: true, provider: "AYAX_MARKETPLACE", data: resData };
+      }
+      errors.push(`AYAX: ${resData?.message || "Delivery rejected"}`);
+    } catch (err) {
+      errors.push(`AYAX: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 3: HUSMODATA (Optional Secondary)
+  // ==========================================
+  const husmoToken = process.env.HUSMODATA_API_KEY || process.env.HUSMODATA_TOKEN;
+  if (husmoToken) {
+    try {
+      const res = await axios.post(
+        "https://husmodata.com/api/data/",
+        {
+          network: netMapNumeric[normNet] || 1,
+          plan: Number(planCode),
+          mobile_number: formattedPhone,
+          Ported_number: true,
+        },
+        {
+          headers: {
+            Authorization: `Token ${husmoToken}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 35000,
+        }
+      );
+      if (res.data?.status === "successful" || res.data?.status === "success") {
+        return { success: true, provider: "HUSMODATA", data: res.data };
+      }
+      errors.push(`HUSMODATA: ${res.data?.message || "Husmodata failed"}`);
+    } catch (err) {
+      errors.push(`HUSMODATA: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 4: SMARTSMS SOLUTIONS
+  // ==========================================
+  if (process.env.SMARTSMS_API_TOKEN) {
+    try {
+      const netMapSmart = { MTN: "1", AIRTEL: "2", GLO: "3", "9MOBILE": "4" };
+      const res = await axios.post(
+        "https://smartsmssolutions.com/api/json.php",
+        {
+          token: process.env.SMARTSMS_API_TOKEN,
+          type: "internet_data",
+          network: netMapSmart[normNet] || "1",
+          phone: formattedPhone,
+          product_code: String(planCode),
+          ref: reference,
+        },
+        { timeout: 35000 }
+      );
+      if (res.data?.code === "1000" || res.data?.status === "success") {
+        return { success: true, provider: "SMARTSMS", data: res.data };
+      }
+      errors.push(`SMARTSMS: ${res.data?.message || "SmartSMS failed"}`);
+    } catch (err) {
+      errors.push(`SMARTSMS: ${err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 5: BILALSADASUB
+  // ==========================================
+  if (process.env.BILALSADA_API_TOKEN) {
+    try {
+      const res = await axios.post(
+        "https://bilalsadasub.com/api/data",
+        {
+          network: netMapNumeric[normNet] || 1,
+          phone: formattedPhone,
+          plan: Number(planCode),
+          "request-id": reference,
+        },
+        {
+          headers: { Authorization: `Token ${process.env.BILALSADA_API_TOKEN}` },
+          timeout: 35000,
+        }
+      );
+      if (res.data?.status === "success" || res.data?.status === "process") {
+        return { success: true, provider: "BILALSADA", data: res.data };
+      }
+      errors.push(`BILALSADA: ${res.data?.message || "Bilalsada failed"}`);
+    } catch (err) {
+      errors.push(`BILALSADA: ${err.message}`);
+    }
+  }
+
+  return { success: false, errors };
+};
+
+/**
+ * @desc    Sayen Data Bundle (VTU) via Multi-Gateway tare da Auto-Refund
  * @route   POST /api/v1/vtu/buy-data (ko /api/v1/data/buy)
  * @access  Private (User)
  */
@@ -150,7 +356,7 @@ exports.buyData = async (req, res) => {
     const { network, phone, phoneNumber, phoneNo, planCode, planId, plan, amount, transactionPin, pin } = req.body;
     const userId = req.user?._id || req.user?.id;
 
-    const targetPhone = String(phoneNumber || phone || phoneNo || "").trim();
+    const targetPhone = cleanLocalPhone(phoneNumber || phone || phoneNo || "");
     const finalNetwork = String(network || "").trim().toUpperCase();
     const cleanPlanCode = String(planCode || planId || plan || "1000").trim();
     const amountNum = Number(amount);
@@ -255,84 +461,28 @@ exports.buyData = async (req, res) => {
       details: `${finalNetwork} (${cleanPlanCode}) Data Bundle for ${targetPhone}`,
     });
 
-    const rawBaseUrl = process.env.AYAX_API_BASE_URL || "https://www.ayaxapis.com";
-    const cleanBaseUrl = rawBaseUrl.replace(/\/+$/, "");
-    const targetUrl = `${cleanBaseUrl}/api/v1/data/purchase`;
-    const activeApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
+    // =========================================================================
+    // MULTI-GATEWAY EXECUTION (Al-Ihsan, Ayax Marketplace, Husmo, SmartSMS, etc)
+    // =========================================================================
+    const dispatchResult = await dispatchToExternalGateways({
+      network: finalNetwork,
+      phone: targetPhone,
+      planCode: cleanPlanCode,
+      amount: amountNum,
+      reference,
+    });
 
-    let response;
-    try {
-      response = await axios.post(
-        targetUrl,
-        {
-          network: finalNetwork,
-          phone: targetPhone,
-          phoneNumber: targetPhone,
-          planCode: cleanPlanCode,
-          planId: cleanPlanCode,
-          amount: amountNum,
-          reference: reference,
-        },
-        {
-          headers: {
-            "x-api-key": activeApiKey,
-            Authorization: `Bearer ${activeApiKey}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 45000,
-        }
-      );
-    } catch (apiError) {
-      console.error("Ayax Gateway Data Error:", apiError.response?.data || apiError.message);
-
-      const errMsg =
-        apiError.response?.data?.message ||
-        apiError.response?.data?.error ||
-        apiError.message ||
-        "Gateway connection error";
-
-      // Mayar da kudi nan take idan kira ya fadi
-      const refundBalance = await executeAutoRefund(
-        userId,
-        amountNum,
-        reference,
-        finalNetwork,
-        cleanPlanCode,
-        targetPhone,
-        errMsg
-      );
-
-      return res.status(422).json({
-        success: false,
-        status: "failed",
-        refunded: true,
-        message: `Delivery Error (${errMsg}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
-        newBalance: refundBalance,
-      });
-    }
-
-    const resData = response.data;
-    const providerStatus = String(resData?.status || "").toUpperCase();
-    const isDirectSuccess =
-      resData &&
-      (resData.success === true ||
-        providerStatus === "SUCCESSFUL" ||
-        providerStatus === "SUCCESS" ||
-        resData.status === 200 ||
-        resData.code === 200) &&
-      providerStatus !== "PROCESSING" &&
-      resData.code !== "TRANSACTION_QUEUED";
-
-    // 1. IDAN YA YI NASARA NAN TAKE (Misali Clubkonnect ko USSD Direct)
-    if (isDirectSuccess) {
-      const providerData = resData.data || resData;
+    // 1. IDAN YA YI NASARA
+    if (dispatchResult.success) {
+      const providerData = dispatchResult.data || {};
+      const providerName = dispatchResult.provider || "GATEWAY";
 
       await Transaction.findOneAndUpdate(
         { reference },
         {
           status: "success",
           reference: providerData.reference || providerData.orderId || reference,
-          details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone}`,
+          details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone} via ${providerName}`,
         }
       );
 
@@ -346,103 +496,23 @@ exports.buyData = async (req, res) => {
       return res.status(200).json({
         success: true,
         status: "success",
-        message: "Data Purchase Successful!",
+        message: `Data Purchase Successful via ${providerName}!`,
         orderId: providerData.reference || reference,
         network: finalNetwork,
         phone: targetPhone,
         amount: amountNum,
         newBalance: newBal,
+        provider: providerName,
       });
     }
 
-    // 2. IDAN YANA GSM QUEUE / PROCESSING: DAKATA A TABBATAR KAFIN A BAR SHI
-    if (providerStatus === "PROCESSING" || resData.code === "TRANSACTION_QUEUED" || resData.route === "GSM_GATEWAY") {
-      let isVerified = false;
-      let finalFailureReason = "Delivery timed out on GSM Gateway";
+    // 2. IDAN DUK GATEWAYS SUN GASA: AUTO-REFUND NAN TAKE
+    const combinedErrors = dispatchResult.errors.length > 0
+      ? dispatchResult.errors.join(" | ")
+      : "All gateway providers rejected this transaction";
 
-      // Jira har na tsawon dakika 12 (sau 4 a kowane dakika 3) don tabbatar da an tura
-      for (let attempt = 0; attempt < 4; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+    console.error(`🚨 [ALL GATEWAYS FAILED]: Refunding User ${userId}. Errors: ${combinedErrors}`);
 
-        try {
-          const checkRes = await axios.get(
-            `${cleanBaseUrl}/api/v1/data/status/${reference}`,
-            {
-              headers: {
-                "x-api-key": activeApiKey,
-                Authorization: `Bearer ${activeApiKey}`,
-              },
-              timeout: 5000,
-            }
-          );
-
-          const currentStatus = String(checkRes.data?.status || checkRes.data?.data?.status || "").toUpperCase();
-
-          if (currentStatus === "SUCCESSFUL" || currentStatus === "SUCCESS") {
-            isVerified = true;
-            break;
-          }
-
-          if (currentStatus === "FAILED" || currentStatus === "REFUNDED") {
-            finalFailureReason = checkRes.data?.message || "Delivery rejected by network";
-            break;
-          }
-        } catch (pollErr) {
-          // Ci gaba da dubawa
-        }
-      }
-
-      // Idan an tabbatar da nasara a wayar:
-      if (isVerified) {
-        await Transaction.findOneAndUpdate(
-          { reference },
-          {
-            status: "success",
-            details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone}`,
-          }
-        );
-
-        await sendNotification(
-          userId,
-          "Data Bundle Successful 🎉",
-          `Your ${finalNetwork} data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
-          "DATA"
-        );
-
-        return res.status(200).json({
-          success: true,
-          status: "success",
-          message: "Data Purchase Successful!",
-          orderId: reference,
-          network: finalNetwork,
-          phone: targetPhone,
-          amount: amountNum,
-          newBalance: newBal,
-        });
-      }
-
-      // IDAN BAI TABBATA BA KO YA FAƊI: YI AUTO-REFUND NAN TAKE
-      const refundBalance = await executeAutoRefund(
-        userId,
-        amountNum,
-        reference,
-        finalNetwork,
-        cleanPlanCode,
-        targetPhone,
-        finalFailureReason
-      );
-
-      return res.status(422).json({
-        success: false,
-        status: "failed",
-        refunded: true,
-        message: `Delivery failed: ${finalFailureReason}. ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
-        newBalance: refundBalance,
-      });
-    }
-
-    // 3. DUK WANI KUSKURE NA DABAN: AUTO-REFUND
-    const failReason = resData.message || resData.error || "Provider declined data transaction";
     const refundBalance = await executeAutoRefund(
       userId,
       amountNum,
@@ -450,65 +520,17 @@ exports.buyData = async (req, res) => {
       finalNetwork,
       cleanPlanCode,
       targetPhone,
-      failReason
+      combinedErrors
     );
 
     return res.status(422).json({
       success: false,
       status: "failed",
       refunded: true,
-      message: `Purchase failed: ${failReason}. Your wallet was refunded automatically.`,
+      message: `Delivery Error (${combinedErrors}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
       newBalance: refundBalance,
     });
 
-    // 2. Idan an kammala nan take (kamar Clubkonnect / API na kai tsaye)
-    if (providerStatus === "SUCCESSFUL" || providerStatus === "SUCCESS") {
-      await Transaction.findOneAndUpdate(
-        { reference },
-        {
-          status: "success",
-          details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone}`,
-        }
-      );
-
-      await sendNotification(
-        userId,
-        "Data Bundle Delivered 🎉",
-        `Your ${finalNetwork} data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
-        "DATA"
-      );
-
-      return res.status(200).json({
-        success: true,
-        status: "success",
-        message: "Data Purchase Successful",
-        orderId: reference,
-        network: finalNetwork,
-        phone: targetPhone,
-        amount: amountNum,
-        newBalance: newBal,
-      });
-    }
-
-    // 3. Idan yana kan layi ta GSM Gateway (PROCESSING)
-    await Transaction.findOneAndUpdate(
-      { reference },
-      {
-        status: "processing",
-        details: `Processing via GSM Gateway: ${finalNetwork} Data to ${targetPhone}`,
-      }
-    );
-
-    return res.status(200).json({
-      success: true,
-      status: "processing",
-      message: "Order received and queued for delivery via GSM Gateway",
-      orderId: reference,
-      network: finalNetwork,
-      phone: targetPhone,
-      amount: amountNum,
-      newBalance: newBal,
-    });
   } catch (error) {
     console.error("Buy Data Controller Error:", error);
     return res.status(500).json({
@@ -546,7 +568,6 @@ exports.handleGatewayCallback = async (req, res) => {
         "DATA"
       );
     } else if (["FAILED", "FAILURE", "CANCELLED", "ERROR"].includes(normalizedStatus)) {
-      // Mayar da kudi kai tsaye
       await executeAutoRefund(
         txn.user,
         Number(txn.amount),
