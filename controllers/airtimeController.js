@@ -160,53 +160,92 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
   const errors = [];
 
   // ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME (PHP SPEC MATCH)
+  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME (STRICT PHP MATCH)
   // ==========================================
   const rawAlihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
     process.env.ALIHSAN_TOKEN ||
     process.env.ALIHSAN_API_KEY ||
     process.env.VTU_API_KEY ||
-   "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x"
-  // Cire kalmar Token ko Bearer idan tana ciki
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x"; // Token dinka na Al-Ihsan
   const cleanToken = String(rawAlihsanToken)
     .replace(/^Token\s+/i, "")
     .replace(/^Bearer\s+/i, "")
     .trim();
 
+  // Taswirar layukan waya zuwa lambobin Al-Ihsan
+  const alihsanNetMap = {
+    MTN: "1",
+    GLO: "2",
+    "9MOBILE": "3",
+    AIRTEL: "4"
+  };
+
+  const selectedNetworkId = alihsanNetMap[normNet] || "1";
+  const formattedPhone = cleanLocalPhone(phone);
+  const airtimeAmount = String(Math.floor(Number(amount)));
+  const reqId = String(reference || `AIRT_${Date.now()}`);
+
   if (cleanToken) {
     try {
+      const payload = {
+        network: selectedNetworkId,
+        amount: airtimeAmount,
+        mobile_number: formattedPhone,
+        request_id: reqId,
+      };
+
+      console.log("📤 [ALIHSAN AIRTIME REQ]:", payload);
+
       const res = await axios.post(
         "https://alihsandatasub.com.ng/api/v1/airtime.php",
-        {
-          network: String(netMapNumeric[normNet] || "1"),
-          amount: String(amount),
-          mobile_number: formattedPhone,
-          request_id: String(reference),
-        },
+        payload,
         {
           headers: {
             Authorization: cleanToken,
             "Content-Type": "application/json",
             Accept: "application/json",
           },
-          timeout: 35000,
+          timeout: 40000,
         }
       );
 
-      const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
-      if (
+      console.log("📥 [ALIHSAN AIRTIME RES]:", res.data);
+
+      const resData = res.data || {};
+      const statusText = String(
+        resData.status || resData.Status || resData.status_code || ""
+      ).toLowerCase();
+
+      const isSuccess =
         statusText === "success" ||
         statusText === "successful" ||
         statusText === "true" ||
-        res.data?.code === "200" ||
-        res.data?.code === 200
-      ) {
-        return { success: true, provider: "ALIHSAN", data: res.data };
+        resData.code === 200 ||
+        resData.code === "200" ||
+        resData.success === true;
+
+      if (isSuccess) {
+        return { success: true, provider: "ALIHSAN", data: resData };
       }
-      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || res.data?.msg || "Airtime rejected"}`);
+
+      // Ɗauko ainihin kuskuren da Al-Ihsan ya bayar
+      const failureMsg =
+        resData.message ||
+        resData.error ||
+        resData.msg ||
+        resData.desc ||
+        JSON.stringify(resData);
+
+      errors.push(`ALIHSAN: ${failureMsg}`);
     } catch (err) {
-      errors.push(`ALIHSAN: ${err.response?.data?.message || err.message}`);
+      const serverErrMsg =
+        err.response?.data?.message ||
+        err.response?.data?.error ||
+        err.response?.data?.msg ||
+        err.message;
+      console.error("❌ [ALIHSAN AIRTIME ERROR]:", err.response?.data || err.message);
+      errors.push(`ALIHSAN: ${serverErrMsg}`);
     }
   }
 
