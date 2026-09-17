@@ -251,9 +251,71 @@ const alihsanNetMap = {
     try {
       const selectedNet = alihsanNetMap[normNet] || "1";
       
-      // Duba ko 'plan_id' ko 'planCode' ne aka turo daga frontend
-      const incomingPlan = req.body?.plan_id || req.body?.planCode || planCode;
-      const selectedPlanId = resolveAlihsanPlanId(incomingPlan, normNet);
+      // ==========================================
+  // GATEWAY: AL-IHSAN DATASUB
+  // ==========================================
+  const rawAlihsanToken =
+    process.env.ALIHSAN_AUTH_TOKEN ||
+    process.env.ALIHSAN_TOKEN ||
+    process.env.ALIHSAN_API_KEY ||
+    process.env.VTU_API_KEY ||
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
+
+  const cleanToken = String(rawAlihsanToken)
+    .replace(/^Token\s+/i, "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+
+  const alihsanNetMap = {
+    MTN: "1",
+    GLO: "2",
+    "9MOBILE": "3",
+    AIRTEL: "4",
+  };
+
+  const resolveAlihsanPlanId = (rawCode, net) => {
+    const c = String(rawCode || "").toLowerCase().trim();
+
+    // 1. Idan an turo lamba (digits) kai-tsaye
+    if (/^\d{1,4}$/.test(c)) return c;
+
+    // 2. Fallbacks ga tsofaffin sunaye
+    if (net === "MTN") {
+      if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0") || c.includes("1000"))) return "140";
+      if (c.includes("dc") && c.includes("2gb")) return "134";
+      if (c.includes("500") && c.includes("sme")) return "17";
+      if (c.includes("500")) return "26";
+      if (c.includes("1gb") || c.includes("1.0") || c.includes("1000")) return "27";
+      if (c.includes("2gb") || c.includes("2.0") || c.includes("2000")) return "28";
+      return "27";
+    }
+
+    if (net === "AIRTEL") {
+      if (c.includes("awoof") && c.includes("2gb")) return "157";
+      if (c.includes("cg") && c.includes("1.2")) return "262";
+      if (c.includes("sme") && c.includes("1gb")) return "200";
+      return "200";
+    }
+
+    if (net === "9MOBILE") {
+      if (c.includes("1.5") || c.includes("1500")) return "11";
+      return "45";
+    }
+
+    if (net === "GLO") {
+      if (c.includes("2gb")) return "29";
+      return "28";
+    }
+
+    return String(rawCode || "27");
+  };
+
+  if (cleanToken) {
+    try {
+      const selectedNet = alihsanNetMap[normNet] || "1";
+      
+      // AN GYARA: Amfani da planCode kai-tsaye ba tare da kiran 'req' da babu shi a ciki ba
+      const selectedPlanId = resolveAlihsanPlanId(planCode, normNet);
       const reqId = String(reference || `DATA_${Date.now()}`);
 
       const payload = {
@@ -277,6 +339,34 @@ const alihsanNetMap = {
           timeout: 40000,
         }
       );
+
+      console.log("📥 [ALIHSAN DATA RES]:", res.data);
+
+      const resData = res.data || {};
+      const successFlag = String(resData.success || "").toLowerCase();
+      const descText = String(resData.desc || resData.message || "").toLowerCase();
+
+      const isSuccess =
+        successFlag === "true" ||
+        resData.success === true ||
+        descText.includes("successful") ||
+        descText.includes("success") ||
+        resData.info?.status?.toLowerCase() === "success" ||
+        resData.code === 200 ||
+        resData.code === "200";
+
+      if (isSuccess) {
+        return { success: true, provider: "ALIHSAN", data: resData };
+      }
+
+      const failMsg = resData.desc || resData.message || JSON.stringify(resData);
+      errors.push(`ALIHSAN: ${failMsg}`);
+    } catch (err) {
+      const errMsg = err.response?.data?.desc || err.response?.data?.message || err.message;
+      console.error("❌ [ALIHSAN DATA ERROR]:", err.response?.data || err.message);
+      errors.push(`ALIHSAN: ${errMsg}`);
+    }
+  }
 
       console.log("📥 [ALIHSAN DATA RES]:", res.data);
 
