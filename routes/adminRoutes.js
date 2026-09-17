@@ -226,6 +226,10 @@ router.get(
   safe(adminController.getBVNPrice, "getBVNPrice")
 );
 
+
+router.post("/pricing/create-plan", adminController.createDataPlan);
+router.post("/pricing/update-tier", adminController.updatePlanPricing);
+
 // ==========================================
 // 10. LEGACY DATA PLANS INTEGRATION
 // ==========================================

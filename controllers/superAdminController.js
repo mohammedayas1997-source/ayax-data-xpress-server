@@ -6,6 +6,7 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const Notification = require("../models/Notification");
 const crypto = require("crypto");
+const Plan = require("../models/Plan");
 
 // DYNAMIC MODEL LOADERS (Protects against missing models)
 let NIMCRequest;
@@ -1669,5 +1670,83 @@ exports.batchApproveRefunds = async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
+  }
+};
+exports.createDataPlan = async (req, res) => {
+  try {
+    const {
+      network,
+      planType,
+      plan,
+      name,
+      validity,
+      userPrice,
+      agentPrice,
+      status
+    } = req.body;
+
+    const planCode = req.body.planCode || req.body.id || `${network}_${Date.now()}`;
+
+    // Ajiye a Database kai tsaye
+    const newPlan = await Plan.create({
+      planId: planCode,
+      planCode: planCode,
+      network: String(network).toUpperCase(),
+      planType: planType || "SME",
+      plan: plan || name,
+      name: name || `${network} ${plan}`,
+      validity: validity || "30 Days",
+      userPrice: Number(userPrice),
+      price: Number(userPrice),
+      agentPrice: Number(agentPrice || userPrice),
+      status: status || "active",
+      isActive: true
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Data plan created and published successfully!",
+      plan: newPlan
+    });
+  } catch (error) {
+    console.error("createDataPlan Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to save plan in database: " + error.message
+    });
+  }
+};
+
+// 2. Aikin Sabunta Farashin Data Plan
+exports.updatePlanPricing = async (req, res) => {
+  try {
+    const { id, planId, userPrice, agentPrice, status } = req.body;
+    const targetId = planId || id;
+
+    const updated = await Plan.findOneAndUpdate(
+      { $or: [{ _id: targetId }, { planId: targetId }, { planCode: targetId }] },
+      {
+        $set: {
+          userPrice: Number(userPrice),
+          price: Number(userPrice),
+          agentPrice: Number(agentPrice || userPrice),
+          status: status || "active",
+          isActive: status === "active"
+        }
+      },
+      { new: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Plan pricing updated successfully!",
+      plan: updated
+    });
+  } catch (error) {
+    console.error("updatePlanPricing Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update pricing: " + error.message
+    });
   }
 };

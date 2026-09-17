@@ -270,6 +270,9 @@ router.post(
   safe(superAdminController.dispatchDataBundle, "dispatchDataBundle")
 );
 
+router.post("/pricing/create-plan", adminController.createDataPlan);
+router.post("/pricing/update-tier", adminController.updatePlanPricing);
+
 // ==========================================
 // 13. GLOBAL PRICING & TARIFF MATRIX
 // ==========================================
