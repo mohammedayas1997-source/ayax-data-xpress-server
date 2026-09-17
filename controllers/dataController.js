@@ -174,6 +174,9 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   // ==========================================
   // GATEWAY 1: AL-IHSAN DATASUB
   // ==========================================
+ // ==========================================
+  // GATEWAY 1: AL-IHSAN DATASUB
+  // ==========================================
   const alihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
     process.env.ALIHSAN_TOKEN ||
@@ -182,34 +185,51 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
     "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
 
   if (alihsanToken) {
-    try {
-      const baseUrl = process.env.ALIHSAN_BASE_URL || "https://alihsandatasub.com.ng/api";
-      const res = await axios.post(
-        `${baseUrl}/data/`,
-        {
-          network: netMapNumeric[normNet] || 1,
-          plan: Number(planCode),
-          mobile_number: formattedPhone,
-          Ported_number: true,
-          reference: reference,
-        },
-        {
-          headers: {
-            Authorization: formatAlihsanAuth(alihsanToken),
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          timeout: 35000,
-        }
-      );
+    const candidateUrls = [
+      "https://alihsandatasub.com.ng/api/data/",
+      "https://alihsandatasub.com.ng/api/v1/data.php",
+      "https://alihsandatasub.com.ng/api/data.php"
+    ];
 
-      const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
-      if (statusText === "success" || statusText === "successful" || statusText === "true") {
-        return { success: true, provider: "ALIHSAN", data: res.data };
+    let alihsanSuccess = false;
+    let lastAlihsanErr = null;
+
+    for (const targetUrl of candidateUrls) {
+      try {
+        const res = await axios.post(
+          targetUrl,
+          {
+            network: netMapNumeric[normNet] || 1,
+            plan: Number(planCode),
+            mobile_number: formattedPhone,
+            Ported_number: true,
+            reference: reference,
+          },
+          {
+            headers: {
+              Authorization: formatAlihsanAuth(alihsanToken),
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            timeout: 35000,
+          }
+        );
+
+        const statusText = String(res.data?.status || res.data?.Status || "").toLowerCase();
+        if (statusText === "success" || statusText === "successful" || statusText === "true") {
+          return { success: true, provider: "ALIHSAN", data: res.data };
+        }
+        lastAlihsanErr = res.data?.message || res.data?.error || res.data?.msg || "Dispatch rejected";
+      } catch (err) {
+        // Idan 404 ne, bar shi ya gwada URL na gaba a jerin
+        if (err.response?.status !== 404) {
+          lastAlihsanErr = err.response?.data?.message || err.message;
+        }
       }
-      errors.push(`ALIHSAN: ${res.data?.message || res.data?.error || res.data?.msg || "Dispatch rejected"}`);
-    } catch (err) {
-      errors.push(`ALIHSAN: ${err.response?.data?.message || err.message}`);
+    }
+
+    if (!alihsanSuccess && lastAlihsanErr) {
+      errors.push(`ALIHSAN: ${lastAlihsanErr}`);
     }
   }
 
