@@ -1691,22 +1691,66 @@ exports.batchApproveRefunds = async (req, res) => {
 // Aikin Create Data Plan
 exports.createDataPlan = async (req, res) => {
   try {
-    const { network, planType, plan, name, validity, userPrice, agentPrice, status } = req.body;
-    const planCode = req.body.planCode || req.body.id || `${network}_${Date.now()}`;
+    const {
+      network,
+      planType,
+      plan,
+      name,
+      validity,
+      userPrice,
+      agentPrice,
+      status
+    } = req.body;
+
+    const net = String(network || "MTN").toUpperCase().trim();
+    
+    // 1. Daidaita networkId
+    const networkIdMap = {
+      "MTN": 1,
+      "GLO": 2,
+      "AIRTEL": 3,
+      "9MOBILE": 4
+    };
+    const netId = networkIdMap[net] || 1;
+
+    // 2. Daidaita planType don Enum Schema
+    let normalizedPlanType = String(planType || "SME").trim();
+    const lowerType = normalizedPlanType.toLowerCase();
+    if (lowerType.includes("corporate") || lowerType === "cg") {
+      normalizedPlanType = "CG"; // ko "CORPORATE" dangane da schema
+    } else if (lowerType.includes("gift")) {
+      normalizedPlanType = "GIFTING";
+    } else if (lowerType.includes("direct") || lowerType.includes("sme2")) {
+      normalizedPlanType = "SME2";
+    } else if (lowerType.includes("sme")) {
+      normalizedPlanType = "SME";
+    }
+
+    const planVolume = String(plan || name || "1.0 GB").trim();
+    const planValidity = String(validity || "30 Days").trim();
+    const generatedLabel = `${net} ${normalizedPlanType} ${planVolume} (${planValidity})`;
+    const planCode = req.body.planCode || req.body.id || `${net}_${normalizedPlanType}_${planVolume.replace(/\s+/g, "")}_${Date.now()}`;
+
+    const uPrice = Number(userPrice || 0);
+    const aPrice = Number(agentPrice || uPrice);
 
     let newPlan = null;
     if (DataPlanModel) {
       newPlan = await DataPlanModel.create({
         planId: planCode,
         planCode: planCode,
-        network: String(network || "MTN").toUpperCase(),
-        planType: planType || "SME",
-        plan: plan || name || "1.0 GB",
-        name: name || `${network} ${plan}`,
-        validity: validity || "30 Days",
-        userPrice: Number(userPrice || 0),
-        price: Number(userPrice || 0),
-        agentPrice: Number(agentPrice || userPrice || 0),
+        code: planCode,
+        network: net,
+        networkId: netId,
+        networkName: net,
+        planType: normalizedPlanType,
+        plan: planVolume,
+        name: generatedLabel,
+        planLabel: generatedLabel,
+        validity: planValidity,
+        userPrice: uPrice,
+        price: uPrice,
+        agentPrice: aPrice,
         status: status || "active",
         isActive: true,
       });
