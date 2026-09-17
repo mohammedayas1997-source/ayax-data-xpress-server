@@ -6,7 +6,16 @@ const Transaction = require("../models/Transaction");
 const Activity = require("../models/Activity");
 const Notification = require("../models/Notification");
 const crypto = require("crypto");
-const Plan = require("../models/Plan");
+let Plan;
+try {
+  Plan = require("../models/DataPlan");
+} catch (e) {
+  try {
+    Plan = require("../models/Data");
+  } catch (err) {
+    Plan = require("../models/Plan");
+  }
+}
 
 // DYNAMIC MODEL LOADERS (Protects against missing models)
 let NIMCRequest;

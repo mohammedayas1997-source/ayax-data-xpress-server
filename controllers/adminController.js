@@ -8,17 +8,14 @@ const BVNRequest = require("../models/BVNRequest");
 const SupportRequest = require("../models/SupportRequest");
 const NIMCPrice = require("../models/NIMCPrice");
 const BVNPrice = require("../models/BVNPrice");
-const Plan = require("../models/Plan");
-
-// Dynamic DataPlan Model Load
-let DataPlan;
+let Plan;
 try {
-  DataPlan = require("../models/DataPlan");
+  Plan = require("../models/DataPlan");
 } catch (e) {
   try {
-    DataPlan = require("../models/Plan");
+    Plan = require("../models/Data");
   } catch (err) {
-    DataPlan = null;
+    Plan = require("../models/Plan");
   }
 }
 
