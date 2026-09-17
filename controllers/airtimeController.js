@@ -154,7 +154,7 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
  */
 const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) => {
   const normNet = String(network).toUpperCase().trim();
-  const formattedPhone = cleanLocalPhone(phone);
+  formattedPhone = cleanLocalPhone(phone);
   const netMapNumeric = { MTN: 1, GLO: 2, "9MOBILE": 3, AIRTEL: 4 };
 
   const errors = [];
