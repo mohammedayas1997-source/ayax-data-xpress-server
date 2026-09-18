@@ -17,9 +17,11 @@ try {
 const protect =
   authMiddleware.protect ||
   authMiddleware.verifyToken ||
-  (typeof authMiddleware === "function" ? authMiddleware : (req, res, next) => {
-    return res.status(401).json({ success: false, message: "Authentication required." });
-  });
+  (typeof authMiddleware === "function"
+    ? authMiddleware
+    : (req, res, next) => {
+        return res.status(401).json({ success: false, message: "Authentication required." });
+      });
 
 const authorize =
   authMiddleware.authorize ||
@@ -68,9 +70,10 @@ router.use(authorize("admin", "superadmin"));
 // ==========================================
 router.get("/stats", safe(adminController.getDashboardStats, "getDashboardStats"));
 router.get("/dashboard-stats", safe(adminController.getDashboardStats, "getDashboardStats"));
+router.get("/overview", safe(adminController.getDashboardStats, "getDashboardStats"));
 
 // ==========================================
-// 2. TRANSACTION LOGS & AUDITING
+// 2. TRANSACTION LOGS & CASHFLOW STREAM
 // ==========================================
 router.get("/transactions", safe(adminController.getAllTransactions, "getAllTransactions"));
 router.get("/all-transactions", safe(adminController.getAllTransactions, "getAllTransactions"));
@@ -80,7 +83,9 @@ router.get("/all-transactions", safe(adminController.getAllTransactions, "getAll
 // ==========================================
 router.get("/users", safe(adminController.getAllUsers, "getAllUsers"));
 router.post("/users/create", safe(adminController.createUserByAdmin, "createUserByAdmin"));
+router.post("/create-user", safe(adminController.createUserByAdmin, "createUserByAdmin"));
 router.put("/users/:id/status", safe(adminController.updateUserStatusByAdmin, "updateUserStatusByAdmin"));
+router.patch("/users/:id/status", safe(adminController.updateUserStatusByAdmin, "updateUserStatusByAdmin"));
 
 router.get("/supervisors", safe(adminController.getSupervisors, "getSupervisors"));
 router.get("/agents", safe(adminController.getAgents, "getAgents"));
@@ -96,17 +101,62 @@ router.route("/suspend-user/:id")
   .put(safe(adminController.suspendUser, "suspendUser"));
 
 // ==========================================
-// 4. SUPER ADMIN TARIFFS & MULTI-TIER PRICING
+// 4. DATA TARIFFS & PLANS (CRUD)
 // ==========================================
 router.get("/pricing/plans", safe(adminController.getDataPlans, "getDataPlans"));
+router.post("/pricing/create-plan", safe(adminController.createDataPlan, "createDataPlan"));
 router.post("/pricing/update-tier", safe(adminController.updateTierPricing, "updateTierPricing"));
 router.post("/pricing/update", safe(adminController.updateTierPricing, "updateTierPricing"));
-router.post("/pricing/create-plan", safe(adminController.createDataPlan, "createDataPlan"));
+
+router.delete(
+  "/pricing/delete-plan/:id",
+  safe(adminController.deleteDataPlan || dataPlanController.deletePlan, "deleteDataPlan")
+);
+
+// Legacy Plan Compatibility Endpoints
+router.get(
+  "/plans",
+  safe(
+    adminController.getDataPlans ||
+      dataPlanController.getAdminPlans ||
+      dataPlanController.getPlans,
+    "getDataPlans"
+  )
+);
+
+router.post(
+  "/set-plan",
+  safe(
+    adminController.updateTierPricing ||
+      dataPlanController.setPlanPrice ||
+      dataPlanController.createPlan,
+    "setPlanPrice"
+  )
+);
+
+router.put(
+  "/plans/:id",
+  safe(
+    adminController.updateTierPricing ||
+      dataPlanController.setPlanPrice ||
+      dataPlanController.updatePlan,
+    "updatePlan"
+  )
+);
+
+router.delete(
+  "/plans/:id",
+  safe(adminController.deleteDataPlan || dataPlanController.deletePlan, "deleteDataPlan")
+);
+
+router.post("/plans/sync-ayax", safe(dataPlanController.syncAyaxPlans, "syncAyaxPlans"));
+router.patch("/plans/:id/toggle", safe(dataPlanController.togglePlanStatus, "togglePlanStatus"));
 
 // ==========================================
 // 5. BROADCAST & PUSH NOTIFICATIONS
 // ==========================================
 router.post("/notifications/broadcast", safe(adminController.broadcastNotification, "broadcastNotification"));
+router.post("/notifications/send", safe(adminController.broadcastNotification, "broadcastNotification"));
 
 // ==========================================
 // 6. REFUND PROCESSING & SETTLEMENT
@@ -114,9 +164,19 @@ router.post("/notifications/broadcast", safe(adminController.broadcastNotificati
 router.get("/pending-refunds", safe(adminController.getPendingRefunds, "getPendingRefunds"));
 router.get("/refunds/pending", safe(adminController.getPendingRefunds, "getPendingRefunds"));
 
+// Single Refund Execution
 router.route("/approve-refund/:id")
   .post(safe(adminController.approveRefund, "approveRefund"))
   .patch(safe(adminController.approveRefund, "approveRefund"));
+
+router.route("/refunds/approve")
+  .post(safe(adminController.approveRefund, "approveRefund"));
+
+// Batch Approve Multiple Refunds in One Click
+router.post(
+  "/refunds/batch-approve",
+  safe(adminController.batchApproveRefunds, "batchApproveRefunds")
+);
 
 // ==========================================
 // 7. FORENSIC AUDIT TRAIL & ACTIVITIES
@@ -125,7 +185,7 @@ router.get("/activities", safe(adminController.getSupportActivities, "getSupport
 router.get("/support-activities", safe(adminController.getSupportActivities, "getSupportActivities"));
 
 // ==========================================
-// 8. NIMC REQUESTS & VERIFICATIONS
+// 8. NIMC & NIN SERVICES OVERSIGHT
 // ==========================================
 router.get("/nimc-requests", safe(adminController.getAllNIMCRequests, "getAllNIMCRequests"));
 router.get("/nimc/requests", safe(adminController.getAllNIMCRequests, "getAllNIMCRequests"));
@@ -141,6 +201,11 @@ router.post(
   safe(adminController.updateNinPrice, "updateNinPrice")
 );
 
+router.post(
+  "/nimc/admin/set-price",
+  safe(adminController.updateNinPrice, "updateNinPrice")
+);
+
 // ==========================================
 // 9. BVN REQUESTS & VERIFICATIONS
 // ==========================================
@@ -152,44 +217,5 @@ router.route("/approve-bvn/:id")
   .put(safe(adminController.approveBVNRequest, "approveBVNRequest"));
 
 router.get("/pricing/bvn", safe(adminController.getBVNPrice, "getBVNPrice"));
-
-// ==========================================
-// 10. LEGACY DATA PLANS INTEGRATION
-// ==========================================
-router.get(
-  "/plans",
-  safe(
-    dataPlanController.getAdminPlans ||
-      dataPlanController.getActivePlans ||
-      dataPlanController.getPlans ||
-      adminController.getDataPlans,
-    "getAdminPlans"
-  )
-);
-
-router.post(
-  "/set-plan",
-  safe(
-    dataPlanController.setPlanPrice ||
-      dataPlanController.createPlan ||
-      adminController.updateTierPricing,
-    "setPlanPrice"
-  )
-);
-
-router.post("/plans/sync-ayax", safe(dataPlanController.syncAyaxPlans, "syncAyaxPlans"));
-router.patch("/plans/:id/toggle", safe(dataPlanController.togglePlanStatus, "togglePlanStatus"));
-
-router.put(
-  "/plans/:id",
-  safe(
-    dataPlanController.setPlanPrice ||
-      dataPlanController.updatePlan ||
-      adminController.updateTierPricing,
-    "updatePlan"
-  )
-);
-
-router.delete("/plans/:id", safe(dataPlanController.deletePlan, "deletePlan"));
 
 module.exports = router;
