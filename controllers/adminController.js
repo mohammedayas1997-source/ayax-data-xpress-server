@@ -655,30 +655,48 @@ const suspendUser = async (req, res) => {
 // =========================================================================
 
 /**
- * @desc    Get all active data plans with multi-tier pricing
+ * @desc    Get all active data plans with multi-tier pricing (Direct MongoDB Resilient Fetch)
  * @route   GET /api/v1/admin/pricing/plans & GET /api/v1/data/plans
  * @access  Public / Private
  */
 const getDataPlans = async (req, res) => {
   try {
-    let Model = DataPlan;
-    if (!Model) {
+    let plans = [];
+
+    // 1. Tray fɛn am tru Mongoose Models
+    const possibleModelNames = ["DataPlan", "Data", "Plan", "dataPlan", "plan"];
+    for (const name of possibleModelNames) {
       try {
-        Model = mongoose.model("DataPlan");
-      } catch (e) {
-        try {
-          Model = mongoose.model("Plan");
-        } catch (e2) {
-          Model = null;
+        const M = mongoose.models[name] || mongoose.model(name);
+        if (M) {
+          const fetched = await M.find().sort({ network: 1, costPrice: 1 }).lean();
+          if (fetched && fetched.length > 0) {
+            plans = fetched;
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2. If Mongoose Model nɔ wok, go direct to Native MongoDB Collections
+    if (!plans || plans.length === 0) {
+      if (mongoose.connection && mongoose.connection.db) {
+        const db = mongoose.connection.db;
+        const possibleCollections = ["dataplans", "plans", "dataprimaryplans", "datas"];
+        
+        for (const colName of possibleCollections) {
+          try {
+            const rawDocs = await db.collection(colName).find({}).sort({ network: 1 }).toArray();
+            if (rawDocs && rawDocs.length > 0) {
+              plans = rawDocs;
+              break;
+            }
+          } catch (_) {}
         }
       }
     }
 
-    let plans = [];
-    if (Model) {
-      plans = await Model.find().sort({ network: 1, costPrice: 1 }).lean();
-    }
-
+    // 3. Fallback to default if di database rili empti
     if (!plans || plans.length === 0) {
       plans = [
         { id: "140", planId: "140", network: "MTN", planType: "DC", plan: "1.0 GB", validity: "30 Days", costPrice: 189, userPrice: 230, agentPrice: 210, status: "active" },
@@ -699,6 +717,7 @@ const getDataPlans = async (req, res) => {
       data: plans,
     });
   } catch (error) {
+    console.error("getDataPlans Error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
