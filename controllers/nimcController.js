@@ -339,34 +339,32 @@ exports.submitNIMCRequest = async (req, res) => {
     }
 
     // ZABEN ENDPOINT NA ABJIKTECH
-      let targetEndpoint = "";
-      let requestPayload = { api_key: ABJIKTECH_API_KEY };
+    let targetEndpoint = "";
+    let requestPayload = { api_key: ABJIKTECH_API_KEY };
 
-      if (isPhoneSearch) {
-        if (finalServiceType === "premiumCard" || finalServiceType === "premium") {
-          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_premium.php";
-        } else if (finalServiceType === "basicSlip" || finalServiceType === "regular") {
-          // Regular/Basic yana fitar da Tracking ID da Address
-          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_regular.php";
-        } else if (finalServiceType === "vnin") {
-          targetEndpoint = "https://abjiktech.com.ng/api/verification/vnin_slip.php";
-        } else {
-          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_standard.php";
-        }
-        requestPayload.phone = cleanPhone;
+    if (isPhoneSearch) {
+      if (finalServiceType === "premiumCard" || finalServiceType === "premium") {
+        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_premium.php";
+      } else if (finalServiceType === "basicSlip" || finalServiceType === "regular") {
+        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_regular.php";
+      } else if (finalServiceType === "vnin") {
+        targetEndpoint = "https://abjiktech.com.ng/api/verification/vnin_slip.php";
       } else {
-        if (finalServiceType === "premiumCard" || finalServiceType === "premium") {
-          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_nin.php";
-        } else if (finalServiceType === "basicSlip" || finalServiceType === "regular") {
-          // Regular/Basic yana fitar da Tracking ID da Address
-          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_regular_slip.php";
-        } else if (finalServiceType === "vnin") {
-          targetEndpoint = "https://abjiktech.com.ng/api/verification/vnin_slip.php";
-        } else {
-          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_standard_slip.php";
-        }
-        requestPayload.nin = finalNin;
+        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_standard.php";
       }
+      requestPayload.phone = cleanPhone;
+    } else {
+      if (finalServiceType === "premiumCard" || finalServiceType === "premium") {
+        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_nin.php";
+      } else if (finalServiceType === "basicSlip" || finalServiceType === "regular") {
+        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_regular_slip.php";
+      } else if (finalServiceType === "vnin") {
+        targetEndpoint = "https://abjiktech.com.ng/api/verification/vnin_slip.php";
+      } else {
+        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_standard_slip.php";
+      }
+      requestPayload.nin = finalNin;
+    }
 
     try {
       const abjikRes = await axios.post(targetEndpoint, requestPayload, {
@@ -384,11 +382,11 @@ exports.submitNIMCRequest = async (req, res) => {
 
       const base64Pdf = resData.pdf_base64 || resData.data?.pdf_base64 || null;
 
-      if (!isSuccess || (!base64Pdf && !resData.user_data)) {
+      if (!isSuccess || (!base64Pdf && !resData.user_data && !resData.data)) {
         throw new Error(resData.message || resData.desc || "Record not found on NIMC database.");
       }
 
-     // 1. Tattara ainihin user_data daga dukkan sassan da Abjiktech zai iya ajiye su
+      // 1. Tattara ainihin user_data daga dukkan sassan da Abjiktech ke ajiye su
       const userData =
         resData.user_data?.response?.[0] ||
         resData.user_data ||
@@ -403,7 +401,8 @@ exports.submitNIMCRequest = async (req, res) => {
         userData.vnin ||
         finalNin ||
         targetIdentifier;
-        // Ciro Tracking ID da Address daga dukkan nau'in casing da Abjiktech ke bayarwa
+
+      // Ciro Tracking ID
       const userTrackingId =
         userData.trackingId ||
         userData.tracking_id ||
@@ -411,16 +410,16 @@ exports.submitNIMCRequest = async (req, res) => {
         userData.trackingNo ||
         "N/A";
 
+      // Ciro Adireshi (sau ɗaya rak)
       const userAddress =
         userData.address ||
         userData.residence_AdressLine1 ||
         userData.residence_address ||
         userData.residenceAddress ||
-        
         [userData.residence_town, userData.lga || userData.residence_lga, userData.state || userData.residence_state].filter(Boolean).join(", ") ||
         "N/A";
 
-      // 2. Haɗa Cikakken Suna ba tare da ɓacewar wani yanki ba
+      // 2. Haɗa Cikakken Suna
       const fName = userData.first_name || userData.firstname || userData.firstName || "";
       const mName = userData.middle_name || userData.middlename || userData.middleName || "";
       const lName = userData.last_name || userData.surname || userData.lastname || "";
@@ -436,27 +435,14 @@ exports.submitNIMCRequest = async (req, res) => {
         photoData = `data:image/jpeg;base64,${photoData}`;
       }
 
-      // 4. Ciro Lambar Waya, Ranar Haihuwa, da Adireshi
-      const userPhone =
-        userData.phone_number ||
-        userData.phone ||
-        userData.telephoneno ||
-        cleanPhone ||
-        "N/A";
-
+      // 4. Ranar Haihuwa da Jinsi
       const userDob =
         userData.date_of_birth ||
         userData.dob ||
         userData.birthdate ||
         "N/A";
 
-      const userGender = userData.gender || "N/A";
-      const userAddress =
-        userData.address ||
-        userData.residence_AdressLine1 ||
-        userData.residence_address ||
-        `${userData.lga || ""} ${userData.state || ""}`.trim() ||
-        "N/A";
+      const userGender = (userData.gender || "N/A").toUpperCase();
 
       await Transaction.findOneAndUpdate(
         { reference },
@@ -486,6 +472,12 @@ exports.submitNIMCRequest = async (req, res) => {
         "IDENTITY"
       );
 
+      // Cire lambar waya don kada ta fito a kan slips
+      const sanitizedUserData = { ...userData };
+      delete sanitizedUserData.phone_number;
+      delete sanitizedUserData.phone;
+      delete sanitizedUserData.telephoneno;
+
       return res.status(200).json({
         success: true,
         status: "success",
@@ -498,8 +490,6 @@ exports.submitNIMCRequest = async (req, res) => {
           nin: resolvedNin,
           ninNumber: resolvedNin,
           photo: photoData,
-          phone: userPhone,
-          telephoneno: userPhone,
           dob: userDob,
           birthdate: userDob,
           gender: userGender,
@@ -508,7 +498,7 @@ exports.submitNIMCRequest = async (req, res) => {
           state: userData.state || userData.residence_state || userData.stateOfOrigin || "N/A",
           lga: userData.lga || userData.residence_lga || userData.lgaOfOrigin || "N/A"
         },
-        user_data: userData,
+        user_data: sanitizedUserData,
         pdf_base64: base64Pdf,
         newBalance: newBal,
       });
@@ -572,10 +562,17 @@ exports.verifyNIMC = async (req, res) => {
     });
 
     if (response.data?.status === "success" || response.data?.response_code === "00") {
+      const outputData = response.data?.user_data || response.data;
+      if (outputData && typeof outputData === "object") {
+        delete outputData.phone_number;
+        delete outputData.phone;
+        delete outputData.telephoneno;
+      }
+
       return res.status(200).json({
         success: true,
         status: "success",
-        data: response.data?.user_data || response.data,
+        data: outputData,
         pdf_base64: response.data?.pdf_base64 || null,
       });
     }
