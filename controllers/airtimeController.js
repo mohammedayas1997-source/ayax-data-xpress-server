@@ -30,7 +30,7 @@ const cleanLocalPhone = (phone = "") => {
   return digits;
 };
 
-// Helper: Tabbatar da tsarin Authorization Token na Al-Ihsan (Token xxxxxxxxx)
+// Helper: Tabbatar da tsarin Authorization Token na Al-Ihsan
 const formatAlihsanAuth = (rawToken) => {
   if (!rawToken) return "";
   const token = String(rawToken).trim();
@@ -150,17 +150,16 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, tar
 
 /**
  * Helper: Universal Multi-Gateway Airtime Dispatcher
- * Yana gwada Al-Ihsan, Ayax Gateway, Husmodata, SmartSMS, BilalSada
  */
 const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) => {
   const normNet = String(network).toUpperCase().trim();
   const formattedPhone = cleanLocalPhone(phone);
-  const netMapNumeric = { MTN: 1, GLO: 2, "9MOBILE": 3, AIRTEL: 4 };
+  const netMapNumeric = { MTN: 1, AIRTEL: 2, "9MOBILE": 3, GLO: 4 };
 
   const errors = [];
 
   // ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME (STRICT PHP MATCH)
+  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME
   // ==========================================
   const rawAlihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
@@ -174,23 +173,26 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
     .replace(/^Bearer\s+/i, "")
     .trim();
 
- const gatewayNetMap = {
-    MTN: "1",       // MTN
-    AIRTEL: "2",    // Airtel
-    "9MOBILE": "3", // 9mobile
-    GLO: "4",       // Glo[cite: 8]
+  // Daidaita sunan canji da lambobin Al-Ihsan
+  const alihsanNetMap = {
+    MTN: "1",
+    AIRTEL: "2",
+    "9MOBILE": "3",
+    GLO: "4",
   };
 
   const selectedNetworkId = alihsanNetMap[normNet] || "1";
-  const airtimeAmount = String(Math.floor(Number(amount)));
+  const numericAmount = Math.floor(Number(amount));
   const reqId = String(reference || `AIRT_${Date.now()}`);
 
   if (cleanToken) {
     try {
       const payload = {
-        network: selectedNetworkId,
-        amount: airtimeAmount,
-        mobile_number: formattedPhone,
+        network: String(selectedNetworkId),
+        amount: numericAmount,
+        mobile_number: String(formattedPhone),
+        airtime_type: "VTU",
+        Ported_number: true,
         request_id: reqId,
       };
 
@@ -201,11 +203,12 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
         payload,
         {
           headers: {
-            Authorization: cleanToken,
+            Authorization: `Token ${cleanToken}`,
             "Content-Type": "application/json",
             Accept: "application/json",
           },
           timeout: 40000,
+          validateStatus: () => true,
         }
       );
 
@@ -220,7 +223,6 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
         resData.message || resData.msg || resData.desc || ""
       ).toLowerCase();
 
-      // Gyaran Success Check: Idan status "success" ne KO kuma message din yana dauke da kalmar "successful"
       const isSuccess =
         statusText === "success" ||
         statusText === "successful" ||
@@ -236,20 +238,19 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
         return { success: true, provider: "ALIHSAN", data: resData };
       }
 
-      // Idan ba nasara ba ne kadai zai zo nan
       const failureMsg =
+        resData.desc ||
         resData.message ||
         resData.error ||
         resData.msg ||
-        resData.desc ||
         JSON.stringify(resData);
 
       errors.push(`ALIHSAN: ${failureMsg}`);
     } catch (err) {
       const serverErrMsg =
+        err.response?.data?.desc ||
         err.response?.data?.message ||
         err.response?.data?.error ||
-        err.response?.data?.msg ||
         err.message;
       console.error("❌ [ALIHSAN AIRTIME ERROR]:", err.response?.data || err.message);
       errors.push(`ALIHSAN: ${serverErrMsg}`);
@@ -338,7 +339,7 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
   // ==========================================
   if (process.env.SMARTSMS_API_TOKEN) {
     try {
-      const netMapSmart = { MTN: "1", AIRTEL: "2", GLO: "3", "9MOBILE": "4" };
+      const netMapSmart = { MTN: "1", AIRTEL: "2", "9MOBILE": "3", GLO: "4" };
       const res = await axios.post(
         "https://smartsmssolutions.com/api/json.php",
         {
@@ -397,12 +398,13 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
  */
 exports.buyAirtime = async (req, res) => {
   try {
-    const { network, phone, phoneNo, phoneNumber, amount, pin } = req.body;
+    const { network, phone, phoneNo, phoneNumber, amount, pin, transactionPin } = req.body;
     const userId = req.user?._id || req.user?.id;
 
     const targetPhone = cleanLocalPhone(phone || phoneNo || phoneNumber || "");
     const finalNetwork = String(network || "").trim().toUpperCase();
     const amountNum = Number(amount);
+    const userPin = String(pin || transactionPin || "").trim();
 
     if (!finalNetwork || !targetPhone || !amountNum) {
       return res.status(400).json({
@@ -411,7 +413,7 @@ exports.buyAirtime = async (req, res) => {
       });
     }
 
-    if (!pin) {
+    if (!userPin) {
       return res.status(400).json({
         success: false,
         message: "Transaction PIN is required.",
@@ -434,20 +436,19 @@ exports.buyAirtime = async (req, res) => {
     // Tabbatar da PIN
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
-    const inputPin = String(pin).trim();
 
     if (storedPin) {
       try {
-        isPinValid = await bcrypt.compare(inputPin, storedPin);
+        isPinValid = await bcrypt.compare(userPin, storedPin);
       } catch (e) {
         isPinValid = false;
       }
-      if (!isPinValid && storedPin === inputPin) {
+      if (!isPinValid && storedPin === userPin) {
         isPinValid = true;
       }
     }
 
-    if (!isPinValid && inputPin === "0000") {
+    if (!isPinValid && userPin === "0000") {
       isPinValid = true;
     }
 
@@ -505,7 +506,7 @@ exports.buyAirtime = async (req, res) => {
     });
 
     // =========================================================================
-    // MULTI-GATEWAY EXECUTION (Al-Ihsan, Ayax Gateway, Husmodata, SmartSMS, etc)
+    // MULTI-GATEWAY EXECUTION
     // =========================================================================
     const dispatchResult = await dispatchToAirtimeGateways({
       network: finalNetwork,
