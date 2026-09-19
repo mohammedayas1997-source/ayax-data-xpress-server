@@ -1324,9 +1324,8 @@ const getBVNPrice = async (req, res) => {
 
 
 /**
- * @desc    Permanently Delete Any User Account from MongoDB Database
- * @route   DELETE /api/v1/admin/users/:id & DELETE /api/v1/superadmin/users/:id
- * @access  Private (Admin / SuperAdmin)
+ * @desc    Permanently Delete Any User Account
+ * @route   DELETE /api/v1/admin/users/:id
  */
 const deleteUserByAdmin = async (req, res) => {
   try {
@@ -1335,76 +1334,62 @@ const deleteUserByAdmin = async (req, res) => {
     if (!id) {
       return res.status(400).json({
         success: false,
-        message: "User ID is required for deletion.",
+        message: "User ID is required.",
       });
     }
 
-    let targetUser = null;
+    // Nemo mai amfani ta ID, Phone, ko Email
+    let user = null;
+    const mongoose = require("mongoose");
     if (mongoose.Types.ObjectId.isValid(id) && String(id).length === 24) {
-      targetUser = await User.findById(id);
+      user = await User.findById(id);
     }
-
-    if (!targetUser) {
-      targetUser = await User.findOne({
+    if (!user) {
+      user = await User.findOne({
         $or: [
-          { _id: mongoose.isValidObjectId(id) ? id : null },
           { phone: id },
-          { email: String(id).toLowerCase().trim() },
-        ],
+          { email: String(id).toLowerCase().trim() }
+        ]
       });
     }
 
-    if (!targetUser) {
+    if (!user) {
       return res.status(404).json({
         success: false,
-        message: "Target user account not found in database.",
+        message: "Target user not found.",
       });
     }
 
-    // Kada a bar wani ya goge ainihin SuperAdmin
-    const targetEmail = String(targetUser.email || "").toLowerCase().trim();
-    const targetPhone = String(targetUser.phone || "").trim();
+    // Kariyar SuperAdmin
+    const targetEmail = String(user.email || "").toLowerCase().trim();
+    const targetPhone = String(user.phone || "").trim();
     if (
       targetEmail === "mohammed.ayas@ayaxdata.online" ||
       targetPhone === "09033738409"
     ) {
       return res.status(403).json({
         success: false,
-        message: "Access Denied: Cannot delete the Primary SuperAdmin account.",
+        message: "Cannot delete the Primary SuperAdmin account.",
       });
     }
 
-    const deletedName = targetUser.name || `${targetUser.firstName || ""} ${targetUser.surname || ""}`.trim() || "User";
-    const deletedRole = String(targetUser.role || "user").toUpperCase();
-    const deletedIdentifier = targetUser.phone || targetUser.email || id;
+    const userName = user.name || "User";
+    const userRole = String(user.role || "user").toUpperCase();
 
-    // Goge user ɗin kpatakpata daga MongoDB
-    await User.findByIdAndDelete(targetUser._id);
-
-    // Yi rubutu a Activity Log
-    try {
-      if (Activity) {
-        await Activity.create({
-          user: req.user?._id || req.user?.id,
-          staffId: req.user?._id || req.user?.id,
-          action: "USER_DELETED_PERMANENTLY",
-          category: "ADMIN_CONTROL",
-          details: `Permanently deleted ${deletedRole} account for ${deletedName} (${deletedIdentifier})`,
-        });
-      }
-    } catch (_) {}
+    // Goge kai-tsaye daga MongoDB
+    await User.findByIdAndDelete(user._id);
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Account for ${deletedName} (${deletedRole}) has been permanently deleted from the database.`,
-      deletedId: targetUser._id,
+      message: `Account for ${userName} (${userRole}) has been permanently deleted.`,
+      deletedId: user._id,
     });
-  } catch (error) {
-    console.error("deleteUserByAdmin Error:", error);
+  } catch (err) {
+    console.error("deleteUserByAdmin error:", err);
     return res.status(500).json({
       success: false,
-      message: "Server failed to delete user account: " + error.message,
+      message: "Server error: " + err.message,
     });
   }
 };
@@ -1413,6 +1398,7 @@ const deleteUserByAdmin = async (req, res) => {
 // =========================================================================
 module.exports = {
   getDashboardStats,
+  deleteUserByAdmin,
   getAllTransactions,
   assignTarget,
   getSupervisors,
