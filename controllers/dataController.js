@@ -171,14 +171,14 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
 
   const errors = [];
 
-  // ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB
+ // ==========================================
+  // GATEWAY 1: AL-IHSAN DATASUB NETWORK MAPPING
   // ==========================================
   const gatewayNetMap = {
-    MTN: "1",
-    GLO: "2",
-    "9MOBILE": "3",
-    AIRTEL: "4",
+    MTN: "1",       // MTN nɔ chenj atɔl
+    AIRTEL: "2",    // Chenj Airtel to 2 (ɔ 3) fɔ match Al-Ihsan documentation
+    GLO: "3",       // Glo
+    "9MOBILE": "4", // 9mobile
   };
 
   const rawAlihsanToken =
