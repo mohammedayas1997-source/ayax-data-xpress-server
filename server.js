@@ -306,6 +306,87 @@ app.get("/api/v1/user/profile", async (req, res) => {
   }
 });
 
+// --- SETUP FIRST TRANSACTION PIN (FOR NEW USERS) ---
+app.post("/api/v1/user/setup-first-pin", async (req, res) => {
+  try {
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
+      token = req.headers.authorization.split(" ")[1];
+    } else if (req.headers.token) {
+      token = req.headers.token;
+    } else if (req.body?.token) {
+      token = req.body.token;
+    }
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication token is required to set up your PIN.",
+      });
+    }
+
+    const { pin, newPin, transactionPin } = req.body;
+    const finalPin = String(pin || newPin || transactionPin || "").trim();
+
+    if (!finalPin || finalPin.length !== 4) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid 4-digit numeric PIN.",
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired session token. Please log in again.",
+      });
+    }
+
+    const userId = decoded.id || decoded._id || decoded.userId;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User account not found.",
+      });
+    }
+
+    // Hash the PIN for high-level security
+    const salt = await bcrypt.genSalt(10);
+    const hashedPin = await bcrypt.hash(finalPin, salt);
+
+    user.pin = hashedPin;
+    user.transactionPin = hashedPin;
+    user.isPinSet = true;
+    user.hasTransactionPin = true;
+
+    await user.save({ validateBeforeSave: false });
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "Transaction PIN created and activated successfully!",
+      user: {
+        id: user._id,
+        phone: user.phone,
+        email: user.email,
+        name: user.name,
+        isPinSet: true,
+      },
+    });
+  } catch (error) {
+    console.error("Setup First PIN Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to set up Transaction PIN.",
+    });
+  }
+});
+
 // --- SECURE SEEDER ENDPOINTS (DISABLED IN PRODUCTION) ---
 app.get("/api/v1/auth/create-live-superadmin", async (req, res) => {
   if (process.env.NODE_ENV === "production" && req.query.secret !== process.env.ADMIN_SEED_SECRET) {
