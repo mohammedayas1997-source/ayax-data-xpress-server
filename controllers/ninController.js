@@ -5,7 +5,6 @@ const axios = require("axios");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
-// Dynamic Imports
 let Activity;
 try {
   Activity = require("../models/Activity");
@@ -20,7 +19,6 @@ try {
   Notification = null;
 }
 
-// Safely resolve User ID
 const resolveUserId = (req) => {
   if (req.user?._id) return req.user._id;
   if (req.user?.id) return req.user.id;
@@ -39,46 +37,19 @@ const resolveUserId = (req) => {
   return null;
 };
 
-// =========================================================================
-// ABJIKTECH GATEWAY CONFIGURATION
-// =========================================================================
-const ABJIKTECH_BASE_URL = (
-  process.env.ABJIKTECH_BASE_URL ||
-  "https://abjiktech.com.ng"
-).replace(/\/+$/, "");
-
 const ABJIKTECH_API_KEY = String(
-  process.env.ABJIKTECH_API_KEY ||
-  "dv_068de722a84b71ce900a65fa4c17bdf9_1788498653"
+  process.env.ABJIKTECH_API_KEY || "dv_068de722a84b71ce900a65fa4c17bdf9_1788498653"
 ).trim();
 
-// Headers generator for Abjiktech API
-const getAbjikHeaders = () => {
-  const token = ABJIKTECH_API_KEY.startsWith("Token ")
-    ? ABJIKTECH_API_KEY
-    : `Token ${ABJIKTECH_API_KEY}`;
-
-  return {
-    "Content-Type": "application/json",
-    Authorization: token,
-    Accept: "application/json",
-  };
-};
-
-// Map Validation Type to official slug
-const mapValidationIssueType = (rawType) => {
+// Tace error_type zuwa ainihin 4 da Abjiktech ke karɓa
+const mapToAbjiktechErrorType = (rawType) => {
   const t = String(rawType || "").toLowerCase().trim();
-  if (t.includes("no_record") || t.includes("record") || t.includes("not found")) return "no_record";
-  if (t.includes("sim") || t.includes("telco")) return "sim_val";
-  if (t.includes("vnin")) return "vnin_val";
-  if (t.includes("update") || t.includes("record")) return "update_record";
-  if (t.includes("bank") || t.includes("bvn")) return "bank_val";
-  if (t.includes("mod") || t.includes("modification")) return "mod_val";
+  if (t.includes("sim") || t.includes("bank")) return "simbank_validation";
+  if (t.includes("mod") || t.includes("change") || t.includes("update")) return "modification";
   if (t.includes("photo") || t.includes("image")) return "photo_error";
-  return "no_record";
+  return "no_record"; // Default ga No Record Found
 };
 
-// Notification Helper
 const sendNotification = async (userId, title, message, category = "IDENTITY") => {
   if (!userId) return;
   try {
@@ -122,7 +93,6 @@ const sendNotification = async (userId, title, message, category = "IDENTITY") =
   }
 };
 
-// Automated Auto-Refund Processor
 const executeAutoRefund = async (userId, amountNum, reference, finalType, finalNin, applicantPhone, reason) => {
   if (!userId) return 0;
   try {
@@ -198,10 +168,6 @@ const executeAutoRefund = async (userId, amountNum, reference, finalType, finalN
   }
 };
 
-/**
- * 1. SUBMIT NIN / IDENTITY VALIDATION REQUEST VIA ABJIKTECH
- * @route POST /api/v1/validation/submit
- */
 exports.submitValidation = async (req, res) => {
   try {
     const {
@@ -227,13 +193,13 @@ exports.submitValidation = async (req, res) => {
     const amountNum = Number(amount);
     
     const rawType = String(issueType || validationType || serviceType || type || serviceId || "no_record").trim();
-    const cleanIssueType = mapValidationIssueType(rawType);
+    const abjikErrorType = mapToAbjiktechErrorType(rawType);
 
     if (!userId) {
       return res.status(401).json({
         success: false,
         status: "failed",
-        message: "User session expired or unauthorized. Please log in again.",
+        message: "User session expired. Please log in again.",
       });
     }
 
@@ -262,7 +228,6 @@ exports.submitValidation = async (req, res) => {
     }
 
     const user = await User.findById(userId).select("+transactionPin +pin +walletBalance +balance");
-
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -271,34 +236,22 @@ exports.submitValidation = async (req, res) => {
       });
     }
 
-    // A. Verify Transaction PIN
     let isPinValid = false;
     const storedPin = String(user.transactionPin || user.pin || "").trim();
-
     if (storedPin) {
-      try {
-        isPinValid = await bcrypt.compare(finalPin, storedPin);
-      } catch (e) {
-        isPinValid = false;
-      }
-      if (!isPinValid && storedPin === finalPin) {
-        isPinValid = true;
-      }
+      try { isPinValid = await bcrypt.compare(finalPin, storedPin); } catch (_) {}
+      if (!isPinValid && storedPin === finalPin) isPinValid = true;
     }
-
-    if (!isPinValid && finalPin === "0000") {
-      isPinValid = true;
-    }
+    if (!isPinValid && finalPin === "0000") isPinValid = true;
 
     if (!isPinValid) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Security Error: Invalid Transaction PIN.",
+        message: "Invalid Transaction PIN.",
       });
     }
 
-    // B. Verify Wallet Balance
     const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
     if (currentBal < amountNum) {
       return res.status(400).json({
@@ -308,25 +261,17 @@ exports.submitValidation = async (req, res) => {
       });
     }
 
-    // C. Deduct Amount Atomically
     const debitedUser = await User.findByIdAndUpdate(
       userId,
-      {
-        $inc: {
-          walletBalance: -amountNum,
-          balance: -amountNum,
-        },
-      },
+      { $inc: { walletBalance: -amountNum, balance: -amountNum } },
       { new: true }
     );
-
     const newBal = Number(debitedUser?.walletBalance ?? debitedUser?.balance ?? 0);
     const oldBal = Number((newBal + amountNum).toFixed(2));
 
     const transactionId = `VAL${Date.now()}${Math.floor(100 + Math.random() * 900)}`;
     const reference = `AYAX-VAL-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
-    // D. Create Ledger Transaction
     await Transaction.create({
       user: userId,
       userId: userId,
@@ -338,24 +283,23 @@ exports.submitValidation = async (req, res) => {
       previousBalance: oldBal,
       type: "identity",
       category: "IDENTITY",
-      service: `NIN Validation (${cleanIssueType})`,
+      service: `NIN Validation (${abjikErrorType})`,
       recipient: finalNin,
       nin: finalNin,
       phoneNumber: applicantPhone || user.phone || null,
-      details: `Payment for Validation (${cleanIssueType}) - NIN: ${finalNin}`,
+      details: `Payment for Validation (${abjikErrorType}) - NIN: ${finalNin}`,
       status: "pending",
     });
 
-    // E. Create Initial Validation Request Record
     const createdRequest = await ValidationRequest.create({
       userId,
       user: userId,
-      type: cleanIssueType,
+      type: abjikErrorType,
       service: "NIN_VALIDATION",
-      serviceId: cleanIssueType,
+      serviceId: abjikErrorType,
       nin: finalNin,
       searchValue: finalNin,
-      applicantName: applicantName || user.name || user.fullName || "Citizen",
+      applicantName: applicantName || user.name || "Citizen",
       applicantPhone: applicantPhone || user.phone || "N/A",
       additionalNote: additionalNote || "",
       amount: amountNum,
@@ -365,20 +309,19 @@ exports.submitValidation = async (req, res) => {
       formData: formData || {},
     });
 
-    // F. Dispatch to Abjiktech Gateway
+    // KIRAN ASALIN ENDPOINT NA ABJIKTECH VALIDATION
     try {
       const response = await axios.post(
-        `${ABJIKTECH_BASE_URL}/api/nin/validate/`,
+        "https://abjiktech.com.ng/api/verification/validation.php",
         {
+          api_key: ABJIKTECH_API_KEY,
           nin: finalNin,
-          issueType: cleanIssueType,
-          errorType: cleanIssueType,
-          reference: reference,
-          ref_id: reference,
+          error_type: abjikErrorType,
         },
         {
-          headers: getAbjikHeaders(),
+          headers: { "Content-Type": "application/json" },
           timeout: 45000,
+          validateStatus: () => true,
         }
       );
 
@@ -387,31 +330,28 @@ exports.submitValidation = async (req, res) => {
         resData &&
         (resData.success === true ||
           resData.status === "success" ||
-          resData.code === 200 ||
-          resData.status === 200);
+          resData.response_code === "00");
 
       if (isSuccessful) {
-        const providerPayload = resData.data || resData;
-        const slipUrl = providerPayload.slipUrl || providerPayload.pdfUrl || providerPayload.url || null;
+        const providerData = resData.data || {};
+        const ticketId = providerData.ticket_id || providerData.transaction_id || reference;
 
         await Transaction.findOneAndUpdate(
           { reference },
           {
             status: "success",
-            slipUrl,
-            apiResponse: providerPayload,
-            details: `Completed: Validation submitted to Abjiktech clearing system for ${cleanIssueType}`,
+            apiResponse: resData,
+            details: `Completed: Validation submitted (Ticket: ${ticketId})`,
           }
         );
 
         const updatedReq = await ValidationRequest.findOneAndUpdate(
           { reference },
           {
-            status: slipUrl ? "completed" : "processing",
-            responseDetails: providerPayload,
-            slipUrl,
-            pdfUrl: slipUrl,
-            adminComment: "Submitted directly to Abjiktech NIMC clearing system.",
+            status: "processing",
+            responseDetails: resData,
+            ticketId: ticketId,
+            adminComment: `Ticket: ${ticketId}. In progress (24-48 working hours).`,
           },
           { new: true }
         );
@@ -422,7 +362,7 @@ exports.submitValidation = async (req, res) => {
             staffId: userId,
             action: "VALIDATION_DISPATCHED",
             category: "IDENTITY",
-            details: `Submitted direct validation for NIN: ${finalNin} (${cleanIssueType}) via Abjiktech`,
+            details: `Submitted validation for NIN: ${finalNin} (${abjikErrorType})`,
             targetUser: userId,
           }).catch(() => {});
         }
@@ -430,75 +370,47 @@ exports.submitValidation = async (req, res) => {
         await sendNotification(
           userId,
           "NIN Validation Processing ⏳",
-          `Your validation request for NIN (${finalNin}) has been submitted successfully. Clearing takes 24-48 working hours.`,
+          `Your validation request for NIN (${finalNin}) has been submitted successfully (Ticket: ${ticketId}). Clearance takes 24-48 working hours.`,
           "IDENTITY"
         );
 
         return res.status(200).json({
           success: true,
           status: "success",
-          message: "Validation request successfully dispatched to Abjiktech gateway.",
+          message: "Validation request submitted successfully. Processing takes 24-48 working hours.",
           data: {
             request: updatedReq,
-            providerResponse: providerPayload,
+            ticketId: ticketId,
           },
           newBalance: newBal,
         });
       } else {
-        throw new Error(resData?.message || resData?.desc || "Abjiktech gateway rejected the validation request.");
+        throw new Error(resData?.message || "Abjiktech rejected the validation request.");
       }
     } catch (apiError) {
-      console.error(
-        "Abjiktech Direct Validation Gateway Error:",
-        apiError.response?.status,
-        apiError.response?.data || apiError.message
+      console.error("Abjiktech Validation Error:", apiError.response?.data || apiError.message);
+      const failureReason = apiError.response?.data?.message || apiError.message || "Failed to submit validation to provider";
+
+      const refundBal = await executeAutoRefund(
+        userId,
+        amountNum,
+        reference,
+        abjikErrorType,
+        finalNin,
+        applicantPhone,
+        failureReason
       );
 
-      const statusCode = apiError.response?.status;
-      const errBody = apiError.response?.data;
-      const failureReason =
-        errBody?.message || errBody?.desc || apiError.message || "Upstream Abjiktech communication error";
-
-      if (statusCode === 400 || statusCode === 422 || statusCode === 402 || statusCode === 404) {
-        const refundBal = await executeAutoRefund(
-          userId,
-          amountNum,
-          reference,
-          cleanIssueType,
-          finalNin,
-          applicantPhone,
-          failureReason
-        );
-
-        return res.status(422).json({
-          success: false,
-          status: "failed",
-          refunded: true,
-          message: `Validation submission failed: ${failureReason}. ₦${amountNum.toLocaleString()} has been refunded to your wallet.`,
-          newBalance: refundBal,
-        });
-      }
-
-      await Transaction.findOneAndUpdate(
-        { reference },
-        { details: `Queued upstream on Abjiktech: ${failureReason}` }
-      );
-
-      await ValidationRequest.findOneAndUpdate(
-        { reference },
-        { status: "processing", adminComment: `Queued for batch dispatch: ${failureReason}` }
-      );
-
-      return res.status(200).json({
-        success: true,
-        status: "success",
-        message: "Your validation request has been accepted and queued for 24-48 hours processing window.",
-        data: createdRequest,
-        newBalance: newBal,
+      return res.status(422).json({
+        success: false,
+        status: "failed",
+        refunded: true,
+        message: `Validation submission failed: ${failureReason}. ₦${amountNum.toLocaleString()} has been refunded to your wallet.`,
+        newBalance: refundBal,
       });
     }
   } catch (error) {
-    console.error("Submit Validation Internal Server Error:", error);
+    console.error("Submit Validation Error:", error);
     return res.status(500).json({
       success: false,
       status: "failed",
@@ -508,138 +420,89 @@ exports.submitValidation = async (req, res) => {
   }
 };
 
-/**
- * 2. QUICK VALIDATION STATUS LOOKUP VIA ABJIKTECH
- * @route POST /api/v1/validation/verify
- */
 exports.verifyValidation = async (req, res) => {
   try {
-    const { nin, searchValue } = req.body;
-    const targetNin = String(nin || searchValue || "").replace(/\D/g, "").trim();
+    const { nin, ticket_id, transaction_id } = req.body;
+    const targetNin = String(nin || "").replace(/\D/g, "").trim();
 
-    if (!targetNin || targetNin.length !== 11) {
+    const payload = { api_key: ABJIKTECH_API_KEY };
+    if (ticket_id) payload.ticket_id = ticket_id;
+    else if (transaction_id) payload.transaction_id = transaction_id;
+    else if (targetNin) {
+      const local = await ValidationRequest.findOne({ nin: targetNin }).sort({ createdAt: -1 });
+      if (local && local.ticketId) payload.ticket_id = local.ticketId;
+    }
+
+    if (!payload.ticket_id && !payload.transaction_id) {
       return res.status(400).json({
         success: false,
         status: "failed",
-        message: "Please provide a valid 11-digit NIN.",
-      });
-    }
-
-    const localRecord = await ValidationRequest.findOne({ nin: targetNin })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    if (localRecord) {
-      return res.status(200).json({
-        success: true,
-        status: "success",
-        message: `Validation record found. Current status: ${localRecord.status.toUpperCase()}`,
-        data: localRecord,
+        message: "Please provide a valid ticket_id, transaction_id, or NIN with previous submission.",
       });
     }
 
     const response = await axios.post(
-      `${ABJIKTECH_BASE_URL}/api/nin/`,
-      { nin: targetNin, slip_type: "Standard Slip" },
-      { headers: getAbjikHeaders(), timeout: 35000 }
+      "https://abjiktech.com.ng/api/verification/validation_status.php",
+      payload,
+      {
+        headers: { "Content-Type": "application/json" },
+        timeout: 35000,
+        validateStatus: () => true,
+      }
     );
 
-    if (response.data?.status === "success" || response.data?.success || response.data?.status === 200) {
+    if (response.data?.success) {
       return res.status(200).json({
         success: true,
         status: "success",
-        message: "NIN is active and verified.",
-        data: response.data?.data?.details || response.data?.data || response.data,
+        data: response.data.data,
       });
     }
 
     return res.status(404).json({
       success: false,
       status: "failed",
-      message: "No validation record found for this NIN.",
-    });
-  } catch (error) {
-    return res.status(error.response?.status || 500).json({
-      success: false,
-      status: "failed",
-      message: error.response?.data?.message || "Validation lookup failed on Abjiktech.",
-      error: error.message,
-    });
-  }
-};
-
-/**
- * 3. GET USER VALIDATION HISTORY
- * @route GET /api/v1/validation/my-requests
- */
-exports.getMyValidationRequests = async (req, res) => {
-  try {
-    const userId = resolveUserId(req);
-    let requests = [];
-    if (userId) {
-      requests = await ValidationRequest.find({ userId })
-        .sort({ createdAt: -1 })
-        .lean();
-    }
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      count: requests.length,
-      data: requests,
-      requests,
+      message: response.data?.message || "No validation request found.",
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
       status: "failed",
-      message: "Failed to fetch validation history.",
-      error: error.message,
+      message: error.response?.data?.message || "Status lookup failed.",
     });
   }
 };
 
-/**
- * 4. ADMIN: GET ALL VALIDATION REQUESTS
- * @route GET /api/v1/validation/admin/all
- */
+exports.getMyValidationRequests = async (req, res) => {
+  try {
+    const userId = resolveUserId(req);
+    let requests = [];
+    if (userId) {
+      requests = await ValidationRequest.find({ userId }).sort({ createdAt: -1 }).lean();
+    }
+    return res.status(200).json({ success: true, status: "success", count: requests.length, data: requests });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.getAllValidationRequests = async (req, res) => {
   try {
     const requests = await ValidationRequest.find()
       .populate("userId", "surname firstName name fullName email phone walletBalance role")
       .sort({ createdAt: -1 })
       .lean();
-
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      count: requests.length,
-      data: requests,
-      requests,
-    });
+    return res.status(200).json({ success: true, status: "success", count: requests.length, data: requests });
   } catch (error) {
-    console.error("Get All Validation Requests Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Failed to retrieve validation requests.",
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-/**
- * 5. ADMIN: APPROVE / COMPLETE VALIDATION MANUALLY
- * @route PATCH /api/v1/validation/admin/approve/:id
- */
 exports.approveValidation = async (req, res) => {
   try {
     const { adminComment, slipUrl, pdfUrl } = req.body;
     const request = await ValidationRequest.findById(req.params.id);
-
-    if (!request) {
-      return res.status(404).json({ success: false, message: "Validation request not found." });
-    }
+    if (!request) return res.status(404).json({ success: false, message: "Validation request not found." });
 
     request.status = "completed";
     if (adminComment) request.adminComment = adminComment;
@@ -653,27 +516,18 @@ exports.approveValidation = async (req, res) => {
     if (request.reference) {
       await Transaction.findOneAndUpdate(
         { reference: request.reference },
-        {
-          status: "success",
-          slipUrl: request.slipUrl,
-          details: `Manual approval completed by Admin`,
-        }
+        { status: "success", slipUrl: request.slipUrl, details: "Manual approval completed by Admin" }
       );
     }
 
     await sendNotification(
       request.userId,
       "NIN Validation Completed 📄",
-      `Your validation request for NIN (${request.nin}) has been completed. Check your status history.`,
+      `Your validation request for NIN (${request.nin}) has been completed.`,
       "IDENTITY"
     );
 
-    return res.status(200).json({
-      success: true,
-      status: "success",
-      message: "Validation request marked as completed.",
-      data: request,
-    });
+    return res.status(200).json({ success: true, message: "Validation request marked as completed.", data: request });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
