@@ -193,13 +193,13 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  const resolveAlihsanPlanId = (rawCode, net) => {
+const resolveAlihsanPlanId = (rawCode, net) => {
     const c = String(rawCode || "").toLowerCase().trim();
 
-    // 1. Idan lambar ID ce kai-tsaye (140, 27, 262, 17, etc.)
-    if (/^\d{1,4}$/.test(c)) return c;
+    // 1. Idan lambar ID ce kai-tsaye (140, 27, 262, 17, 255, 158, etc.), bar shi yadda yake
+    if (/^\d{1,5}$/.test(c)) return c;
 
-    // 2. Fallbacks ga sunaye
+    // 2. Tsarin MTN (BA A TABA SHI BA)
     if (net === "MTN") {
       if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0") || c.includes("1000"))) return "140";
       if (c.includes("dc") && c.includes("2gb")) return "134";
@@ -210,10 +210,31 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
       return "27";
     }
 
+    // 3. GYARAN AIRTEL DOMIN YA AMINTA DA DUKKAN SIZES DA TARIFFS
     if (net === "AIRTEL") {
-      if (c.includes("awoof") && c.includes("2gb")) return "157";
-      if (c.includes("cg") && c.includes("1.2")) return "262";
-      if (c.includes("sme") && c.includes("1gb")) return "200";
+      // Airtel Awoof
+      if (c.includes("awoof") && (c.includes("2gb") || c.includes("2.0"))) return "157";
+      if (c.includes("awoof") && (c.includes("3gb") || c.includes("3.0"))) return "158";
+      if (c.includes("awoof") && (c.includes("4gb") || c.includes("4.0"))) return "159";
+      if (c.includes("awoof") && (c.includes("10gb") || c.includes("10.0") || c.includes("10"))) return "160";
+
+      // Airtel CG
+      if (c.includes("cg") && (c.includes("1.2") || c.includes("1.2gb"))) return "262";
+      if (c.includes("cg") && (c.includes("1.5") || c.includes("1.5gb"))) return "240";
+      if (c.includes("cg") && (c.includes("6.5") || c.includes("6.5gb"))) return "263";
+
+      // Airtel SME
+      if (c.includes("sme") && (c.includes("1gb") || c.includes("1.0"))) return "200";
+      if (c.includes("sme") && (c.includes("2gb") || c.includes("2.0"))) return "253";
+      if (c.includes("sme") && (c.includes("3gb") || c.includes("3.0"))) return "255";
+
+      // Idan ba a gane ba, duba girman zalla
+      if (c.includes("3gb") || c.includes("3.0")) return "255";
+      if (c.includes("2gb") || c.includes("2.0")) return "253";
+      if (c.includes("1.2")) return "262";
+      if (c.includes("1.5")) return "240";
+      if (c.includes("1gb") || c.includes("1.0")) return "200";
+
       return "200";
     }
 
@@ -678,17 +699,30 @@ exports.handleGatewayCallback = async (req, res) => {
 exports.getDataPlans = async (req, res) => {
   try {
     const { network } = req.query;
-    let query = { status: { $ne: "disabled" }, isActive: { $ne: false } };
-
+    let query = {};
     if (network) {
       query.network = String(network).toUpperCase().trim();
     }
 
     let plans = [];
-    if (DataPlan) {
+    const db = mongoose.connection.db;
+
+    // 1. Duba kai-tsaye a cikin ainihin collections na MongoDB
+    if (db) {
+      try {
+        plans = await db.collection("plans").find(query).sort({ network: 1, userPrice: 1 }).toArray();
+        if (!plans || plans.length === 0) {
+          plans = await db.collection("dataplans").find(query).sort({ network: 1, userPrice: 1 }).toArray();
+        }
+      } catch (_) {}
+    }
+
+    // 2. Idan Mongoose model yana aiki
+    if ((!plans || plans.length === 0) && DataPlan) {
       plans = await DataPlan.find(query).sort({ network: 1, userPrice: 1 }).lean();
     }
 
+    // 3. Fallback idan babu komai a database kwata-kwata
     if (!plans || plans.length === 0) {
       plans = [
         { id: "140", planId: "140", network: "MTN", planType: "DC", plan: "1.0 GB", validity: "30 Days", costPrice: 189, userPrice: 230, agentPrice: 210, status: "active" },
