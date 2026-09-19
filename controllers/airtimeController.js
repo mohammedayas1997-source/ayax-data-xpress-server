@@ -151,19 +151,18 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
     process.env.VTU_API_KEY ||
     "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
 
-  // Cire duk wani 'Token ' ko 'Bearer ' domin daidaita da asalin format din Al-Ihsan
   const cleanToken = String(rawAlihsanToken)
     .replace(/^Token\s+/i, "")
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  // Taswirar lambobin sadarwa na Al-Ihsan
+  // Taswirar lambobin sadarwa na Al-Ihsan Datasub (MTN=1, AIRTEL=2, 9MOBILE=3, GLO=4)
   const alihsanNetMap = {
     MTN: "1",
-    GLO: "2",
+    AIRTEL: "2",
     "9MOBILE": "3",
     ETISALAT: "3",
-    AIRTEL: "4",
+    GLO: "4",
   };
 
   const selectedNetworkId = String(alihsanNetMap[normNet] || "1");
@@ -172,7 +171,6 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
 
   if (cleanToken) {
     try {
-      // Daidai da official documentation payload
       const payload = {
         network: selectedNetworkId,
         amount: stringAmount,
@@ -187,7 +185,7 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
         payload,
         {
           headers: {
-            Authorization: cleanToken, // Babu Token ko Bearer a gaba
+            Authorization: cleanToken,
             "Content-Type": "application/json",
             Accept: "application/json",
           },
