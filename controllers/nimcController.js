@@ -39,26 +39,30 @@ const resolveUserId = (req) => {
   return null;
 };
 
-// Headers generator don Ayax API Marketplace
-const getHeaders = () => {
-  const activeKey = String(
-    process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
-  ).trim();
+// =========================================================================
+// ABJIKTECH GATEWAY CONFIGURATION
+// =========================================================================
+const ABJIKTECH_BASE_URL = (
+  process.env.ABJIKTECH_BASE_URL ||
+  "https://abjiktech.com.ng"
+).replace(/\/+$/, "");
+
+const ABJIKTECH_API_KEY = String(
+  process.env.ABJIKTECH_API_KEY ||
+  "dv_068de722a84b71ce900a65fa4c17bdf9_1788498653"
+).trim();
+
+// Headers generator don Abjiktech API
+const getAbjikHeaders = () => {
+  const token = ABJIKTECH_API_KEY.startsWith("Token ")
+    ? ABJIKTECH_API_KEY
+    : `Token ${ABJIKTECH_API_KEY}`;
 
   return {
     "Content-Type": "application/json",
-    "x-api-key": activeKey,
-    Authorization: `Bearer ${activeKey}`,
+    Authorization: token,
+    Accept: "application/json",
   };
-};
-
-const getBaseUrl = () => {
-  const rawUrl =
-    process.env.AYAX_API_BASE_URL ||
-    process.env.MARKETPLACE_API_URL ||
-    "https://www.ayaxapis.com";
-  const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-  return `${cleanBase}/api/v1`;
 };
 
 // Helper: Mappin kalar slip zuwa ainihin sunan da Gateway ke ganewa
@@ -237,8 +241,7 @@ exports.getNIMCPrices = async (req, res) => {
 exports.getPrices = exports.getNIMCPrices;
 
 /**
- * 1. SUBMIT NIMC / NIN APPLICATION OR VERIFICATION REQUEST
- * Features: Auto-lookup for Phone Searches & Requesting Official Signed PDFs
+ * 1. SUBMIT NIMC / NIN APPLICATION OR VERIFICATION REQUEST VIA ABJIKTECH
  */
 exports.submitNIMCRequest = async (req, res) => {
   try {
@@ -398,10 +401,8 @@ exports.submitNIMCRequest = async (req, res) => {
       });
     }
 
-    const baseUrl = getBaseUrl();
-
     // =========================================================================
-    // BRANCH 1: VALIDATION QUEUE (48 HOURS)
+    // BRANCH 1: VALIDATION QUEUE (48 WORKING HOURS)
     // =========================================================================
     const isValidationQueue =
       ["no_record", "sim_val", "vnin_val", "update_record", "bank_val", "mod_val", "photo_error"].includes(finalServiceType) ||
@@ -411,14 +412,14 @@ exports.submitNIMCRequest = async (req, res) => {
     if (isValidationQueue) {
       try {
         const valRes = await axios.post(
-          `${baseUrl}/identity/nin/validate`,
+          `${ABJIKTECH_BASE_URL}/api/nin/validate/`,
           {
             nin: finalNin,
             issueType: finalServiceType,
             errorType: finalServiceType,
             reference,
           },
-          { headers: getHeaders(), timeout: 35000 }
+          { headers: getAbjikHeaders(), timeout: 35000 }
         );
 
         if (valRes.data?.status === "success" || valRes.data?.success) {
@@ -444,7 +445,7 @@ exports.submitNIMCRequest = async (req, res) => {
     }
 
     // =========================================================================
-    // BRANCH 2: DIRECT SLIP PRINTING & PHONE AUTO-LOOKUP
+    // BRANCH 2: DIRECT SLIP PRINTING & NIN/PHONE VERIFICATION (ABJIKTECH)
     // =========================================================================
     let resultPayload = null;
     const resolvedSlipType = mapSlipTypeToGateway(finalServiceType);
@@ -452,113 +453,51 @@ exports.submitNIMCRequest = async (req, res) => {
     try {
       const isPhoneSearch = finalServiceType === "phone" || (!finalNin && cleanPhone.length === 11);
 
+      let abjikEndpoint = `${ABJIKTECH_BASE_URL}/api/nin/`;
+      let requestPayload = {};
+
       if (isPhoneSearch) {
         if (!cleanPhone || cleanPhone.length < 11) {
           throw new Error("Please provide a valid 11-digit Nigerian phone number.");
         }
-
-        // Mataki 1: Binciko NIN ta Phone Number tare da neman ainihin PDF
-        const phoneRes = await axios.post(
-          `${baseUrl}/identity/nin/verify-phone`,
-          {
-            phone: cleanPhone,
-            slipType: resolvedSlipType,
-            format: "pdf",
-            generatePdf: true,
-            reference,
-          },
-          { headers: getHeaders(), timeout: 45000 }
-        );
-
-        const phoneBody = phoneRes.data;
-        if (!phoneBody || (!phoneBody.success && phoneBody.status !== "success")) {
-          throw new Error(phoneBody?.message || "Phone number lookup failed on gateway.");
-        }
-
-        const rawPhoneDetails =
-          phoneBody.data?.details?.data ||
-          phoneBody.data?.details ||
-          phoneBody.data ||
-          phoneBody;
-
-        // Ciro NIN daga amsar
-        let discoveredNin = String(
-          rawPhoneDetails.nin ||
-          rawPhoneDetails.ninNumber ||
-          rawPhoneDetails.idNumber ||
-          rawPhoneDetails.vnin ||
-          rawPhoneDetails.identityNumber ||
-          phoneBody.nin ||
-          phoneBody.idNumber ||
-          ""
-        ).replace(/\D/g, "").trim();
-
-        if (!discoveredNin && typeof phoneBody.data === "string" && phoneBody.data.replace(/\D/g, "").length === 11) {
-          discoveredNin = phoneBody.data.replace(/\D/g, "");
-        }
-
-        if (!discoveredNin || discoveredNin.length !== 11) {
-          throw new Error("Phone search succeeded, but NIMC returned no linked 11-digit NIN.");
-        }
-
-        targetIdentifier = discoveredNin;
-
-        // Mataki 2: Ciro cikakken Profile da asalin takardar PDF daga NIMC
-        try {
-          const autoLookupRes = await axios.post(
-            `${baseUrl}/identity/nin/verify`,
-            {
-              nin: discoveredNin,
-              slipType: resolvedSlipType,
-              format: "pdf",
-              generatePdf: true,
-              reference: `AUTO-${reference}`,
-            },
-            { headers: getHeaders(), timeout: 50000 }
-          );
-
-          if (autoLookupRes.data?.data) {
-            resultPayload =
-              autoLookupRes.data.data.details?.data ||
-              autoLookupRes.data.data.details ||
-              autoLookupRes.data.data;
-          }
-        } catch (lookupErr) {
-          console.warn("Direct NIN lookup failed, using raw phone response:", lookupErr.message);
-        }
-
-        if (!resultPayload) {
-          resultPayload = rawPhoneDetails;
-        }
-
-        resultPayload.nin = discoveredNin;
-        resultPayload.ninNumber = discoveredNin;
-        resultPayload.telephoneno = cleanPhone;
-        resultPayload.phone = cleanPhone;
+        requestPayload = {
+          phone: cleanPhone,
+          search_type: "phone",
+          type: "phone",
+          slip_type: resolvedSlipType,
+          reference,
+        };
       } else {
-        // Direct NIN Verification (Neman cikakken Profile da PDF Link)
-        const ninRes = await axios.post(
-          `${baseUrl}/identity/nin/verify`,
-          {
-            nin: finalNin,
-            slipType: resolvedSlipType,
-            format: "pdf",
-            generatePdf: true,
-            downloadSlip: true,
-            reference,
-          },
-          { headers: getHeaders(), timeout: 50000 }
-        );
-
-        const resData = ninRes.data;
-        if (!resData || (!resData.success && resData.status !== "success")) {
-          throw new Error(resData?.message || "NIMC Gateway returned error.");
-        }
-
-        resultPayload = resData.data?.details?.data || resData.data?.details || resData.data || {};
+        requestPayload = {
+          nin: finalNin,
+          search_type: "nin",
+          type: finalServiceType,
+          slip_type: resolvedSlipType,
+          format: "pdf",
+          reference,
+        };
       }
 
-      // Ciro ainihin link din PDF na asali
+      const abjikRes = await axios.post(
+        abjikEndpoint,
+        requestPayload,
+        { headers: getAbjikHeaders(), timeout: 45000 }
+      );
+
+      const resData = abjikRes.data || {};
+      const isSuccess =
+        resData.status === "success" ||
+        resData.success === true ||
+        resData.status === 200 ||
+        resData.code === 200;
+
+      if (!isSuccess) {
+        throw new Error(resData.message || resData.desc || resData.msg || "NIMC record not found on Abjiktech.");
+      }
+
+      resultPayload = resData.data?.details?.data || resData.data?.details || resData.data || resData;
+
+      // Ciro ainihin link din PDF / Slip na Abjiktech
       const slipDocumentUrl =
         resultPayload.slipUrl ||
         resultPayload.pdfUrl ||
@@ -566,9 +505,15 @@ exports.submitNIMCRequest = async (req, res) => {
         resultPayload.fileUrl ||
         resultPayload.url ||
         resultPayload.slip ||
+        resData.slipUrl ||
+        resData.pdfUrl ||
         null;
 
-      const finalResolvedNin = resultPayload.nin || resultPayload.ninNumber || targetIdentifier;
+      const finalResolvedNin =
+        resultPayload.nin ||
+        resultPayload.ninNumber ||
+        resultPayload.idNumber ||
+        targetIdentifier;
 
       await Transaction.findOneAndUpdate(
         { reference },
@@ -577,7 +522,7 @@ exports.submitNIMCRequest = async (req, res) => {
           nin: finalResolvedNin,
           slipUrl: slipDocumentUrl,
           apiResponse: resultPayload,
-          details: `Completed: ${finalServiceType} processed successfully (NIN: ${finalResolvedNin})`,
+          details: `Completed: ${finalServiceType} verified via Abjiktech (NIN: ${finalResolvedNin})`,
         }
       );
 
@@ -610,7 +555,7 @@ exports.submitNIMCRequest = async (req, res) => {
       return res.status(200).json({
         success: true,
         status: "success",
-        message: "NIMC details retrieved successfully.",
+        message: "NIMC details retrieved successfully via Abjiktech.",
         data: {
           ...resultPayload,
           fullName: computedFullName || "Verified Citizen",
@@ -631,10 +576,13 @@ exports.submitNIMCRequest = async (req, res) => {
         newBalance: newBal,
       });
     } catch (apiErr) {
-      console.error("NIMC Gateway API Error:", apiErr.response?.data || apiErr.message);
+      console.error("Abjiktech NIMC Error:", apiErr.response?.data || apiErr.message);
 
       const failureReason =
-        apiErr.response?.data?.message || apiErr.message || "Failed to retrieve identity details";
+        apiErr.response?.data?.message ||
+        apiErr.response?.data?.desc ||
+        apiErr.message ||
+        "Failed to retrieve identity details from Abjiktech";
 
       const refundBal = await executeAutoRefund(
         userId,
@@ -665,7 +613,7 @@ exports.submitNIMCRequest = async (req, res) => {
 };
 
 /**
- * 2. LIVE VERIFY NIMC DIRECTLY (NO DEBIT)
+ * 2. LIVE VERIFY NIMC DIRECTLY (ABJIKTECH - NO DEBIT)
  */
 exports.verifyNIMC = async (req, res) => {
   try {
@@ -680,40 +628,38 @@ exports.verifyNIMC = async (req, res) => {
       });
     }
 
-    const baseUrl = getBaseUrl();
-    const endpoint =
-      searchType === "phone"
-        ? `${baseUrl}/identity/nin/verify-phone`
-        : `${baseUrl}/identity/nin/verify`;
-
     const payload =
       searchType === "phone"
-        ? { phone: targetQuery, slipType: "Standard Slip", format: "pdf" }
-        : { nin: targetQuery, slipType: "Standard Slip", format: "pdf" };
+        ? { phone: targetQuery, type: "phone", slip_type: "Standard Slip" }
+        : { nin: targetQuery, type: "nin", slip_type: "Standard Slip" };
 
-    const response = await axios.post(endpoint, payload, {
-      headers: getHeaders(),
-      timeout: 35000,
-    });
+    const response = await axios.post(
+      `${ABJIKTECH_BASE_URL}/api/nin/`,
+      payload,
+      {
+        headers: getAbjikHeaders(),
+        timeout: 35000,
+      }
+    );
 
-    if (response.data?.status === "success" || response.data?.success) {
+    if (response.data?.status === "success" || response.data?.success || response.data?.status === 200) {
       return res.status(200).json({
         success: true,
         status: "success",
-        data: response.data?.data?.details || response.data?.data,
+        data: response.data?.data?.details || response.data?.data || response.data,
       });
     }
 
     return res.status(400).json({
       success: false,
       status: "failed",
-      message: response.data?.message || "Record not found on NIMC server.",
+      message: response.data?.message || response.data?.desc || "Record not found on NIMC server.",
     });
   } catch (error) {
     return res.status(error.response?.status || 500).json({
       success: false,
       status: "failed",
-      message: error.response?.data?.message || "Identity lookup failed.",
+      message: error.response?.data?.message || "Identity lookup failed on Abjiktech.",
     });
   }
 };

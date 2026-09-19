@@ -22,25 +22,29 @@ const resolveUserId = (req) => {
   return null;
 };
 
-const getHeaders = () => {
-  const activeKey = String(
-    process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
-  ).trim();
+// =========================================================================
+// ABJIKTECH GATEWAY CONFIGURATION
+// =========================================================================
+const ABJIKTECH_BASE_URL = (
+  process.env.ABJIKTECH_BASE_URL ||
+  "https://abjiktech.com.ng"
+).replace(/\/+$/, "");
+
+const ABJIKTECH_API_KEY = String(
+  process.env.ABJIKTECH_API_KEY ||
+  "dv_068de722a84b71ce900a65fa4c17bdf9_1788498653"
+).trim();
+
+const getAbjikHeaders = () => {
+  const token = ABJIKTECH_API_KEY.startsWith("Token ")
+    ? ABJIKTECH_API_KEY
+    : `Token ${ABJIKTECH_API_KEY}`;
 
   return {
     "Content-Type": "application/json",
-    "x-api-key": activeKey,
-    Authorization: `Bearer ${activeKey}`,
+    Authorization: token,
+    Accept: "application/json",
   };
-};
-
-const getBaseUrl = () => {
-  const rawUrl =
-    process.env.AYAX_API_BASE_URL ||
-    process.env.MARKETPLACE_API_URL ||
-    "https://www.ayaxapis.com";
-  const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-  return `${cleanBase}/api/v1`;
 };
 
 exports.getBVNPrices = async (req, res) => {
@@ -125,31 +129,23 @@ exports.verifyBVN = async (req, res) => {
       });
     }
 
-    // Saita asalin Endpoints na Abjiktech bisa tsarin Documentation
     const isPremium = serviceType === "bvn_premium" || serviceId === "bvn_premium";
     const slipTypeName = isPremium ? "Premium Slip" : "Standard Slip";
 
     const targetEndpoint = isPremium
-      ? "https://abjiktech.com.ng/api/verification/bvn_premium_slip.php"
-      : "https://abjiktech.com.ng/api/verification/bvn_full_details_slip.php";
-
-    const activeApiKey = String(
-      process.env.ABJIKTECH_API_KEY ||
-      process.env.AYAX_API_KEY ||
-      process.env.MARKETPLACE_API_KEY ||
-      ""
-    ).trim();
+      ? `${ABJIKTECH_BASE_URL}/api/verification/bvn_premium_slip.php`
+      : `${ABJIKTECH_BASE_URL}/api/verification/bvn_full_details_slip.php`;
 
     const requestPayload = {
-      api_key: activeApiKey,
+      api_key: ABJIKTECH_API_KEY,
       bvn: cleanBvn,
     };
 
-    // Kiran Abjiktech
+    // Kiran Abjiktech tare da Header da kuma Body fallback
     let abjikRes;
     try {
       abjikRes = await axios.post(targetEndpoint, requestPayload, {
-        headers: { "Content-Type": "application/json" },
+        headers: getAbjikHeaders(),
         timeout: 65000,
         validateStatus: () => true,
       });
@@ -163,23 +159,37 @@ exports.verifyBVN = async (req, res) => {
 
     const mData = abjikRes.data;
 
-    // Duba idan aiki ya yi nasara (status == 'success' ko response_code == '00')
+    // Duba idan aiki ya yi nasara
     const isSuccess =
       mData?.status === "success" ||
+      mData?.success === true ||
       mData?.response_code === "00" ||
       String(mData?.message || "").toLowerCase().includes("successfully");
 
-    const base64Data = mData?.pdf_base64 || mData?.data?.pdf_base64 || null;
+    const base64Data =
+      mData?.pdf_base64 ||
+      mData?.data?.pdf_base64 ||
+      mData?.slip ||
+      mData?.data?.slip ||
+      null;
 
-    if (!isSuccess || !base64Data) {
+    const slipDocumentUrl =
+      mData?.slipUrl ||
+      mData?.pdfUrl ||
+      mData?.downloadUrl ||
+      mData?.data?.slipUrl ||
+      mData?.data?.pdfUrl ||
+      null;
+
+    if (!isSuccess || (!base64Data && !slipDocumentUrl)) {
       return res.status(422).json({
         success: false,
         status: "failed",
-        message: mData?.message || "BVN record could not be retrieved. No funds were deducted.",
+        message: mData?.message || mData?.desc || "BVN record could not be retrieved. No funds were deducted.",
       });
     }
 
-    // Debi kudi a wallet din Data Express tunda Abjiktech ya dawo da PDF
+    // Rage kudi a wallet tunda an samu sakamako daga Abjiktech
     const debitedUser = await User.findByIdAndUpdate(
       userId,
       { $inc: { walletBalance: -cost, balance: -cost } },
@@ -202,7 +212,8 @@ exports.verifyBVN = async (req, res) => {
       newBalance: newBal,
       recipient: cleanBvn,
       status: "success",
-      details: `BVN slip generated for ${cleanBvn}`,
+      slipUrl: slipDocumentUrl,
+      details: `BVN slip generated for ${cleanBvn} via Abjiktech`,
     });
 
     return res.status(200).json({
@@ -211,8 +222,10 @@ exports.verifyBVN = async (req, res) => {
       message: "BVN verification successful.",
       bvn: cleanBvn,
       slipType: slipTypeName,
-      userData: mData.user_data || null,
-      pdf_base64: base64Data, // Tura asalin binary PDF zuwa ga App
+      userData: mData.user_data || mData.data || null,
+      pdf_base64: base64Data,
+      slipUrl: slipDocumentUrl,
+      pdfUrl: slipDocumentUrl,
       newBalance: newBal,
     });
   } catch (err) {
@@ -226,7 +239,7 @@ exports.verifyBVN = async (req, res) => {
 };
 
 // =========================================================================
-// 4. DIRECT DOWNLOAD PROXY (YANA TILASTA WA BROWSER YIN SAUKEWA A DEVICE)
+// DIRECT DOWNLOAD PROXY
 // =========================================================================
 exports.downloadBVNSlip = async (req, res) => {
   try {

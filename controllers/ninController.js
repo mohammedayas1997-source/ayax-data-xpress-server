@@ -5,7 +5,7 @@ const axios = require("axios");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
-// Dynamic Imports don kariya daga server crash
+// Dynamic Imports
 let Activity;
 try {
   Activity = require("../models/Activity");
@@ -39,29 +39,33 @@ const resolveUserId = (req) => {
   return null;
 };
 
-// Ayax Standard API Headers Generator
-const getHeaders = () => {
-  const activeKey = String(
-    process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || ""
-  ).trim();
+// =========================================================================
+// ABJIKTECH GATEWAY CONFIGURATION
+// =========================================================================
+const ABJIKTECH_BASE_URL = (
+  process.env.ABJIKTECH_BASE_URL ||
+  "https://abjiktech.com.ng"
+).replace(/\/+$/, "");
+
+const ABJIKTECH_API_KEY = String(
+  process.env.ABJIKTECH_API_KEY ||
+  "dv_068de722a84b71ce900a65fa4c17bdf9_1788498653"
+).trim();
+
+// Headers generator for Abjiktech API
+const getAbjikHeaders = () => {
+  const token = ABJIKTECH_API_KEY.startsWith("Token ")
+    ? ABJIKTECH_API_KEY
+    : `Token ${ABJIKTECH_API_KEY}`;
 
   return {
     "Content-Type": "application/json",
-    "x-api-key": activeKey,
-    Authorization: `Bearer ${activeKey}`,
+    Authorization: token,
+    Accept: "application/json",
   };
 };
 
-const getBaseUrl = () => {
-  const rawUrl =
-    process.env.AYAX_API_BASE_URL ||
-    process.env.MARKETPLACE_API_URL ||
-    "https://www.ayaxapis.com";
-  const cleanBase = rawUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
-  return `${cleanBase}/api/v1`;
-};
-
-// Helper: Tace Validation Type zuwa ainihin IssueType da Gateway ke ganewa
+// Map Validation Type to official slug
 const mapValidationIssueType = (rawType) => {
   const t = String(rawType || "").toLowerCase().trim();
   if (t.includes("no_record") || t.includes("record") || t.includes("not found")) return "no_record";
@@ -71,10 +75,10 @@ const mapValidationIssueType = (rawType) => {
   if (t.includes("bank") || t.includes("bvn")) return "bank_val";
   if (t.includes("mod") || t.includes("modification")) return "mod_val";
   if (t.includes("photo") || t.includes("image")) return "photo_error";
-  return "no_record"; // Default fallback
+  return "no_record";
 };
 
-// Helper don tura sanarwa ga User
+// Notification Helper
 const sendNotification = async (userId, title, message, category = "IDENTITY") => {
   if (!userId) return;
   try {
@@ -195,8 +199,8 @@ const executeAutoRefund = async (userId, amountNum, reference, finalType, finalN
 };
 
 /**
- * 1. SUBMIT NIN / IDENTITY VALIDATION REQUEST
- * @route POST /api/v1/validation/submit (ko /api/v1/nin/validate)
+ * 1. SUBMIT NIN / IDENTITY VALIDATION REQUEST VIA ABJIKTECH
+ * @route POST /api/v1/validation/submit
  */
 exports.submitValidation = async (req, res) => {
   try {
@@ -222,7 +226,6 @@ exports.submitValidation = async (req, res) => {
     const finalPin = String(pin || transactionPin || "").trim();
     const amountNum = Number(amount);
     
-    // Tace nau'in validation zuwa slug na gateway
     const rawType = String(issueType || validationType || serviceType || type || serviceId || "no_record").trim();
     const cleanIssueType = mapValidationIssueType(rawType);
 
@@ -362,13 +365,10 @@ exports.submitValidation = async (req, res) => {
       formData: formData || {},
     });
 
-    // F. Dispatch Kai Tsaye zuwa Asalin Uwar Garke (POST /api/v1/identity/nin/validate)
-    const baseUrl = getBaseUrl();
-    const targetEndpoint = `${baseUrl}/identity/nin/validate`;
-
+    // F. Dispatch to Abjiktech Gateway
     try {
       const response = await axios.post(
-        targetEndpoint,
+        `${ABJIKTECH_BASE_URL}/api/nin/validate/`,
         {
           nin: finalNin,
           issueType: cleanIssueType,
@@ -377,7 +377,7 @@ exports.submitValidation = async (req, res) => {
           ref_id: reference,
         },
         {
-          headers: getHeaders(),
+          headers: getAbjikHeaders(),
           timeout: 45000,
         }
       );
@@ -388,12 +388,10 @@ exports.submitValidation = async (req, res) => {
         (resData.success === true ||
           resData.status === "success" ||
           resData.code === 200 ||
-          resData.code === "200");
+          resData.status === 200);
 
       if (isSuccessful) {
         const providerPayload = resData.data || resData;
-
-        // Idan uwar garke ta mayar da slip URL nan take ko ta sanya a queue
         const slipUrl = providerPayload.slipUrl || providerPayload.pdfUrl || providerPayload.url || null;
 
         await Transaction.findOneAndUpdate(
@@ -402,7 +400,7 @@ exports.submitValidation = async (req, res) => {
             status: "success",
             slipUrl,
             apiResponse: providerPayload,
-            details: `Completed: Validation submitted to upstream gateway for ${cleanIssueType}`,
+            details: `Completed: Validation submitted to Abjiktech clearing system for ${cleanIssueType}`,
           }
         );
 
@@ -413,7 +411,7 @@ exports.submitValidation = async (req, res) => {
             responseDetails: providerPayload,
             slipUrl,
             pdfUrl: slipUrl,
-            adminComment: "Submitted directly to upstream NIMC clearing system.",
+            adminComment: "Submitted directly to Abjiktech NIMC clearing system.",
           },
           { new: true }
         );
@@ -424,7 +422,7 @@ exports.submitValidation = async (req, res) => {
             staffId: userId,
             action: "VALIDATION_DISPATCHED",
             category: "IDENTITY",
-            details: `Submitted direct validation for NIN: ${finalNin} (${cleanIssueType})`,
+            details: `Submitted direct validation for NIN: ${finalNin} (${cleanIssueType}) via Abjiktech`,
             targetUser: userId,
           }).catch(() => {});
         }
@@ -432,14 +430,14 @@ exports.submitValidation = async (req, res) => {
         await sendNotification(
           userId,
           "NIN Validation Processing ⏳",
-          `Your validation request for NIN (${finalNin}) has been submitted successfully to the NIMC processing portal. Clearing takes 24-48 working hours.`,
+          `Your validation request for NIN (${finalNin}) has been submitted successfully. Clearing takes 24-48 working hours.`,
           "IDENTITY"
         );
 
         return res.status(200).json({
           success: true,
           status: "success",
-          message: "Validation request successfully dispatched directly to the central gateway.",
+          message: "Validation request successfully dispatched to Abjiktech gateway.",
           data: {
             request: updatedReq,
             providerResponse: providerPayload,
@@ -447,24 +445,20 @@ exports.submitValidation = async (req, res) => {
           newBalance: newBal,
         });
       } else {
-        throw new Error(resData?.message || "Upstream gateway rejected the validation request.");
+        throw new Error(resData?.message || resData?.desc || "Abjiktech gateway rejected the validation request.");
       }
     } catch (apiError) {
       console.error(
-        "Direct Validation Gateway Error:",
+        "Abjiktech Direct Validation Gateway Error:",
         apiError.response?.status,
         apiError.response?.data || apiError.message
       );
 
-      // Idan server ta samu timeout ko gateway ta bashi 48-hours queue amsa ba tare da error na rejection ba
       const statusCode = apiError.response?.status;
       const errBody = apiError.response?.data;
-
-      // Idan kuskuren rashin kudi ne a wallet din Gateway ko wani gazawa ta can
       const failureReason =
-        errBody?.message || apiError.message || "Upstream clearing gateway communication error";
+        errBody?.message || errBody?.desc || apiError.message || "Upstream Abjiktech communication error";
 
-      // Idan gateway din bata samu ba ko ta yi rejection na kudi/tsari, mayar da kudi
       if (statusCode === 400 || statusCode === 422 || statusCode === 402 || statusCode === 404) {
         const refundBal = await executeAutoRefund(
           userId,
@@ -485,10 +479,9 @@ exports.submitValidation = async (req, res) => {
         });
       }
 
-      // Idan kuma network timeout ne ko 500/502/504, bar buƙatar a matsayin 'processing' a hannun Admin maimakon refund na gaggawa
       await Transaction.findOneAndUpdate(
         { reference },
-        { details: `Queued upstream: ${failureReason}` }
+        { details: `Queued upstream on Abjiktech: ${failureReason}` }
       );
 
       await ValidationRequest.findOneAndUpdate(
@@ -516,7 +509,7 @@ exports.submitValidation = async (req, res) => {
 };
 
 /**
- * 2. QUICK VALIDATION STATUS LOOKUP
+ * 2. QUICK VALIDATION STATUS LOOKUP VIA ABJIKTECH
  * @route POST /api/v1/validation/verify
  */
 exports.verifyValidation = async (req, res) => {
@@ -532,7 +525,6 @@ exports.verifyValidation = async (req, res) => {
       });
     }
 
-    // Bincika idan akwai buƙatar da ke kan aiki a database ɗin mu
     const localRecord = await ValidationRequest.findOne({ nin: targetNin })
       .sort({ createdAt: -1 })
       .lean();
@@ -546,20 +538,18 @@ exports.verifyValidation = async (req, res) => {
       });
     }
 
-    // Idan babu, duba live verification a gateway
-    const baseUrl = getBaseUrl();
     const response = await axios.post(
-      `${baseUrl}/identity/nin/verify`,
-      { nin: targetNin, slipType: "Standard Slip" },
-      { headers: getHeaders(), timeout: 35000 }
+      `${ABJIKTECH_BASE_URL}/api/nin/`,
+      { nin: targetNin, slip_type: "Standard Slip" },
+      { headers: getAbjikHeaders(), timeout: 35000 }
     );
 
-    if (response.data?.success || response.data?.status === "success") {
+    if (response.data?.status === "success" || response.data?.success || response.data?.status === 200) {
       return res.status(200).json({
         success: true,
         status: "success",
         message: "NIN is active and verified.",
-        data: response.data?.data?.details || response.data?.data,
+        data: response.data?.data?.details || response.data?.data || response.data,
       });
     }
 
@@ -572,7 +562,7 @@ exports.verifyValidation = async (req, res) => {
     return res.status(error.response?.status || 500).json({
       success: false,
       status: "failed",
-      message: error.response?.data?.message || "Validation lookup failed.",
+      message: error.response?.data?.message || "Validation lookup failed on Abjiktech.",
       error: error.message,
     });
   }
