@@ -44,6 +44,8 @@ router.post("/reset-password", safeAuth("resetPassword"));
 // Paystack Webhook (Public Callback)
 router.post("/paystack/webhook", safeAuth("paystackWebhook"));
 
+router.post("/setup-first-pin", protect, userController.setupFirstPin);
+
 // ==========================================
 // 2. PROTECTED USER PROFILE & SECURITY ROUTES
 // ==========================================

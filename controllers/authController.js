@@ -179,6 +179,7 @@ const sendToken = (user, statusCode, res) => {
       address: user.address,
       has_transaction_pin: hasPinSet,
       hasPin: hasPinSet,
+      isPinSet: Boolean(user.isPinSet),
     },
   });
 };
@@ -1200,4 +1201,67 @@ exports.generateVirtualAccount = async (req, res) => {
       message: error.response?.data?.message || "Could not generate virtual account. Please try again later.",
     });
   }
+};
+/**
+ * @desc    First Login Setup: Saita Transaction PIN na farko ga Customer da Agent
+ * @route   POST /api/v1/user/setup-first-pin
+ * @access  Private (Authenticated User)
+ */
+const setupFirstPin = async (req, res) => {
+  try {
+    const { pin, confirmPin } = req.body;
+    const userId = req.user?._id || req.user?.id;
+
+    if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+      return res.status(400).json({
+        success: false,
+        message: "PIN dole ya kasance lambobi 4 zalla.",
+      });
+    }
+
+    if (confirmPin && pin !== confirmPin) {
+      return res.status(400).json({
+        success: false,
+        message: "Lambar PIN da aka sake shigarwa ba ta yi daidai ba.",
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPin = await bcrypt.hash(pin, salt);
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $set: {
+          pin: hashedPin,
+          transactionPin: hashedPin,
+          isPinSet: true,
+        },
+      },
+      { new: true }
+    ).select("-password");
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: "An saita Transaction PIN ɗinka cikin nasara! 🎉",
+      user: {
+        id: updatedUser._id,
+        name: updatedUser.name,
+        role: updatedUser.role,
+        isPinSet: true,
+      },
+    });
+  } catch (error) {
+    console.error("setupFirstPin Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "An samu matsala wajen saita PIN: " + error.message,
+    });
+  }
+};
+
+module.exports = {
+  // sauran ayyukanka...
+  setupFirstPin,
 };

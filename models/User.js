@@ -163,6 +163,12 @@ const UserSchema = new mongoose.Schema(
       index: true,
     },
 
+    isPinSet: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
     // --- IN-APP NOTIFICATIONS LEDGER ---
     notifications: [
       {

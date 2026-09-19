@@ -638,7 +638,7 @@ exports.buyData = async (req, res) => {
         userId,
         "Data Bundle Successful 🎉",
         `Your ${finalNetwork} data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
-        "DATA"
+        "DATA" 
       );
 
       return res.status(200).json({
