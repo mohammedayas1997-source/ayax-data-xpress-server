@@ -159,7 +159,7 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
   const errors = [];
 
   // ==========================================
-  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME
+  // GATEWAY 1: AL-IHSAN DATASUB AIRTIME (FIXED)
   // ==========================================
   const rawAlihsanToken =
     process.env.ALIHSAN_AUTH_TOKEN ||
@@ -173,7 +173,7 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  // Daidaita sunan canji da lambobin Al-Ihsan
+  // Taswirar lambobin sadarwa na Al-Ihsan Datasub
   const alihsanNetMap = {
     MTN: "1",
     AIRTEL: "2",
@@ -187,9 +187,10 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
 
   if (cleanToken) {
     try {
+      // Tsarin payload na ainihi da Al-Ihsan ke bukata
       const payload = {
-        network: String(selectedNetworkId),
-        amount: numericAmount,
+        network: selectedNetworkId,
+        amount: String(numericAmount),
         mobile_number: String(formattedPhone),
         airtime_type: "VTU",
         Ported_number: true,
@@ -198,12 +199,14 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
 
       console.log("📤 [ALIHSAN AIRTIME REQ]:", payload);
 
+      // Gwada kiran Al-Ihsan da Header guda biyu (Authorization da Token)
       const res = await axios.post(
         "https://alihsandatasub.com.ng/api/v1/airtime.php",
         payload,
         {
           headers: {
             Authorization: `Token ${cleanToken}`,
+            Token: cleanToken,
             "Content-Type": "application/json",
             Accept: "application/json",
           },
@@ -243,7 +246,7 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
         resData.message ||
         resData.error ||
         resData.msg ||
-        JSON.stringify(resData);
+        (resData.success === "false" ? "Insufficient provider balance or invalid network ID" : JSON.stringify(resData));
 
       errors.push(`ALIHSAN: ${failureMsg}`);
     } catch (err) {
