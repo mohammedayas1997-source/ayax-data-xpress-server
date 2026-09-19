@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const authController = require("../controllers/authController");
 const User = require("../models/User");
-const userController = require("../controllers/userController");
 
 // Dynamic Authentication Middleware Loader
 let authMiddleware;
@@ -44,8 +43,6 @@ router.post("/reset-password", safeAuth("resetPassword"));
 
 // Paystack Webhook (Public Callback)
 router.post("/paystack/webhook", safeAuth("paystackWebhook"));
-
-router.post("/setup-first-pin", protect, userController.setupFirstPin);
 
 // ==========================================
 // 2. PROTECTED USER PROFILE & SECURITY ROUTES
