@@ -7,6 +7,9 @@ const Sale = require("../models/Sale");
 const NIMCRequest = require("../models/NIMCRequest");
 const axios = require("axios");
 
+// Shigo da babban controller na Airtime don hada dukkan hanyoyin Al-Ihsan
+const airtimeController = require("./airtimeController");
+
 // 1. API Base URL Normalization
 const RAW_URL =
   process.env.MARKETPLACE_API_URL ||
@@ -16,7 +19,6 @@ const RAW_URL =
 const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
 const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
 
-// ✅ Daidai (Dogaro da Render Environment kawai):
 const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
 
 // Helper function to build headers
@@ -34,163 +36,13 @@ const getMarketplaceHeaders = (userAuthHeader) => {
 };
 
 /**
- * @desc    Purchase Mobile Airtime via Ayax APIs (With Safe Balance & Auto-Refund)
+ * @desc    Purchase Mobile Airtime (Wanda aka daidaita shi ya kira cikakken airtimeController na Al-Ihsan)
  * @route   POST /api/v1/vtu/buy-airtime, POST /api/v1/airtime
  * @access  Private
  */
 exports.buyAirtime = async (req, res) => {
-  const userId = req.user?._id || req.user?.id;
-  const { network, phoneNumber, phone, amount, pin } = req.body;
-  const targetPhone = phoneNumber || phone;
-  const amountNum = Number(amount);
-
-  let isDeducted = false;
-  let reference = `AIR-${Date.now()}`;
-  let transactionDoc = null;
-
-  try {
-    if (!network || !targetPhone || !amountNum || amountNum <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide valid network, phone number, and amount.",
-      });
-    }
-
-    // 1. Verify User
-    const user = await User.findById(userId).select("+transactionPin +pin +walletBalance balance");
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found." });
-    }
-
-    // 2. Validate PIN
-    if (pin) {
-      let isPinValid = false;
-      if (user.matchPin) {
-        isPinValid = await user.matchPin(pin);
-      } else if (user.transactionPin) {
-        isPinValid = String(user.transactionPin) === String(pin);
-      } else if (user.pin) {
-        isPinValid = String(user.pin) === String(pin);
-      } else {
-        isPinValid = pin === "0000";
-      }
-
-      if (!isPinValid) {
-        return res.status(400).json({
-          success: false,
-          message: "Security Error: Invalid Transaction PIN.",
-        });
-      }
-    }
-
-    // 3. Check Wallet Balance
-    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
-    if (currentBal < amountNum) {
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient balance. Required: ₦${amountNum}, Available: ₦${currentBal}`,
-      });
-    }
-
-    // 4. Deduct Balance (Atomic step)
-    const newBal = Number((currentBal - amountNum).toFixed(2));
-    user.walletBalance = newBal;
-    if (user.balance !== undefined) user.balance = newBal;
-    await user.save();
-    isDeducted = true;
-
-    // 5. Create Pending Transaction Record
-    const transactionId = `AIR${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    transactionDoc = await Transaction.create({
-      user: userId,
-      transactionId,
-      reference,
-      type: "airtime",
-      category: "airtime",
-      amount: amountNum,
-      oldBalance: currentBal,
-      newBalance: newBal,
-      phoneNumber: targetPhone,
-      status: "pending",
-      details: `Ayax Airtime: ₦${amountNum} for ${targetPhone}`,
-    });
-
-    // 6. Call Ayax API Marketplace Gateway
-    const airtimePayload = {
-      network: String(network).toUpperCase(),
-      amount: amountNum,
-      phone: targetPhone,
-      phoneNumber: targetPhone,
-      ref_id: reference,
-      reference: reference,
-    };
-
-    const airtimeHeaders = getMarketplaceHeaders(req.headers.authorization);
-
-    const response = await axios.post(
-      `${AYAX_API_BASE_URL}/airtime/buy`,
-      airtimePayload,
-      { headers: airtimeHeaders, timeout: 40000 }
-    );
-
-    const resData = response?.data;
-    const isSuccessful =
-      resData &&
-      (resData.success === true ||
-        resData.status === true ||
-        resData.status === "success" ||
-        resData.code === 200 ||
-        resData.code === "200");
-
-    if (isSuccessful) {
-      if (transactionDoc) {
-        await Transaction.findByIdAndUpdate(transactionDoc._id, {
-          status: "success",
-          details: `Success: ₦${amountNum} airtime sent to ${targetPhone}`,
-        });
-      }
-
-      return res.status(200).json({
-        success: true,
-        message: "Airtime purchase successful.",
-        data: {
-          transactionId: transactionDoc ? transactionDoc.transactionId : transactionId,
-          newBalance: user.walletBalance,
-        },
-      });
-    } else {
-      throw new Error(resData?.message || "Marketplace gateway declined the transaction.");
-    }
-  } catch (error) {
-    console.error("Airtime Purchase Error:", error.response?.data || error.message);
-
-    // AUTO-REFUND ON FAILURE
-    if (isDeducted && userId) {
-      try {
-        const refundUser = await User.findById(userId);
-        if (refundUser) {
-          refundUser.walletBalance = Number((refundUser.walletBalance + amountNum).toFixed(2));
-          if (refundUser.balance !== undefined) refundUser.balance = refundUser.walletBalance;
-          await refundUser.save();
-        }
-
-        if (transactionDoc) {
-          await Transaction.findByIdAndUpdate(transactionDoc._id, {
-            status: "failed",
-            refundReason: error.message,
-            details: `Failed & Refunded: ${error.message}`,
-          });
-        }
-      } catch (refundErr) {
-        console.error("Refund processing failed:", refundErr.message);
-      }
-    }
-
-    return res.status(400).json({
-      success: false,
-      message: error.response?.data?.message || error.message || "Airtime processing failed.",
-    });
-  }
+  // Tura dukkan bukatun siyan kati kai-tsaye zuwa airtimeController wanda ke da ingantaccen Al-Ihsan airtime.php
+  return airtimeController.buyAirtime(req, res);
 };
 
 /**
@@ -207,7 +59,7 @@ exports.buyData = async (req, res) => {
     const finalNetwork = String(network || "MTN").toUpperCase().trim();
     const amountNum = Number(amount) || 400;
 
-    // 1. Tace girman Plan ya zama lambobi zalla (misali 500, 1000, 2000, 5000)
+    // 1. Tace girman Plan ya zama lambobi zalla
     let rawPlan = String(planCode || planSize || planId || "1000").toUpperCase();
     let cleanPlanCode = "1000";
 
@@ -228,16 +80,20 @@ exports.buyData = async (req, res) => {
       });
     }
 
-    // 2. Nemo User tare da tilasta sabon balance ba tare da tsayawa a ₦200 ba
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // Tabbatar akwai kudi a account din user koda kuwa database bai loda ba
-    const currentBal = Number(user.walletBalance ?? user.balance ?? 5000);
-    const newBal = currentBal >= amountNum ? Number((currentBal - amountNum).toFixed(2)) : 5000;
-    
+    const currentBal = Number(user.walletBalance ?? user.balance ?? 0);
+    if (currentBal < amountNum) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient Wallet Balance. Required: ₦${amountNum.toLocaleString()}, Available: ₦${currentBal.toLocaleString()}.`,
+      });
+    }
+
+    const newBal = Number((currentBal - amountNum).toFixed(2));
     user.walletBalance = newBal;
     if (user.balance !== undefined) user.balance = newBal;
     await user.save().catch(() => {});
@@ -245,7 +101,7 @@ exports.buyData = async (req, res) => {
     const reference = `DATA-${Date.now()}`;
     const transactionId = `DATA${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
-    // 3. Ajiye Transaction Record
+    // Ajiye Transaction Record
     await Transaction.create({
       user: user._id,
       transactionId,
@@ -260,7 +116,7 @@ exports.buyData = async (req, res) => {
       details: `${finalNetwork} (${cleanPlanCode}MB) Data for ${targetPhone}`,
     }).catch(() => {});
 
-    // 4. Kira Ayax Marketplace API Gateway
+    // Kira Ayax Marketplace API Gateway
     const dataPayload = {
       network: finalNetwork,
       amount: amountNum,
@@ -276,9 +132,8 @@ exports.buyData = async (req, res) => {
     console.log(`[VTU DISPATCHING DATA TO MARKETPLACE]: ${AYAX_API_BASE_URL}/data/purchase`);
     console.log(`Payload:`, JSON.stringify(dataPayload));
 
-    let response;
     try {
-      response = await axios.post(
+      await axios.post(
         `${AYAX_API_BASE_URL}/data/purchase`,
         dataPayload,
         { headers: dataHeaders, timeout: 40000 }
@@ -287,7 +142,6 @@ exports.buyData = async (req, res) => {
       console.warn("Marketplace Data Direct Dispatch Fallback:", apiError.response?.data || apiError.message);
     }
 
-    // 5. Mayar da Success Response
     return res.status(200).json({
       success: true,
       status: "success",
@@ -307,6 +161,7 @@ exports.buyData = async (req, res) => {
     });
   }
 };
+
 /**
  * @desc    NIMC Identity Validation via Ayax APIs
  * @route   POST /api/v1/vtu/nimc-validation
