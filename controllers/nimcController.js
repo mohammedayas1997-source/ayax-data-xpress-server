@@ -338,33 +338,35 @@ exports.submitNIMCRequest = async (req, res) => {
       });
     }
 
-    // ZABEN ENDPOINT NA ABJIKTECH BISA DOKUMENTESHAN
-    let targetEndpoint = "";
-    let requestPayload = { api_key: ABJIKTECH_API_KEY };
+    // ZABEN ENDPOINT NA ABJIKTECH
+      let targetEndpoint = "";
+      let requestPayload = { api_key: ABJIKTECH_API_KEY };
 
-    if (isPhoneSearch) {
-      if (finalServiceType === "premiumCard" || finalServiceType === "premium") {
-        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_premium.php";
-      } else if (finalServiceType === "basicSlip" || finalServiceType === "regular") {
-        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_regular.php";
-      } else if (finalServiceType === "vnin") {
-        targetEndpoint = "https://abjiktech.com.ng/api/verification/vnin_slip.php";
+      if (isPhoneSearch) {
+        if (finalServiceType === "premiumCard" || finalServiceType === "premium") {
+          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_premium.php";
+        } else if (finalServiceType === "basicSlip" || finalServiceType === "regular") {
+          // Regular/Basic yana fitar da Tracking ID da Address
+          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_regular.php";
+        } else if (finalServiceType === "vnin") {
+          targetEndpoint = "https://abjiktech.com.ng/api/verification/vnin_slip.php";
+        } else {
+          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_standard.php";
+        }
+        requestPayload.phone = cleanPhone;
       } else {
-        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_phone_standard.php";
+        if (finalServiceType === "premiumCard" || finalServiceType === "premium") {
+          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_nin.php";
+        } else if (finalServiceType === "basicSlip" || finalServiceType === "regular") {
+          // Regular/Basic yana fitar da Tracking ID da Address
+          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_regular_slip.php";
+        } else if (finalServiceType === "vnin") {
+          targetEndpoint = "https://abjiktech.com.ng/api/verification/vnin_slip.php";
+        } else {
+          targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_standard_slip.php";
+        }
+        requestPayload.nin = finalNin;
       }
-      requestPayload.phone = cleanPhone;
-    } else {
-      if (finalServiceType === "premiumCard" || finalServiceType === "premium") {
-        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_by_nin.php";
-      } else if (finalServiceType === "basicSlip" || finalServiceType === "regular") {
-        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_regular_slip.php";
-      } else if (finalServiceType === "vnin") {
-        targetEndpoint = "https://abjiktech.com.ng/api/verification/vnin_slip.php";
-      } else {
-        targetEndpoint = "https://abjiktech.com.ng/api/verification/nin_standard_slip.php";
-      }
-      requestPayload.nin = finalNin;
-    }
 
     try {
       const abjikRes = await axios.post(targetEndpoint, requestPayload, {
@@ -401,6 +403,22 @@ exports.submitNIMCRequest = async (req, res) => {
         userData.vnin ||
         finalNin ||
         targetIdentifier;
+        // Ciro Tracking ID da Address daga dukkan nau'in casing da Abjiktech ke bayarwa
+      const userTrackingId =
+        userData.trackingId ||
+        userData.tracking_id ||
+        userData.trackingID ||
+        userData.trackingNo ||
+        "N/A";
+
+      const userAddress =
+        userData.address ||
+        userData.residence_AdressLine1 ||
+        userData.residence_address ||
+        userData.residenceAddress ||
+        
+        [userData.residence_town, userData.lga || userData.residence_lga, userData.state || userData.residence_state].filter(Boolean).join(", ") ||
+        "N/A";
 
       // 2. Haɗa Cikakken Suna ba tare da ɓacewar wani yanki ba
       const fName = userData.first_name || userData.firstname || userData.firstName || "";
@@ -486,9 +504,9 @@ exports.submitNIMCRequest = async (req, res) => {
           birthdate: userDob,
           gender: userGender,
           address: userAddress,
-          state: userData.state || userData.stateOfOrigin || "N/A",
-          lga: userData.lga || userData.lgaOfOrigin || "N/A",
-          trackingId: userData.trackingId || userData.tracking_id || "N/A"
+          trackingId: userTrackingId,
+          state: userData.state || userData.residence_state || userData.stateOfOrigin || "N/A",
+          lga: userData.lga || userData.residence_lga || userData.lgaOfOrigin || "N/A"
         },
         user_data: userData,
         pdf_base64: base64Pdf,
