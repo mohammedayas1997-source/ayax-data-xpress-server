@@ -295,7 +295,7 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   if (cleanToken) {
     try {
       const selectedNet = gatewayNetMap[normNet] || "1";
-      const selectedPlanId = resolveAlihsanPlanId(planCode, normNet);
+      const selectedPlanId = await resolveAlihsanPlanId(planCode, normNet);
       const reqId = String(reference || `DATA_${Date.now()}`);
 
       const payload = {
