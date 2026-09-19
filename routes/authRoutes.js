@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const authController = require("../controllers/authController");
 const User = require("../models/User");
+const userController = require("../controllers/userController");
 
 // Dynamic Authentication Middleware Loader
 let authMiddleware;
