@@ -1203,7 +1203,7 @@ exports.generateVirtualAccount = async (req, res) => {
   }
 };
 /**
- * @desc    First Login Setup: Saita Transaction PIN na farko ga Customer da Agent
+ * @desc    Initial PIN Setup for New Users & Agents
  * @route   POST /api/v1/user/setup-first-pin
  * @access  Private (Authenticated User)
  */
@@ -1215,14 +1215,14 @@ const setupFirstPin = async (req, res) => {
     if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) {
       return res.status(400).json({
         success: false,
-        message: "PIN dole ya kasance lambobi 4 zalla.",
+        message: "PIN must be exactly 4 numeric digits.",
       });
     }
 
     if (confirmPin && pin !== confirmPin) {
       return res.status(400).json({
         success: false,
-        message: "Lambar PIN da aka sake shigarwa ba ta yi daidai ba.",
+        message: "Confirmation PIN does not match.",
       });
     }
 
@@ -1244,7 +1244,7 @@ const setupFirstPin = async (req, res) => {
     return res.status(200).json({
       success: true,
       status: "success",
-      message: "An saita Transaction PIN ɗinka cikin nasara! 🎉",
+      message: "Transaction PIN created successfully.",
       user: {
         id: updatedUser._id,
         name: updatedUser.name,
@@ -1256,12 +1256,7 @@ const setupFirstPin = async (req, res) => {
     console.error("setupFirstPin Error:", error);
     return res.status(500).json({
       success: false,
-      message: "An samu matsala wajen saita PIN: " + error.message,
+      message: "Failed to set up PIN: " + error.message,
     });
   }
-};
-
-module.exports = {
-  // sauran ayyukanka...
-  setupFirstPin,
 };
