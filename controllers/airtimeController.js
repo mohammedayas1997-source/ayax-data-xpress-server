@@ -174,11 +174,11 @@ const dispatchToAirtimeGateways = async ({ network, phone, amount, reference }) 
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  const alihsanNetMap = {
-    MTN: "1",
-    GLO: "2",
-    "9MOBILE": "3",
-    AIRTEL: "4",
+ const gatewayNetMap = {
+    MTN: "1",       // MTN
+    AIRTEL: "2",    // Airtel
+    "9MOBILE": "3", // 9mobile
+    GLO: "4",       // Glo[cite: 8]
   };
 
   const selectedNetworkId = alihsanNetMap[normNet] || "1";
