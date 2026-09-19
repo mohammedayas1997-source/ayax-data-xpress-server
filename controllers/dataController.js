@@ -193,62 +193,103 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-const resolveAlihsanPlanId = (rawCode, net) => {
-    const c = String(rawCode || "").toLowerCase().trim();
+/**
+   * Universal Dynamic Plan Resolver
+   * Yana duba Database kai-tsaye don ciro Provider Plan ID ba tare da an taba code a gaba ba.
+   */
+  const resolveAlihsanPlanId = async (rawCode, net) => {
+    if (!rawCode) return "27";
+    const clean = String(rawCode).trim();
 
-    // 1. Idan lambar ID ce kai-tsaye (140, 27, 262, 17, 255, 158, etc.), bar shi yadda yake
-    if (/^\d{1,5}$/.test(c)) return c;
+    // 1. Idan dama lambobi ne aka turo (misali 157, 158, 200, 255, 262, 140, etc.), tura su kai-tsaye!
+    if (/^\d{1,6}$/.test(clean)) {
+      return clean;
+    }
 
-    // 2. Tsarin MTN (BA A TABA SHI BA)
+    // 2. Duba cikin MongoDB (plans ko dataplans collection) don gano Provider Plan ID
+    try {
+      const db = mongoose.connection.db;
+      if (db) {
+        const found = await db.collection("plans").findOne({
+          $or: [
+            { id: clean },
+            { planId: clean },
+            { planCode: clean },
+            { name: new RegExp(`^${clean}$`, "i") }
+          ]
+        }) || await db.collection("dataplans").findOne({
+          $or: [
+            { id: clean },
+            { planId: clean },
+            { planCode: clean },
+            { name: new RegExp(`^${clean}$`, "i") }
+          ]
+        });
+
+        if (found) {
+          const providerId = found.planId || found.providerPlanId || found.id || found.code;
+          if (providerId && /^\d+$/.test(String(providerId).trim())) {
+            return String(providerId).trim();
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 3. Tsarin MTN na asali (KADA A TABA SHI)
     if (net === "MTN") {
-      if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0") || c.includes("1000"))) return "140";
+      const c = clean.toLowerCase();
+      if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0"))) return "140";
       if (c.includes("dc") && c.includes("2gb")) return "134";
       if (c.includes("500") && c.includes("sme")) return "17";
       if (c.includes("500")) return "26";
-      if (c.includes("1gb") || c.includes("1.0") || c.includes("1000")) return "27";
-      if (c.includes("2gb") || c.includes("2.0") || c.includes("2000")) return "28";
+      if (c.includes("1gb") || c.includes("1.0")) return "27";
+      if (c.includes("2gb") || c.includes("2.0")) return "28";
       return "27";
     }
 
-    // 3. GYARAN AIRTEL DOMIN YA AMINTA DA DUKKAN SIZES DA TARIFFS
+    // 4. Dynamic Mapping daga bayanan hotunan Al-Ihsan da ka turo
+    const c = clean.toLowerCase();
     if (net === "AIRTEL") {
-      // Airtel Awoof
-      if (c.includes("awoof") && (c.includes("2gb") || c.includes("2.0"))) return "157";
-      if (c.includes("awoof") && (c.includes("3gb") || c.includes("3.0"))) return "158";
-      if (c.includes("awoof") && (c.includes("4gb") || c.includes("4.0"))) return "159";
-      if (c.includes("awoof") && (c.includes("10gb") || c.includes("10.0") || c.includes("10"))) return "160";
+      // Awoof Bundles
+      if (c.includes("awoof")) {
+        if (c.includes("2gb") || c.includes("2.0")) return "157";
+        if (c.includes("3gb") || c.includes("3.0")) return "158";
+        if (c.includes("4gb") || c.includes("4.0")) return "159";
+        if (c.includes("10gb") || c.includes("10.0") || c.includes("10")) return "160";
+        if (c.includes("15gb") || c.includes("15.0")) return "161";
+      }
 
-      // Airtel CG
-      if (c.includes("cg") && (c.includes("1.2") || c.includes("1.2gb"))) return "262";
-      if (c.includes("cg") && (c.includes("1.5") || c.includes("1.5gb"))) return "240";
-      if (c.includes("cg") && (c.includes("6.5") || c.includes("6.5gb"))) return "263";
+      // SME Bundles
+      if (c.includes("sme")) {
+        if (c.includes("150mb") || c.includes("150")) return "180";
+        if (c.includes("300mb") || c.includes("300")) return "181";
+        if (c.includes("250mb") || c.includes("250")) return "257";
+        if (c.includes("600mb") || c.includes("600")) return "218";
+        if (c.includes("1gb") || c.includes("1.0")) return "200";
+        if (c.includes("1.5gb") || c.includes("1.5")) return "239";
+        if (c.includes("2gb") || c.includes("2.0")) return "240";
+        if (c.includes("3gb") || c.includes("3.0")) return "255";
+        if (c.includes("4gb") || c.includes("4.0")) return "256";
+        if (c.includes("5gb") || c.includes("5.0")) return "221";
+        if (c.includes("6gb") || c.includes("6.0")) return "253";
+        if (c.includes("8gb") || c.includes("8.0")) return "213";
+        if (c.includes("10gb") || c.includes("10.0")) return "184";
+      }
 
-      // Airtel SME
-      if (c.includes("sme") && (c.includes("1gb") || c.includes("1.0"))) return "200";
-      if (c.includes("sme") && (c.includes("2gb") || c.includes("2.0"))) return "253";
-      if (c.includes("sme") && (c.includes("3gb") || c.includes("3.0"))) return "255";
+      // CG Bundles
+      if (c.includes("cg")) {
+        if (c.includes("3.2")) return "237";
+        if (c.includes("1.2")) return "262";
+      }
 
-      // Idan ba a gane ba, duba girman zalla
+      // Default Airtel idan ba a tantance ba
       if (c.includes("3gb") || c.includes("3.0")) return "255";
-      if (c.includes("2gb") || c.includes("2.0")) return "253";
-      if (c.includes("1.2")) return "262";
-      if (c.includes("1.5")) return "240";
+      if (c.includes("2gb") || c.includes("2.0")) return "240";
       if (c.includes("1gb") || c.includes("1.0")) return "200";
-
       return "200";
     }
 
-    if (net === "9MOBILE") {
-      if (c.includes("1.5") || c.includes("1500")) return "11";
-      return "45";
-    }
-
-    if (net === "GLO") {
-      if (c.includes("2gb")) return "29";
-      return "28";
-    }
-
-    return String(rawCode || "27");
+    return clean;
   };
 
   if (cleanToken) {
