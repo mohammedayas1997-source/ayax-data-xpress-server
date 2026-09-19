@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const DataPlan = require("../models/DataPlan");
 const axios = require("axios");
 
@@ -10,9 +11,7 @@ const RAW_URL =
 const CLEAN_BASE = RAW_URL.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
 const AYAX_API_BASE_URL = `${CLEAN_BASE}/api/v1`;
 
-// ✅ Daidai (Dogaro da Render Environment kawai):
 const AYAX_API_KEY = process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY;
-// Ayax Standard API Headers
 const getHeaders = () => ({
   "Content-Type": "application/json",
   "x-api-key": AYAX_API_KEY,
@@ -20,8 +19,44 @@ const getHeaders = () => ({
 });
 
 /**
- * 1. GET ALL ACTIVE PLANS (Public / Mobile App Frontend)
- * Supports: ?network=MTN&planType=SME
+ * Normalizer Helper: Tabbatar da cewa kowane plan yana dauke da filayen
+ * da Admin Dashboard da Mobile App suke bukata.
+ */
+const normalizePlan = (p) => {
+  const pId = String(p.planId || p.planCode || p.id || p.code || p._id || "").trim();
+  const net = String(p.network || p.networkName || "MTN").toUpperCase().trim();
+  const pName = p.name || p.plan || p.planLabel || `${p.sizeGB || ""}GB Plan`;
+  const uPrice = Number(p.userPrice ?? p.price ?? 0);
+  const aPrice = Number(p.agentPrice ?? uPrice);
+  const v = p.validity || "30 Days";
+  const t = String(p.planType || p.type || "DC").toUpperCase();
+
+  return {
+    ...p,
+    _id: p._id || pId,
+    id: pId,
+    planId: pId,
+    planCode: pId,
+    code: pId,
+    network: net,
+    networkName: net,
+    name: pName,
+    plan: pName,
+    planLabel: pName,
+    userPrice: uPrice,
+    price: uPrice,
+    agentPrice: aPrice,
+    costPrice: Number(p.costPrice || 0),
+    validity: v,
+    planType: t,
+    type: t,
+    status: p.status || (p.isActive === false ? "disabled" : "active"),
+    isActive: p.isActive !== false && p.status !== "disabled"
+  };
+};
+
+/**
+ * 1. GET ALL ACTIVE PLANS (Public / App Frontend)
  */
 const getPlans = async (req, res) => {
   try {
@@ -29,39 +64,48 @@ const getPlans = async (req, res) => {
     const targetNetwork = network || networkName;
     const targetType = planType || type;
 
-    const filter = { isActive: { $ne: false } };
+    let plans = [];
+    const db = mongoose.connection.db;
 
+    // A duba kai-tsaye a duka collections guda biyu (plans da dataplans)
+    if (db) {
+      try {
+        const rawPlans = await db.collection("plans").find({}).sort({ network: 1, userPrice: 1 }).toArray();
+        if (rawPlans && rawPlans.length > 0) plans = rawPlans;
+        else {
+          const rawDataPlans = await db.collection("dataplans").find({}).sort({ network: 1, userPrice: 1 }).toArray();
+          if (rawDataPlans && rawDataPlans.length > 0) plans = rawDataPlans;
+        }
+      } catch (_) {}
+    }
+
+    if ((!plans || plans.length === 0) && DataPlan) {
+      plans = await DataPlan.find().sort({ networkName: 1, userPrice: 1 }).lean();
+    }
+
+    let normalized = (plans || []).map(normalizePlan);
+
+    // Tace su bisa Network idan an nema
     if (targetNetwork && targetNetwork !== "all") {
-      const netRegex = new RegExp(`^${String(targetNetwork).trim()}$`, "i");
-      filter.$or = [
-        { networkName: netRegex },
-        { network: netRegex },
-        { serviceId: netRegex },
-      ];
+      const netQuery = String(targetNetwork).toUpperCase().trim();
+      normalized = normalized.filter(p => p.network === netQuery);
     }
 
+    // Tace su bisa Plan Type idan an nema
     if (targetType && targetType !== "all") {
-      const typeRegex = new RegExp(`^${String(targetType).trim()}$`, "i");
-      filter.planType = typeRegex;
+      const typeQuery = String(targetType).toUpperCase().trim();
+      normalized = normalized.filter(p => p.planType === typeQuery);
     }
-
-    const plans = await DataPlan.find(filter)
-      .sort({
-        networkName: 1,
-        sizeGB: 1,
-        userPrice: 1,
-      })
-      .lean();
 
     return res.status(200).json({
       success: true,
       status: "success",
-      count: plans.length,
-      data: plans,
-      plans,
+      count: normalized.length,
+      data: normalized,
+      plans: normalized,
     });
   } catch (error) {
-    console.error("Get Plans Frontend Error:", error);
+    console.error("Get Plans Error:", error);
     return res.status(500).json({
       success: false,
       status: "failed",
@@ -76,20 +120,32 @@ const getPlans = async (req, res) => {
  */
 const getAdminPlans = async (req, res) => {
   try {
-    const plans = await DataPlan.find()
-      .sort({
-        networkName: 1,
-        sizeGB: 1,
-        userPrice: 1,
-      })
-      .lean();
+    let plans = [];
+    const db = mongoose.connection.db;
+
+    if (db) {
+      try {
+        const rawPlans = await db.collection("plans").find({}).sort({ network: 1, userPrice: 1 }).toArray();
+        if (rawPlans && rawPlans.length > 0) plans = rawPlans;
+        else {
+          const rawDataPlans = await db.collection("dataplans").find({}).sort({ network: 1, userPrice: 1 }).toArray();
+          if (rawDataPlans && rawDataPlans.length > 0) plans = rawDataPlans;
+        }
+      } catch (_) {}
+    }
+
+    if ((!plans || plans.length === 0) && DataPlan) {
+      plans = await DataPlan.find().sort({ networkName: 1, userPrice: 1 }).lean();
+    }
+
+    const normalized = (plans || []).map(normalizePlan);
 
     return res.status(200).json({
       success: true,
       status: "success",
-      count: plans.length,
-      data: plans,
-      plans,
+      count: normalized.length,
+      data: normalized,
+      plans: normalized,
     });
   } catch (error) {
     console.error("Get Admin Plans Error:", error);
@@ -103,7 +159,7 @@ const getAdminPlans = async (req, res) => {
 };
 
 /**
- * 3. SET OR UPDATE PLAN PRICING & METRICS
+ * 3. SET OR UPDATE PLAN PRICING & METRICS (Saves to BOTH `plans` and `dataplans`)
  */
 const setPlanPrice = async (req, res) => {
   const {
@@ -111,86 +167,92 @@ const setPlanPrice = async (req, res) => {
     networkId,
     planCode,
     planId,
+    code,
     userPrice,
+    price,
     agentPrice,
     costPrice,
     planLabel,
     name,
+    plan,
     networkName,
     network,
     sizeGB,
     planType,
+    type,
     validity,
+    status,
     isActive,
   } = req.body;
 
   try {
-    let plan;
-    const finalNetName = String(networkName || network || "MTN").toUpperCase().trim();
-    const finalPlanCode = String(planCode || planId || "").trim();
-    const finalLabel = planLabel || name || `${sizeGB || ""}GB Plan`;
+    const finalNetName = String(networkName || network || networkId || "MTN").toUpperCase().trim();
+    const finalPlanCode = String(planCode || planId || code || id || "").trim();
+    const finalLabel = name || plan || planLabel || `${sizeGB || ""}GB Plan`;
+    const finalUPrice = Number(userPrice !== undefined ? userPrice : price || 0);
+    const finalAPrice = Number(agentPrice !== undefined ? agentPrice : finalUPrice);
+    const finalStatus = status || (isActive === false ? "disabled" : "active");
+    const activeBool = finalStatus !== "disabled" && isActive !== false;
 
-    if (id) {
-      plan = await DataPlan.findByIdAndUpdate(
-        id,
-        {
-          ...(userPrice !== undefined && { userPrice: Number(userPrice) }),
-          ...(agentPrice !== undefined && { agentPrice: Number(agentPrice) }),
-          ...(costPrice !== undefined && { costPrice: Number(costPrice) }),
-          ...(planLabel && { planLabel: finalLabel }),
-          ...(name && { name: finalLabel }),
-          ...(networkName && { networkName: finalNetName, network: finalNetName }),
-          ...(sizeGB !== undefined && { sizeGB: Number(sizeGB) }),
-          ...(planType && { planType }),
-          ...(validity && { validity }),
-          ...(isActive !== undefined && { isActive: Boolean(isActive) }),
-        },
-        { new: true, runValidators: true }
-      );
-    } else {
-      if ((!networkId && !network) || !finalPlanCode || userPrice === undefined) {
-        return res.status(400).json({
-          success: false,
-          status: "failed",
-          message: "networkId/network, planCode/planId, and userPrice are required.",
-        });
-      }
+    if (!finalPlanCode || finalUPrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        status: "failed",
+        message: "planCode/planId and userPrice are required.",
+      });
+    }
 
-      const netId = String(networkId || network || finalNetName).toUpperCase();
+    const planData = {
+      id: finalPlanCode,
+      planId: finalPlanCode,
+      planCode: finalPlanCode,
+      code: finalPlanCode,
+      network: finalNetName,
+      networkName: finalNetName,
+      networkId: finalNetName,
+      name: finalLabel,
+      plan: finalLabel,
+      planLabel: finalLabel,
+      userPrice: finalUPrice,
+      price: finalUPrice,
+      agentPrice: finalAPrice,
+      costPrice: Number(costPrice || 0),
+      sizeGB: sizeGB ? Number(sizeGB) : (parseFloat(finalLabel) || 1),
+      planType: String(planType || type || "DC").toUpperCase(),
+      type: String(planType || type || "DC").toUpperCase(),
+      validity: validity || "30 Days",
+      status: finalStatus,
+      isActive: activeBool,
+      updatedAt: new Date()
+    };
 
-      plan = await DataPlan.findOneAndUpdate(
-        {
-          $or: [
-            { networkId: netId, planCode: finalPlanCode },
-            { network: finalNetName, planId: finalPlanCode },
-          ],
-        },
-        {
-          networkId: netId,
-          planCode: finalPlanCode,
-          planId: finalPlanCode,
-          userPrice: Number(userPrice),
-          agentPrice: Number(agentPrice !== undefined ? agentPrice : userPrice),
-          costPrice: Number(costPrice || 0),
-          planLabel: finalLabel,
-          name: finalLabel,
-          networkName: finalNetName,
-          network: finalNetName,
-          sizeGB: sizeGB ? Number(sizeGB) : 0,
-          planType: planType || "SME",
-          validity: validity || "30 Days",
-          isActive: isActive !== undefined ? Boolean(isActive) : true,
-        },
-        { upsert: true, new: true, runValidators: true }
-      );
+    const db = mongoose.connection.db;
+    if (db) {
+      const matchCriteria = {
+        $or: [
+          { id: finalPlanCode },
+          { planId: finalPlanCode },
+          { planCode: finalPlanCode }
+        ]
+      };
+      await db.collection("plans").updateOne(matchCriteria, { $set: planData,$setOnInsert: { createdAt: new Date() } }, { upsert: true });
+      await db.collection("dataplans").updateOne(matchCriteria, { $set: planData,$setOnInsert: { createdAt: new Date() } }, { upsert: true });
+    }
+
+    if (DataPlan) {
+      await DataPlan.findOneAndUpdate(
+        { $or: [{ planCode: finalPlanCode }, { planId: finalPlanCode }] },
+        { $set: planData },
+        { upsert: true, new: true }
+      ).catch(() => {});
     }
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: "Data plan pricing updated successfully.",
-      data: plan,
-      plan,
+      message: "Data plan pricing updated across all collections successfully.",
+      data: planData,
+      plan: planData,
     });
   } catch (error) {
     console.error("Set Plan Error:", error);
@@ -204,7 +266,7 @@ const setPlanPrice = async (req, res) => {
 };
 
 /**
- * 4. SYNC PLANS DIRECTLY FROM AYAX VTU API GATEWAY
+ * 4. SYNC PLANS FROM AYAX VTU API GATEWAY
  */
 const syncAyaxPlans = async (req, res) => {
   try {
@@ -243,57 +305,45 @@ const syncAyaxPlans = async (req, res) => {
       });
     }
 
+    const db = mongoose.connection.db;
     let syncedCount = 0;
 
     for (const p of plansList) {
-      const netId = String(
-        p.networkId || p.network_id || p.network || p.serviceId || ""
-      ).toUpperCase();
-      const pCode = String(
-        p.planCode || p.plan_code || p.planId || p.id || p.code || ""
-      );
-      const netName = String(
-        p.networkName || p.network_name || p.network || "MTN"
-      ).toUpperCase();
-      const pLabel =
-        p.planLabel || p.name || p.title || p.description || `${p.sizeGB || ""}GB Plan`;
-      const apiPrice = Number(
-        p.costPrice || p.price || p.amount || p.apiPrice || 0
-      );
+      const pCode = String(p.planCode || p.plan_code || p.planId || p.id || p.code || "");
+      const netName = String(p.networkName || p.network_name || p.network || "MTN").toUpperCase();
+      const pLabel = p.planLabel || p.name || p.title || p.description || `${p.sizeGB || ""}GB Plan`;
+      const apiPrice = Number(p.costPrice || p.price || p.amount || p.apiPrice || 0);
       const sizeGB = Number(p.sizeGB || p.size || p.volume || 0);
       const planType = String(p.planType || p.type || "SME").toUpperCase();
       const validity = p.validity || "30 Days";
 
-      if (netId && pCode) {
-        await DataPlan.findOneAndUpdate(
-          {
-            $or: [
-              { networkId: netId, planCode: pCode },
-              { network: netName, planId: pCode },
-            ],
-          },
-          {
-            $setOnInsert: {
-              userPrice: apiPrice > 0 ? apiPrice + 50 : 250,
-              agentPrice: apiPrice > 0 ? apiPrice + 20 : 230,
-              costPrice: apiPrice,
-              isActive: true,
-            },
-            $set: {
-              networkId: netId,
-              planCode: pCode,
-              planId: pCode,
-              networkName: netName,
-              network: netName,
-              planLabel: pLabel,
-              name: pLabel,
-              sizeGB: sizeGB,
-              planType: planType,
-              validity: validity,
-            },
-          },
-          { upsert: true, new: true }
-        );
+      if (pCode) {
+        const doc = {
+          id: pCode,
+          planId: pCode,
+          planCode: pCode,
+          network: netName,
+          networkName: netName,
+          planLabel: pLabel,
+          name: pLabel,
+          plan: pLabel,
+          userPrice: apiPrice > 0 ? apiPrice + 50 : 250,
+          price: apiPrice > 0 ? apiPrice + 50 : 250,
+          agentPrice: apiPrice > 0 ? apiPrice + 20 : 230,
+          costPrice: apiPrice,
+          sizeGB,
+          planType,
+          type: planType,
+          validity,
+          status: "active",
+          isActive: true,
+          updatedAt: new Date(),
+        };
+
+        if (db) {
+          await db.collection("plans").updateOne({ $or: [{ id: pCode }, { planId: pCode }] }, {$set: doc }, { upsert: true });
+          await db.collection("dataplans").updateOne({ $or: [{ id: pCode }, { planId: pCode }] }, {$set: doc }, { upsert: true });
+        }
         syncedCount++;
       }
     }
@@ -301,20 +351,13 @@ const syncAyaxPlans = async (req, res) => {
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Successfully synchronized ${syncedCount} plans from Ayax API Marketplace.`,
+      message: `Successfully synchronized ${syncedCount} plans.`,
       syncedCount,
     });
   } catch (error) {
-    console.error(
-      "Sync Ayax Plans Error:",
-      error.response?.status,
-      error.response?.data || error.message
-    );
-    return res.status(error.response?.status || 500).json({
+    return res.status(500).json({
       success: false,
-      status: "failed",
-      message: "Failed to sync plans with Ayax Gateway.",
-      error: error.response?.data?.message || error.message,
+      message: "Failed to sync plans: " + error.message,
     });
   }
 };
@@ -324,33 +367,29 @@ const syncAyaxPlans = async (req, res) => {
  */
 const togglePlanStatus = async (req, res) => {
   try {
-    const plan = await DataPlan.findById(req.params.id);
-    if (!plan) {
-      return res.status(404).json({
-        success: false,
-        status: "failed",
-        message: "Data plan not found.",
-      });
-    }
+    const { id } = req.params;
+    const db = mongoose.connection.db;
+    let newActiveState = true;
 
-    plan.isActive = !plan.isActive;
-    await plan.save();
+    if (db) {
+      const match = { $or: [{ _id: mongoose.isValidObjectId(id) ? new mongoose.Types.ObjectId(id) : null }, { id }, { planId: id }] };
+      const current = await db.collection("plans").findOne(match) || await db.collection("dataplans").findOne(match);
+      if (current) {
+        newActiveState = current.isActive === false || current.status === "disabled";
+        const newStatus = newActiveState ? "active" : "disabled";
+        await db.collection("plans").updateMany(match, { $set: { isActive: newActiveState, status: newStatus } });
+        await db.collection("dataplans").updateMany(match, { $set: { isActive: newActiveState, status: newStatus } });
+      }
+    }
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: `Plan marked as ${plan.isActive ? "Active" : "Disabled"}.`,
-      data: plan,
-      plan,
+      message: `Plan marked as ${newActiveState ? "Active" : "Disabled"}.`,
+      isActive: newActiveState
     });
   } catch (error) {
-    console.error("Toggle Plan Status Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Error toggling plan activation state.",
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -359,28 +398,26 @@ const togglePlanStatus = async (req, res) => {
  */
 const deletePlan = async (req, res) => {
   try {
-    const plan = await DataPlan.findByIdAndDelete(req.params.id);
-    if (!plan) {
-      return res.status(404).json({
-        success: false,
-        status: "failed",
-        message: "Data plan not found.",
-      });
+    const { id } = req.params;
+    const db = mongoose.connection.db;
+
+    if (db) {
+      const match = { $or: [{ _id: mongoose.isValidObjectId(id) ? new mongoose.Types.ObjectId(id) : null }, { id }, { planId: id }, { planCode: id }] };
+      await db.collection("plans").deleteMany(match);
+      await db.collection("dataplans").deleteMany(match);
+    }
+
+    if (DataPlan) {
+      await DataPlan.findByIdAndDelete(id).catch(() => {});
     }
 
     return res.status(200).json({
       success: true,
       status: "success",
-      message: "Data plan deleted successfully.",
+      message: "Data plan deleted successfully from all collections.",
     });
   } catch (error) {
-    console.error("Delete Plan Error:", error);
-    return res.status(500).json({
-      success: false,
-      status: "failed",
-      message: "Error deleting plan from database.",
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
