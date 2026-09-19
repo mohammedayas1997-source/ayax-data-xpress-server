@@ -386,8 +386,59 @@ exports.submitNIMCRequest = async (req, res) => {
         throw new Error(resData.message || resData.desc || "Record not found on NIMC database.");
       }
 
-      const userData = resData.user_data || resData.data?.user_data || {};
-      const resolvedNin = userData.nin || finalNin || targetIdentifier;
+     // 1. Tattara ainihin user_data daga dukkan sassan da Abjiktech zai iya ajiye su
+      const userData =
+        resData.user_data?.response?.[0] ||
+        resData.user_data ||
+        resData.data?.user_data ||
+        resData.data?.details ||
+        resData.data ||
+        {};
+
+      const resolvedNin =
+        userData.nin ||
+        userData.ninNumber ||
+        userData.vnin ||
+        finalNin ||
+        targetIdentifier;
+
+      // 2. Haɗa Cikakken Suna ba tare da ɓacewar wani yanki ba
+      const fName = userData.first_name || userData.firstname || userData.firstName || "";
+      const mName = userData.middle_name || userData.middlename || userData.middleName || "";
+      const lName = userData.last_name || userData.surname || userData.lastname || "";
+      const computedFullName =
+        userData.fullName ||
+        userData.name ||
+        `${fName} ${mName} ${lName}`.replace(/\s+/g, " ").trim() ||
+        "Verified Citizen";
+
+      // 3. Ciro Hoto (Photo / Base64 Image)
+      let photoData = userData.photo || userData.image || userData.base64Image || null;
+      if (photoData && !photoData.startsWith("data:image") && !photoData.startsWith("http")) {
+        photoData = `data:image/jpeg;base64,${photoData}`;
+      }
+
+      // 4. Ciro Lambar Waya, Ranar Haihuwa, da Adireshi
+      const userPhone =
+        userData.phone_number ||
+        userData.phone ||
+        userData.telephoneno ||
+        cleanPhone ||
+        "N/A";
+
+      const userDob =
+        userData.date_of_birth ||
+        userData.dob ||
+        userData.birthdate ||
+        "N/A";
+
+      const userGender = userData.gender || "N/A";
+      const userAddress =
+        userData.address ||
+        userData.residence_AdressLine1 ||
+        userData.residence_address ||
+        `${userData.lga || ""} ${userData.state || ""}`.trim() ||
+        "N/A";
 
       await Transaction.findOneAndUpdate(
         { reference },
@@ -422,14 +473,24 @@ exports.submitNIMCRequest = async (req, res) => {
         status: "success",
         message: "NIMC details retrieved successfully.",
         data: {
-          fullName: `${userData.first_name || ""} ${userData.middle_name || ""} ${userData.last_name || ""}`.trim() || "Verified Citizen",
+          fullName: computedFullName,
+          firstName: fName,
+          middleName: mName,
+          lastName: lName,
           nin: resolvedNin,
-          photo: userData.photo || null,
-          phone: userData.phone_number || cleanPhone,
-          dob: userData.date_of_birth || "N/A",
-          gender: userData.gender || "N/A",
-          address: userData.address || "N/A",
+          ninNumber: resolvedNin,
+          photo: photoData,
+          phone: userPhone,
+          telephoneno: userPhone,
+          dob: userDob,
+          birthdate: userDob,
+          gender: userGender,
+          address: userAddress,
+          state: userData.state || userData.stateOfOrigin || "N/A",
+          lga: userData.lga || userData.lgaOfOrigin || "N/A",
+          trackingId: userData.trackingId || userData.tracking_id || "N/A"
         },
+        user_data: userData,
         pdf_base64: base64Pdf,
         newBalance: newBal,
       });
