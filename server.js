@@ -23,8 +23,6 @@ app.use(
   })
 );
 
-
-
 // --- 3. PERMISSIVE & SECURE CORS CONFIGURATION ---
 const allowedOrigins = [
   "https://www.ayaxdata.online",
@@ -169,6 +167,14 @@ const virtualAccountRoutes = require("./routes/virtualAccountRoutes");
 const dataRoutes = require("./routes/data.routes");
 const transactionRoutes = require("./routes/transaction.routes");
 
+// Shigo da keɓaɓɓen Route na Airtime
+let airtimeRoutes;
+try {
+  airtimeRoutes = require("./routes/airtimeRoutes");
+} catch (e) {
+  airtimeRoutes = null;
+}
+
 // Additional Service Routes (Utility, Bills, Notifications)
 let utilityRoutes;
 try {
@@ -218,10 +224,16 @@ if (utilityRoutes) {
   app.use("/api/v1/cable", utilityRoutes);
 }
 
-// VTU, Data & Airtime Routing
+// ✅ KEƁAƁƁEN HANYOYIN AIRTIME (RABA HANYAR DATA DA TA KATI)
+if (airtimeRoutes) {
+  app.use("/api/v1/airtime", airtimeRoutes);
+} else {
+  app.use("/api/v1/airtime", vtuRoutes);
+}
+
+// VTU & Data Routing
 app.use("/api/v1/vtu", vtuRoutes);
 app.use("/api/v1/data", dataRoutes);
-app.use("/api/v1/airtime", vtuRoutes);
 
 if (!utilityRoutes) {
   app.use("/api/v1/bills", vtuRoutes);
