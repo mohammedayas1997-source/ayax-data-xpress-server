@@ -2,55 +2,118 @@ const mongoose = require("mongoose");
 
 const dataPlanSchema = new mongoose.Schema(
   {
+    // Yana karbar network ko networkName
+    network: {
+      type: String,
+      uppercase: true,
+      trim: true,
+      index: true,
+    },
     networkName: {
       type: String,
-      required: true,
-      enum: ["MTN", "GLO", "AIRTEL", "9MOBILE"], // Tabbatar da sunayen networks
+      uppercase: true,
+      trim: true,
       index: true,
     },
     networkId: {
       type: String,
-      required: true,
+      trim: true,
+      default: "1",
+    },
+
+    // Ainihin lambar Al-Ihsan Provider ID (misali 157, 158, 200, 255, 140, 27)
+    id: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+    planId: {
+      type: String,
+      trim: true,
       index: true,
     },
     planCode: {
       type: String,
-      required: true,
+      trim: true,
       index: true,
+    },
+    code: {
+      type: String,
+      trim: true,
+    },
+
+    // Sunan Plan (misali 1.0 GB / 2.0 GB / 3GB)
+    name: {
+      type: String,
+      trim: true,
+    },
+    plan: {
+      type: String,
+      trim: true,
     },
     planLabel: {
       type: String,
-      required: true,
       trim: true,
     },
-    // Adadin GB (Misali: 1.5 ko 0.5) domin lissafin performance dashboard da agent targets
+
+    // Adadin GB don lissafi
     sizeGB: {
       type: Number,
-      required: true,
+      default: 1,
+      min: 0,
+    },
+
+    // Nau'in Plan (SME, CG, DC, Awoof, Gifting)
+    planType: {
+      type: String,
+      trim: true,
+      default: "DC",
+    },
+    type: {
+      type: String,
+      trim: true,
+      default: "DC",
+    },
+
+    // Tsawon lokaci (misali 30 Days, 7 Days)
+    validity: {
+      type: String,
+      default: "30 Days",
+      trim: true,
+    },
+
+    // Farashin Siyarwa
+    userPrice: {
+      type: Number,
       default: 0,
       min: 0,
     },
-    // Rarraba kalar data (Misali: SME, CG, Gifting, Direct)
-    planType: {
-  type: String,
-  required: true,
-  trim: true,
-},
-    userPrice: {
+    price: {
       type: Number,
-      required: true,
+      default: 0,
       min: 0,
     },
     agentPrice: {
       type: Number,
-      required: true,
+      default: 0,
       min: 0,
     },
-    // Farashin da tsarin API ke cirewa (Optional - domin lissafin riba ko cost)
+    costPrice: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     apiCost: {
       type: Number,
       default: 0,
       min: 0,
+    },
+
+    // Yanayin Plan
+    status: {
+      type: String,
+      default: "active",
+      index: true,
     },
     isActive: {
       type: Boolean,
@@ -58,11 +121,29 @@ const dataPlanSchema = new mongoose.Schema(
       index: true,
     },
   },
-  { timestamps: true }
+  { 
+    timestamps: true,
+    strict: false // Yana ba da damar ajiye dukkan filayen da ba a rubuta ba ba tare da kuskure ba
+  }
 );
 
-// Ingantattun Indexes don saurin bincike da filtara a lokacin sayar da data
-dataPlanSchema.index({ networkId: 1, isActive: 1 });
+// Auto-fill Hook: Tabbatar da an daidaita filaye kafin adanawa
+dataPlanSchema.pre("save", function (next) {
+  if (!this.network && this.networkName) this.network = this.networkName;
+  if (!this.networkName && this.network) this.networkName = this.network;
+  if (!this.planCode && this.planId) this.planCode = this.planId;
+  if (!this.planId && this.planCode) this.planId = this.planCode;
+  if (!this.id) this.id = this.planId || this.planCode;
+  if (!this.name && this.planLabel) this.name = this.planLabel;
+  if (!this.planLabel && this.name) this.planLabel = this.name;
+  if (!this.price && this.userPrice) this.price = this.userPrice;
+  if (!this.userPrice && this.price) this.userPrice = this.price;
+  next();
+});
+
+dataPlanSchema.index({ network: 1, isActive: 1 });
 dataPlanSchema.index({ networkName: 1, planType: 1, isActive: 1 });
+dataPlanSchema.index({ planId: 1 });
+dataPlanSchema.index({ planCode: 1 });
 
 module.exports = mongoose.model("DataPlan", dataPlanSchema);
