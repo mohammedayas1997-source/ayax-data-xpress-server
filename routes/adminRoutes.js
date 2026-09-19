@@ -206,6 +206,8 @@ router.post(
   safe(adminController.updateNinPrice, "updateNinPrice")
 );
 
+router.delete("/users/:id", safe(adminController.deleteUserByAdmin, "deleteUserByAdmin"));
+router.delete("/user/delete/:id", safe(adminController.deleteUserByAdmin, "deleteUserByAdmin"));
 // ==========================================
 // 9. BVN REQUESTS & VERIFICATIONS
 // ==========================================

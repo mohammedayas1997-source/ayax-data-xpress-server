@@ -1322,6 +1322,92 @@ const getBVNPrice = async (req, res) => {
   }
 };
 
+
+/**
+ * @desc    Permanently Delete Any User Account from MongoDB Database
+ * @route   DELETE /api/v1/admin/users/:id & DELETE /api/v1/superadmin/users/:id
+ * @access  Private (Admin / SuperAdmin)
+ */
+const deleteUserByAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required for deletion.",
+      });
+    }
+
+    let targetUser = null;
+    if (mongoose.Types.ObjectId.isValid(id) && String(id).length === 24) {
+      targetUser = await User.findById(id);
+    }
+
+    if (!targetUser) {
+      targetUser = await User.findOne({
+        $or: [
+          { _id: mongoose.isValidObjectId(id) ? id : null },
+          { phone: id },
+          { email: String(id).toLowerCase().trim() },
+        ],
+      });
+    }
+
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: "Target user account not found in database.",
+      });
+    }
+
+    // Kada a bar wani ya goge ainihin SuperAdmin
+    const targetEmail = String(targetUser.email || "").toLowerCase().trim();
+    const targetPhone = String(targetUser.phone || "").trim();
+    if (
+      targetEmail === "mohammed.ayas@ayaxdata.online" ||
+      targetPhone === "09033738409"
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Access Denied: Cannot delete the Primary SuperAdmin account.",
+      });
+    }
+
+    const deletedName = targetUser.name || `${targetUser.firstName || ""} ${targetUser.surname || ""}`.trim() || "User";
+    const deletedRole = String(targetUser.role || "user").toUpperCase();
+    const deletedIdentifier = targetUser.phone || targetUser.email || id;
+
+    // Goge user ɗin kpatakpata daga MongoDB
+    await User.findByIdAndDelete(targetUser._id);
+
+    // Yi rubutu a Activity Log
+    try {
+      if (Activity) {
+        await Activity.create({
+          user: req.user?._id || req.user?.id,
+          staffId: req.user?._id || req.user?.id,
+          action: "USER_DELETED_PERMANENTLY",
+          category: "ADMIN_CONTROL",
+          details: `Permanently deleted ${deletedRole} account for ${deletedName} (${deletedIdentifier})`,
+        });
+      }
+    } catch (_) {}
+
+    return res.status(200).json({
+      success: true,
+      status: "success",
+      message: `Account for ${deletedName} (${deletedRole}) has been permanently deleted from the database.`,
+      deletedId: targetUser._id,
+    });
+  } catch (error) {
+    console.error("deleteUserByAdmin Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server failed to delete user account: " + error.message,
+    });
+  }
+};
 // =========================================================================
 // UNIFIED ROBUST MODULE EXPORTS
 // =========================================================================
