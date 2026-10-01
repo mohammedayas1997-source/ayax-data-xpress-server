@@ -226,7 +226,8 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   if (assignedGateway === "AYAX") {
     const ayaxApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
     // Ainihin URL daga documentation dinka
-    const ayaxEndpoint = process.env.AYAX_API_URL || "https://api.ayaxapis.com/api/v1/api/v1/data/buy";
+   // Ainihin Daidaitaccen URL ba tare da ninka /api/v1 ba
+    const ayaxEndpoint = process.env.AYAX_API_URL || "https://api.ayaxapis.com/api/v1/data/buy";
 
     if (!ayaxApiKey) {
       return { success: false, errors: ["AYAX: API Key is missing in environment variables (.env)"] };
