@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const dataPlanSchema = new mongoose.Schema(
   {
-    // Yana karbar network ko networkName
+    // Network Details
     network: {
       type: String,
       uppercase: true,
@@ -21,7 +21,23 @@ const dataPlanSchema = new mongoose.Schema(
       default: "1",
     },
 
-    // Ainihin lambar Al-Ihsan Provider ID (misali 157, 158, 200, 255, 140, 27)
+    // Gateway / API Provider Routing (AYAX ko ALIHSAN)
+    gateway: {
+      type: String,
+      uppercase: true,
+      trim: true,
+      default: "AYAX",
+      index: true,
+    },
+    provider: {
+      type: String,
+      uppercase: true,
+      trim: true,
+      default: "AYAX",
+      index: true,
+    },
+
+    // Plan IDs
     id: {
       type: String,
       trim: true,
@@ -42,7 +58,7 @@ const dataPlanSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // Sunan Plan (misali 1.0 GB / 2.0 GB / 3GB)
+    // Bayanin Plan (misali 1.0 GB / 2.0 GB)
     name: {
       type: String,
       trim: true,
@@ -56,7 +72,7 @@ const dataPlanSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // Adadin GB don lissafi
+    // Girman Data
     sizeGB: {
       type: Number,
       default: 1,
@@ -67,22 +83,22 @@ const dataPlanSchema = new mongoose.Schema(
     planType: {
       type: String,
       trim: true,
-      default: "DC",
+      default: "SME",
     },
     type: {
       type: String,
       trim: true,
-      default: "DC",
+      default: "SME",
     },
 
-    // Tsawon lokaci (misali 30 Days, 7 Days)
+    // Tsawon Lokaci
     validity: {
       type: String,
       default: "30 Days",
       trim: true,
     },
 
-    // Farashin Siyarwa
+    // Farashi
     userPrice: {
       type: Number,
       default: 0,
@@ -109,7 +125,7 @@ const dataPlanSchema = new mongoose.Schema(
       min: 0,
     },
 
-    // Yanayin Plan
+    // Yanayi
     status: {
       type: String,
       default: "active",
@@ -123,21 +139,47 @@ const dataPlanSchema = new mongoose.Schema(
   },
   { 
     timestamps: true,
-    strict: false // Yana ba da damar ajiye dukkan filayen da ba a rubuta ba ba tare da kuskure ba
+    strict: false 
   }
 );
 
-// Auto-fill Hook: Tabbatar da an daidaita filaye kafin adanawa
+// Auto-fill & Smart Routing Hook kafin adanawa a Database
 dataPlanSchema.pre("save", function (next) {
-  if (!this.network && this.networkName) this.network = this.networkName;
-  if (!this.networkName && this.network) this.networkName = this.network;
+  // Daidaita Plan ID
   if (!this.planCode && this.planId) this.planCode = this.planId;
   if (!this.planId && this.planCode) this.planId = this.planCode;
   if (!this.id) this.id = this.planId || this.planCode;
+
+  // Smart Network Auto-Detection bisa lambar Plan ID
+  const numId = parseInt(this.planId || this.id, 10);
+  if (!isNaN(numId)) {
+    if (numId >= 100 && numId <= 200) {
+      if (!this.network) this.network = "MTN";
+      if (!this.networkId) this.networkId = "1";
+    } else if (numId >= 201 && numId <= 300) {
+      if (!this.network) this.network = "AIRTEL";
+      if (!this.networkId) this.networkId = "2";
+    } else if (numId >= 301 && numId <= 400) {
+      if (!this.network) this.network = "GLO";
+      if (!this.networkId) this.networkId = "4";
+    } else if (numId >= 401 && numId <= 500) {
+      if (!this.network) this.network = "9MOBILE";
+      if (!this.networkId) this.networkId = "3";
+    }
+  }
+
+  // Daidaita Network da Sunaye
+  if (!this.network && this.networkName) this.network = this.networkName;
+  if (!this.networkName && this.network) this.networkName = this.network;
   if (!this.name && this.planLabel) this.name = this.planLabel;
   if (!this.planLabel && this.name) this.planLabel = this.name;
   if (!this.price && this.userPrice) this.price = this.userPrice;
   if (!this.userPrice && this.price) this.userPrice = this.price;
+
+  // Daidaita Gateway
+  if (!this.gateway && this.provider) this.gateway = this.provider;
+  if (!this.provider && this.gateway) this.provider = this.gateway;
+
   next();
 });
 
@@ -145,5 +187,6 @@ dataPlanSchema.index({ network: 1, isActive: 1 });
 dataPlanSchema.index({ networkName: 1, planType: 1, isActive: 1 });
 dataPlanSchema.index({ planId: 1 });
 dataPlanSchema.index({ planCode: 1 });
+dataPlanSchema.index({ gateway: 1 });
 
 module.exports = mongoose.model("DataPlan", dataPlanSchema);
