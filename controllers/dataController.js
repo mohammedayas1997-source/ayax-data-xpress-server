@@ -220,20 +220,18 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
 
   console.log(`🧭 [GATEWAY ROUTED]: Plan ID ${targetPlanId} (${normNet}) assigned to: ${assignedGateway}`);
 
-  // ==========================================
-  // HANYA 1: AYAX API (Daidai da Documentation)
+ // ==========================================
+  // HANYA 1: AYAX API (GYARARREN TSARI)
   // ==========================================
   if (assignedGateway === "AYAX") {
     const ayaxApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
-    // Ainihin URL daga documentation dinka
-   // Ainihin Daidaitaccen URL ba tare da ninka /api/v1 ba
-    const ayaxEndpoint = process.env.AYAX_API_URL || "https://api.ayaxapis.com/api/v1/data/buy";
+    // Default endpoint: Gwada standard /api/v1/data/buy
+    const ayaxEndpoint = (process.env.AYAX_API_URL || "https://api.ayaxapis.com/api/v1/data/buy").trim();
 
     if (!ayaxApiKey) {
       return { success: false, errors: ["AYAX: API Key is missing in environment variables (.env)"] };
     }
 
-    // Mapping na Network zuwa Lambobi kamar yadda documentation ya bukata ("1" don MTN)
     const ayaxNetMap = {
       MTN: "1",
       AIRTEL: "2",
@@ -243,15 +241,20 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
 
     try {
       const selectedNetId = ayaxNetMap[normNet] || "1";
-      
+
       const payload = {
         network_id: String(selectedNetId),
         plan_id: String(targetPlanId),
         phone: String(formattedPhone),
         reference: String(reference),
+        // Fallbacks domin kare sabar AYAX daga kuskuren mapping
+        network: String(selectedNetId),
+        plan: String(targetPlanId),
+        phoneNumber: String(formattedPhone),
+        mobile_number: String(formattedPhone)
       };
 
-      console.log(`📤 [AYAX API DISPATCH]:`, payload);
+      console.log(`📤 [AYAX API DISPATCH]: URL: ${ayaxEndpoint}`, payload);
 
       const res = await axios.post(
         ayaxEndpoint,
@@ -259,8 +262,9 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
         {
           headers: {
             "x-api-key": ayaxApiKey,
-            "content-type": "application/json",
-            "accept": "application/json",
+            "Authorization": `Bearer ${ayaxApiKey}`,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
           },
           timeout: 40000,
         }
@@ -278,10 +282,11 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
         return { success: true, provider: "AYAX_MARKETPLACE", data: resData };
       }
 
-      return { success: false, errors: [`AYAX: ${resData?.message || "Delivery rejected"}`] };
+      return { success: false, errors: [`AYAX: ${resData?.message || JSON.stringify(resData)}`] };
     } catch (err) {
       const errRes = err.response?.data;
-      const errMsg = errRes?.message || errRes?.desc || err.message;
+      const errMsg = errRes?.message || errRes?.desc || (typeof errRes === "string" ? errRes : err.message);
+      console.error("❌ [AYAX API ERROR]:", errRes || err.message);
       return { success: false, errors: [`AYAX: ${errMsg}`] };
     }
   }
