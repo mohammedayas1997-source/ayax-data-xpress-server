@@ -237,12 +237,13 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
 
   const ayaxEndpoint = `${ayaxBaseUrl}/api/v1/data/buy`;
 
+ // Maimakon tura finalNetId (1, 2, 3) a matsayin network:
+  // Canza wannan payload din:
   const payload = {
+    network: String(network || autoNetName).toUpperCase(), // MTN, AIRTEL, etc.
     network_id: String(finalNetId),
-    network: String(finalNetId),
-    plan_id: String(targetPlanId),
-    plan: String(targetPlanId),
     planCode: String(targetPlanId),
+    plan_id: String(targetPlanId),
     phone: String(formattedPhone),
     phoneNumber: String(formattedPhone),
     reference: String(reference),
