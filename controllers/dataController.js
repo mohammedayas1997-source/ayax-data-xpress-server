@@ -227,7 +227,7 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   const ayaxApiKey = String(
     process.env.AYAX_API_KEY ||
     process.env.MARKETPLACE_API_KEY ||
-    "ayax_live_015fd7b99f466623b4affa209f074735d9c5598d41f9a118484f0b9c5d3f8ce5"
+    "ayax_live_5ce0853aad6efd1dba69b383d9d3679232a2d1e50c92a108eef8d288f578280f"
   ).trim();
 
   const ayaxBaseUrl = (
