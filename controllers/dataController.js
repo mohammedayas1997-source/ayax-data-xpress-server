@@ -4,7 +4,7 @@ const Transaction = require("../models/Transaction");
 const bcrypt = require("bcryptjs");
 const mongoose = require("mongoose");
 
-// Dynamic DataPlan Model Loader
+// Dynamic DataPlan Model Loader tare da Fallback
 let DataPlan;
 try {
   DataPlan = require("../models/DataPlan");
@@ -15,6 +15,69 @@ try {
     DataPlan = null;
   }
 }
+
+// DataPlanModel Wrapper don hana kuskuren "DataPlanModel.create is not a function"
+const DataPlanModel = {
+  create: async (doc) => {
+    const db = mongoose.connection?.db;
+    const finalCode = String(
+      doc.gatewayPlanId ||
+        doc.planCode ||
+        doc.planId ||
+        doc.code ||
+        doc.serviceCode ||
+        doc.id ||
+        ""
+    ).trim();
+
+    const planData = {
+      ...doc,
+      id: finalCode,
+      planId: finalCode,
+      planCode: finalCode,
+      code: finalCode,
+      serviceCode: finalCode,
+      gatewayPlanId: finalCode,
+      network: String(doc.network || "MTN").toUpperCase(),
+      networkName: String(doc.network || "MTN").toUpperCase(),
+      userPrice: Number(doc.customerSellingPrice || doc.userPrice || doc.price || 0),
+      price: Number(doc.customerSellingPrice || doc.userPrice || doc.price || 0),
+      agentPrice: Number(doc.retailAgentWholesalePrice || doc.retailAgentPrice || doc.agentPrice || 0),
+      validity: doc.validityDuration || doc.validity || "30 Days",
+      status: "active",
+      isActive: true,
+      updatedAt: new Date(),
+    };
+
+    if (db) {
+      await db.collection("plans").updateOne(
+        { $or: [{ id: finalCode }, { planId: finalCode }, { planCode: finalCode }] },
+        { $set: planData, $setOnInsert: { createdAt: new Date() } },
+        { upsert: true }
+      );
+      await db.collection("dataplans").updateOne(
+        { $or: [{ id: finalCode }, { planId: finalCode }, { planCode: finalCode }] },
+        { $set: planData, $setOnInsert: { createdAt: new Date() } },
+        { upsert: true }
+      );
+    }
+
+    if (DataPlan) {
+      try {
+        if (typeof DataPlan.findOneAndUpdate === "function") {
+          return await DataPlan.findOneAndUpdate(
+            { $or: [{ planCode: finalCode }, { planId: finalCode }] },
+            { $set: planData },
+            { upsert: true, new: true }
+          );
+        } else if (typeof DataPlan.create === "function") {
+          return await DataPlan.create(planData);
+        }
+      } catch (_) {}
+    }
+    return planData;
+  },
+};
 
 let Activity;
 try {
@@ -155,99 +218,104 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
 };
 
 /**
- * Helper: Pure AYAX API Dispatcher (An cire Al-Ihsan, an saita Render endpoint)
+ * Helper: Pure AYAX API Dispatcher (Universal Gateway Support)
  */
 const dispatchToExternalGateways = async ({ network, phone, planCode, amount, reference }) => {
   const formattedPhone = cleanLocalPhone(phone);
   let targetPlanId = String(planCode).trim();
+  let resolvedNetwork = String(network || "MTN").toUpperCase();
   const errors = [];
 
-  // 1. ZAKULO DAGA DATABASE KAN AINIHIN PLAN ID
+  // 1. ZAKULO DAGA DATABASE KAN AINIHIN PLAN ID DA VARIATION CODE
   try {
-    const db = mongoose.connection.db;
+    const db = mongoose.connection?.db;
     if (db) {
-      const planDoc = await db.collection("plans").findOne({
-        $or: [
-          { planId: targetPlanId },
-          { id: targetPlanId },
-          { planCode: targetPlanId },
-          { code: targetPlanId },
-          { _id: mongoose.Types.ObjectId.isValid(targetPlanId) ? new mongoose.Types.ObjectId(targetPlanId) : null }
-        ]
-      }) || await db.collection("dataplans").findOne({
-        $or: [
-          { planId: targetPlanId },
-          { id: targetPlanId },
-          { planCode: targetPlanId },
-          { code: targetPlanId },
-          { _id: mongoose.Types.ObjectId.isValid(targetPlanId) ? new mongoose.Types.ObjectId(targetPlanId) : null }
-        ]
-      });
+      const planDoc =
+        (await db.collection("plans").findOne({
+          $or: [
+            { planId: targetPlanId },
+            { id: targetPlanId },
+            { planCode: targetPlanId },
+            { code: targetPlanId },
+            { serviceCode: targetPlanId },
+            { _id: mongoose.Types.ObjectId.isValid(targetPlanId) ? new mongoose.Types.ObjectId(targetPlanId) : null },
+          ],
+        })) ||
+        (await db.collection("dataplans").findOne({
+          $or: [
+            { planId: targetPlanId },
+            { id: targetPlanId },
+            { planCode: targetPlanId },
+            { code: targetPlanId },
+            { serviceCode: targetPlanId },
+            { _id: mongoose.Types.ObjectId.isValid(targetPlanId) ? new mongoose.Types.ObjectId(targetPlanId) : null },
+          ],
+        }));
 
       if (planDoc) {
-        targetPlanId = String(planDoc.planId || planDoc.providerPlanId || planDoc.id || targetPlanId).trim();
+        targetPlanId = String(
+          planDoc.serviceCode ||
+          planDoc.variation_code ||
+          planDoc.variationCode ||
+          planDoc.planCode ||
+          planDoc.code ||
+          planDoc.planId ||
+          planDoc.providerPlanId ||
+          targetPlanId
+        ).trim();
+
+        if (planDoc.network || planDoc.networkName) {
+          resolvedNetwork = String(planDoc.network || planDoc.networkName).toUpperCase();
+        }
       }
     }
   } catch (dbErr) {
     console.error("Database Plan Lookup Error:", dbErr.message);
   }
 
-  // 2. AUTO-NETWORK DETERMINATION BISA LAMBAR PLAN ID
-  // MTN: 100-200, AIRTEL: 201-300, GLO: 301-400, 9MOBILE: 401-500
-  const numericPlan = parseInt(targetPlanId, 10);
-  let autoNetId = "1";
-  let autoNetName = "MTN";
-
-  if (!isNaN(numericPlan)) {
-    if (numericPlan >= 100 && numericPlan <= 200) {
-      autoNetId = "1";
-      autoNetName = "MTN";
-    } else if (numericPlan >= 201 && numericPlan <= 300) {
-      autoNetId = "2";
-      autoNetName = "AIRTEL";
-    } else if (numericPlan >= 301 && numericPlan <= 400) {
-      autoNetId = "4";
-      autoNetName = "GLO";
-    } else if (numericPlan >= 401 && numericPlan <= 500) {
-      autoNetId = "3";
-      autoNetName = "9MOBILE";
-    }
+  // 2. Tabbatar da cewa Variation Code ba ya da haruffa marasa kyau
+  // Canza MTN_TR_1GB_7DAYS zuwa mtn-tr-1gb-7days
+  if (targetPlanId.includes("_")) {
+    targetPlanId = targetPlanId.toLowerCase().replace(/_/g, "-");
   }
 
-  const netMap = {
-    MTN: "1",
-    AIRTEL: "2",
-    "9MOBILE": "3",
-    GLO: "4"
-  };
-
-  const finalNetId = netMap[String(network || "").toUpperCase()] || autoNetId;
+  // Idan har yanzu lambar ID ce ta kudi (kamar ₦400 ko ₦500), canza ta zuwa ainihin code
+  if (resolvedNetwork === "MTN") {
+    if (targetPlanId === "400" || Number(amount) === 400) {
+      targetPlanId = "mtn-tr-1gb-7days";
+    } else if (targetPlanId === "500" || Number(amount) === 500) {
+      targetPlanId = "mtn-tr-1gb";
+    }
+  }
 
   // 3. AYAX API CREDENTIALS & RENDER ENDPOINT
   const ayaxApiKey = String(
     process.env.AYAX_API_KEY ||
-    process.env.MARKETPLACE_API_KEY ||
-    "ayax_live_5ce0853aad6efd1dba69b383d9d3679232a2d1e50c92a108eef8d288f578280f"
+      process.env.MARKETPLACE_API_KEY ||
+      "ayax_live_5ce0853aad6efd1dba69b383d9d3679232a2d1e50c92a108eef8d288f578280f"
   ).trim();
 
   const ayaxBaseUrl = (
-    process.env.AYAX_API_BASE_URL ||
-    "https://ayax-api-marketplace.onrender.com"
+    process.env.AYAX_API_BASE_URL || "https://ayax-api-marketplace.onrender.com"
   ).replace(/\/+$/, "");
 
   const ayaxEndpoint = `${ayaxBaseUrl}/api/v1/data/buy`;
 
- // Maimakon tura finalNetId (1, 2, 3) a matsayin network:
-  // Canza wannan payload din:
+  // Cikakken Universal Payload wanda yake gamsar da dukkan tsare-tsare
   const payload = {
-    network: String(network || autoNetName).toUpperCase(), // MTN, AIRTEL, etc.
-    network_id: String(finalNetId),
+    network: resolvedNetwork,
+    network_id: resolvedNetwork === "AIRTEL" ? "2" : resolvedNetwork === "GLO" ? "4" : resolvedNetwork === "9MOBILE" ? "3" : "1",
+    service_id: resolvedNetwork.toLowerCase(),
     planCode: String(targetPlanId),
     plan_id: String(targetPlanId),
+    variation_code: String(targetPlanId),
+    serviceCode: String(targetPlanId),
+    code: String(targetPlanId),
     phone: String(formattedPhone),
     phoneNumber: String(formattedPhone),
+    mobile_number: String(formattedPhone),
     reference: String(reference),
-    amount: amount
+    amount: Number(amount),
   };
 
   console.log("------------------------------------------");
@@ -256,19 +324,15 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   console.log("------------------------------------------");
 
   try {
-    const res = await axios.post(
-      ayaxEndpoint,
-      payload,
-      {
-        headers: {
-          "x-api-key": ayaxApiKey,
-          Authorization: `Bearer ${ayaxApiKey}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        timeout: 45000,
-      }
-    );
+    const res = await axios.post(ayaxEndpoint, payload, {
+      headers: {
+        "x-api-key": ayaxApiKey,
+        Authorization: `Bearer ${ayaxApiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      timeout: 45000,
+    });
 
     console.log("📥 [AYAX RESPONSE]:", res.data);
 
@@ -288,7 +352,11 @@ const dispatchToExternalGateways = async ({ network, phone, planCode, amount, re
   } catch (err) {
     const errRes = err.response?.data;
     console.error("❌ [AYAX RAW ERROR RESPONSE]:", errRes || err.message);
-    const errMsg = errRes?.message || errRes?.desc || (typeof errRes === "string" ? errRes : err.message);
+    const errMsg =
+      errRes?.message ||
+      errRes?.desc ||
+      errRes?.errors?.variation_code?.[0] ||
+      (typeof errRes === "string" ? errRes : err.message);
     errors.push(`AYAX: ${errMsg}`);
   }
 
@@ -455,9 +523,10 @@ exports.buyData = async (req, res) => {
     }
 
     // 2. IDAN YA GAZA: AUTO-REFUND NAN TAKE
-    const combinedErrors = dispatchResult.errors.length > 0
-      ? dispatchResult.errors.join(" | ")
-      : "AYAX API rejected this transaction";
+    const combinedErrors =
+      dispatchResult.errors.length > 0
+        ? dispatchResult.errors.join(" | ")
+        : "AYAX API rejected this transaction";
 
     console.error(`🚨 [AYAX DISPATCH FAILED]: Refunding User ${userId}. Errors: ${combinedErrors}`);
 
@@ -478,7 +547,6 @@ exports.buyData = async (req, res) => {
       message: `Delivery Error (${combinedErrors}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
       newBalance: refundBalance,
     });
-
   } catch (error) {
     console.error("Buy Data Controller Error:", error);
     return res.status(500).json({
@@ -546,7 +614,7 @@ exports.getDataPlans = async (req, res) => {
     }
 
     let plans = [];
-    const db = mongoose.connection.db;
+    const db = mongoose.connection?.db;
 
     if (db) {
       try {
@@ -557,18 +625,8 @@ exports.getDataPlans = async (req, res) => {
       } catch (_) {}
     }
 
-    if ((!plans || plans.length === 0) && DataPlan) {
+    if ((!plans || plans.length === 0) && DataPlan && typeof DataPlan.find === "function") {
       plans = await DataPlan.find(query).sort({ network: 1, userPrice: 1 }).lean();
-    }
-
-    if (!plans || plans.length === 0) {
-      plans = [
-        { id: "100", planId: "100", network: "MTN", planType: "SME", plan: "1.0 GB", validity: "30 Days", costPrice: 350, userPrice: 400, agentPrice: 380, status: "active" },
-        { id: "101", planId: "101", network: "MTN", planType: "SME", plan: "2.0 GB", validity: "30 Days", costPrice: 700, userPrice: 800, agentPrice: 760, status: "active" },
-        { id: "201", planId: "201", network: "AIRTEL", planType: "SME", plan: "1.0 GB", validity: "30 Days", costPrice: 350, userPrice: 400, agentPrice: 380, status: "active" },
-        { id: "301", planId: "301", network: "GLO", planType: "Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 350, userPrice: 400, agentPrice: 380, status: "active" },
-        { id: "401", planId: "401", network: "9MOBILE", planType: "Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 350, userPrice: 400, agentPrice: 380, status: "active" }
-      ];
     }
 
     return res.status(200).json({
@@ -597,51 +655,32 @@ exports.deleteDataPlan = async (req, res) => {
       return res.status(400).json({ success: false, message: "Plan ID is required to delete." });
     }
 
-    let Model = DataPlan;
-    if (!Model) {
-      try {
-        Model = mongoose.model("DataPlan");
-      } catch (e) {
-        try {
-          Model = mongoose.model("Plan");
-        } catch (err) {
-          Model = null;
-        }
-      }
-    }
-
-    if (!Model) {
-      return res.status(500).json({ success: false, message: "DataPlan model is not registered." });
-    }
-
-    let deletedPlan = null;
-    if (mongoose.Types.ObjectId.isValid(id)) {
-      deletedPlan = await Model.findByIdAndDelete(id);
-    }
-
-    if (!deletedPlan) {
-      deletedPlan = await Model.findOneAndDelete({
-        $or: [
-          { _id: id },
-          { id: id },
-          { planId: id },
-          { planCode: id },
-          { code: id }
-        ]
+    const db = mongoose.connection?.db;
+    if (db) {
+      await db.collection("plans").deleteMany({
+        $or: [{ id }, { planId: id }, { planCode: id }, { code: id }],
+      });
+      await db.collection("dataplans").deleteMany({
+        $or: [{ id }, { planId: id }, { planCode: id }, { code: id }],
       });
     }
 
     return res.status(200).json({
       success: true,
       message: "Data plan deleted successfully.",
-      deletedId: id
+      deletedId: id,
     });
   } catch (err) {
     console.error("deleteDataPlan Error:", err.message);
     return res.status(500).json({
       success: false,
       message: "Server failed to delete plan.",
-      error: err.message
+      error: err.message,
     });
   }
+};
+
+module.exports = {
+  ...exports,
+  DataPlanModel,
 };
