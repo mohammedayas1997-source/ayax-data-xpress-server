@@ -4,7 +4,7 @@ const Transaction = require("../models/Transaction");
 const bcrypt = require("bcryptjs");
 const mongoose = require("mongoose");
 
-// Dynamic DataPlan Model Loader tare da Fallback
+// Dynamic DataPlan Model Loader
 let DataPlan;
 try {
   DataPlan = require("../models/DataPlan");
@@ -15,69 +15,6 @@ try {
     DataPlan = null;
   }
 }
-
-// DataPlanModel Wrapper don hana kuskuren "DataPlanModel.create is not a function"
-const DataPlanModel = {
-  create: async (doc) => {
-    const db = mongoose.connection?.db;
-    const finalCode = String(
-      doc.gatewayPlanId ||
-        doc.planCode ||
-        doc.planId ||
-        doc.code ||
-        doc.serviceCode ||
-        doc.id ||
-        ""
-    ).trim();
-
-    const planData = {
-      ...doc,
-      id: finalCode,
-      planId: finalCode,
-      planCode: finalCode,
-      code: finalCode,
-      serviceCode: finalCode,
-      gatewayPlanId: finalCode,
-      network: String(doc.network || "MTN").toUpperCase(),
-      networkName: String(doc.network || "MTN").toUpperCase(),
-      userPrice: Number(doc.customerSellingPrice || doc.userPrice || doc.price || 0),
-      price: Number(doc.customerSellingPrice || doc.userPrice || doc.price || 0),
-      agentPrice: Number(doc.retailAgentWholesalePrice || doc.retailAgentPrice || doc.agentPrice || 0),
-      validity: doc.validityDuration || doc.validity || "30 Days",
-      status: "active",
-      isActive: true,
-      updatedAt: new Date(),
-    };
-
-    if (db) {
-      await db.collection("plans").updateOne(
-        { $or: [{ id: finalCode }, { planId: finalCode }, { planCode: finalCode }] },
-        { $set: planData, $setOnInsert: { createdAt: new Date() } },
-        { upsert: true }
-      );
-      await db.collection("dataplans").updateOne(
-        { $or: [{ id: finalCode }, { planId: finalCode }, { planCode: finalCode }] },
-        { $set: planData, $setOnInsert: { createdAt: new Date() } },
-        { upsert: true }
-      );
-    }
-
-    if (DataPlan) {
-      try {
-        if (typeof DataPlan.findOneAndUpdate === "function") {
-          return await DataPlan.findOneAndUpdate(
-            { $or: [{ planCode: finalCode }, { planId: finalCode }] },
-            { $set: planData },
-            { upsert: true, new: true }
-          );
-        } else if (typeof DataPlan.create === "function") {
-          return await DataPlan.create(planData);
-        }
-      } catch (_) {}
-    }
-    return planData;
-  },
-};
 
 let Activity;
 try {
@@ -103,6 +40,13 @@ const cleanLocalPhone = (phone = "") => {
     return `0${digits}`;
   }
   return digits;
+};
+
+// Helper: Tabbatar da tsarin Token na Al-Ihsan
+const formatAlihsanAuth = (rawToken) => {
+  if (!rawToken) return "";
+  const token = String(rawToken).trim();
+  return token.startsWith("Token ") ? token : `Token ${token}`;
 };
 
 // Helper don tura Notification a Database da App
@@ -218,153 +162,340 @@ const executeAutoRefund = async (userId, amountNum, reference, finalNetwork, cle
 };
 
 /**
- * Helper: Pure AYAX API Dispatcher (Universal Gateway Support)
+ * Helper: Universal Multi-Gateway Data Dispatcher
  */
 const dispatchToExternalGateways = async ({ network, phone, planCode, amount, reference }) => {
+  const normNet = String(network).toUpperCase().trim();
   const formattedPhone = cleanLocalPhone(phone);
-  let targetPlanId = String(planCode).trim();
-  let resolvedNetwork = String(network || "MTN").toUpperCase();
+  const netMapNumeric = { MTN: 1, GLO: 2, "9MOBILE": 3, AIRTEL: 4 };
+
   const errors = [];
 
-  // 1. ZAKULO DAGA DATABASE KAN AINIHIN PLAN ID DA VARIATION CODE
-  try {
-    const db = mongoose.connection?.db;
-    if (db) {
-      const planDoc =
-        (await db.collection("plans").findOne({
-          $or: [
-            { planId: targetPlanId },
-            { id: targetPlanId },
-            { planCode: targetPlanId },
-            { code: targetPlanId },
-            { serviceCode: targetPlanId },
-            { _id: mongoose.Types.ObjectId.isValid(targetPlanId) ? new mongoose.Types.ObjectId(targetPlanId) : null },
-          ],
-        })) ||
-        (await db.collection("dataplans").findOne({
-          $or: [
-            { planId: targetPlanId },
-            { id: targetPlanId },
-            { planCode: targetPlanId },
-            { code: targetPlanId },
-            { serviceCode: targetPlanId },
-            { _id: mongoose.Types.ObjectId.isValid(targetPlanId) ? new mongoose.Types.ObjectId(targetPlanId) : null },
-          ],
-        }));
-
-      if (planDoc) {
-        targetPlanId = String(
-          planDoc.serviceCode ||
-          planDoc.variation_code ||
-          planDoc.variationCode ||
-          planDoc.planCode ||
-          planDoc.code ||
-          planDoc.planId ||
-          planDoc.providerPlanId ||
-          targetPlanId
-        ).trim();
-
-        if (planDoc.network || planDoc.networkName) {
-          resolvedNetwork = String(planDoc.network || planDoc.networkName).toUpperCase();
-        }
-      }
-    }
-  } catch (dbErr) {
-    console.error("Database Plan Lookup Error:", dbErr.message);
-  }
-
-  // 2. Tabbatar da cewa Variation Code ba ya da haruffa marasa kyau
-  // Canza MTN_TR_1GB_7DAYS zuwa mtn-tr-1gb-7days
-  if (targetPlanId.includes("_")) {
-    targetPlanId = targetPlanId.toLowerCase().replace(/_/g, "-");
-  }
-
-  // Idan har yanzu lambar ID ce ta kudi (kamar ₦400 ko ₦500), canza ta zuwa ainihin code
-  if (resolvedNetwork === "MTN") {
-    if (targetPlanId === "400" || Number(amount) === 400) {
-      targetPlanId = "mtn-tr-1gb-7days";
-    } else if (targetPlanId === "500" || Number(amount) === 500) {
-      targetPlanId = "mtn-tr-1gb";
-    }
-  }
-
-  // 3. AYAX API CREDENTIALS & RENDER ENDPOINT
-  const ayaxApiKey = String(
-    process.env.AYAX_API_KEY ||
-      process.env.MARKETPLACE_API_KEY ||
-      "ayax_live_5ce0853aad6efd1dba69b383d9d3679232a2d1e50c92a108eef8d288f578280f"
-  ).trim();
-
-  const ayaxBaseUrl = (
-    process.env.AYAX_API_BASE_URL || "https://ayax-api-marketplace.onrender.com"
-  ).replace(/\/+$/, "");
-
-  const ayaxEndpoint = `${ayaxBaseUrl}/api/v1/data/buy`;
-
-  // Cikakken Universal Payload wanda yake gamsar da dukkan tsare-tsare
-  const payload = {
-    network: resolvedNetwork,
-    network_id: resolvedNetwork === "AIRTEL" ? "2" : resolvedNetwork === "GLO" ? "4" : resolvedNetwork === "9MOBILE" ? "3" : "1",
-    service_id: resolvedNetwork.toLowerCase(),
-    planCode: String(targetPlanId),
-    plan_id: String(targetPlanId),
-    variation_code: String(targetPlanId),
-    serviceCode: String(targetPlanId),
-    code: String(targetPlanId),
-    phone: String(formattedPhone),
-    phoneNumber: String(formattedPhone),
-    mobile_number: String(formattedPhone),
-    reference: String(reference),
-    amount: Number(amount),
+ // ==========================================
+  // GATEWAY 1: AL-IHSAN DATASUB NETWORK MAPPING
+  // ==========================================
+  const gatewayNetMap = {
+    MTN: "1",       // MTN
+    AIRTEL: "2",    // Airtel
+    "9MOBILE": "3", // 9mobile
+    GLO: "4",       // Glo[cite: 8]
   };
 
-  console.log("------------------------------------------");
-  console.log(`📤 [AYAX DIRECT DISPATCH]: URL: ${ayaxEndpoint}`);
-  console.log("📤 [AYAX PAYLOAD]:", JSON.stringify(payload));
-  console.log("------------------------------------------");
+  const rawAlihsanToken =
+    process.env.ALIHSAN_AUTH_TOKEN ||
+    process.env.ALIHSAN_TOKEN ||
+    process.env.ALIHSAN_API_KEY ||
+    process.env.VTU_API_KEY ||
+    "BvpQJPXh5zmSnmUtL096qWV6BXYbhltOud2H2YPGjJnxINhm6x";
 
-  try {
-    const res = await axios.post(ayaxEndpoint, payload, {
-      headers: {
-        "x-api-key": ayaxApiKey,
-        Authorization: `Bearer ${ayaxApiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      timeout: 45000,
-    });
+  const cleanToken = String(rawAlihsanToken)
+    .replace(/^Token\s+/i, "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
 
-    console.log("📥 [AYAX RESPONSE]:", res.data);
+/**
+   * Universal Dynamic Plan Resolver
+   * Yana duba Database kai-tsaye don ciro Provider Plan ID ba tare da an taba code a gaba ba.
+   */
+  const resolveAlihsanPlanId = async (rawCode, net) => {
+    if (!rawCode) return "27";
+    const clean = String(rawCode).trim();
 
-    const resData = res.data;
-    const providerStatus = String(resData?.status || "").toUpperCase();
-
-    if (
-      resData?.success === true ||
-      providerStatus === "SUCCESSFUL" ||
-      providerStatus === "SUCCESS" ||
-      res.status === 200
-    ) {
-      return { success: true, provider: "AYAX_API", data: resData };
+    // 1. Idan dama lambobi ne aka turo (misali 157, 158, 200, 255, 262, 140, etc.), tura su kai-tsaye!
+    if (/^\d{1,6}$/.test(clean)) {
+      return clean;
     }
 
-    errors.push(`AYAX: ${resData?.message || JSON.stringify(resData)}`);
-  } catch (err) {
-    const errRes = err.response?.data;
-    console.error("❌ [AYAX RAW ERROR RESPONSE]:", errRes || err.message);
-    const errMsg =
-      errRes?.message ||
-      errRes?.desc ||
-      errRes?.errors?.variation_code?.[0] ||
-      (typeof errRes === "string" ? errRes : err.message);
-    errors.push(`AYAX: ${errMsg}`);
+    // 2. Duba cikin MongoDB (plans ko dataplans collection) don gano Provider Plan ID
+    try {
+      const db = mongoose.connection.db;
+      if (db) {
+        const found = await db.collection("plans").findOne({
+          $or: [
+            { id: clean },
+            { planId: clean },
+            { planCode: clean },
+            { name: new RegExp(`^${clean}$`, "i") }
+          ]
+        }) || await db.collection("dataplans").findOne({
+          $or: [
+            { id: clean },
+            { planId: clean },
+            { planCode: clean },
+            { name: new RegExp(`^${clean}$`, "i") }
+          ]
+        });
+
+        if (found) {
+          const providerId = found.planId || found.providerPlanId || found.id || found.code;
+          if (providerId && /^\d+$/.test(String(providerId).trim())) {
+            return String(providerId).trim();
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 3. Tsarin MTN na asali (KADA A TABA SHI)
+    if (net === "MTN") {
+      const c = clean.toLowerCase();
+      if (c.includes("dc") && (c.includes("1gb") || c.includes("1.0"))) return "140";
+      if (c.includes("dc") && c.includes("2gb")) return "134";
+      if (c.includes("500") && c.includes("sme")) return "17";
+      if (c.includes("500")) return "26";
+      if (c.includes("1gb") || c.includes("1.0")) return "27";
+      if (c.includes("2gb") || c.includes("2.0")) return "28";
+      return "27";
+    }
+
+    // 4. Dynamic Mapping daga bayanan hotunan Al-Ihsan da ka turo
+    const c = clean.toLowerCase();
+    if (net === "AIRTEL") {
+      // Awoof Bundles
+      if (c.includes("awoof")) {
+        if (c.includes("2gb") || c.includes("2.0")) return "157";
+        if (c.includes("3gb") || c.includes("3.0")) return "158";
+        if (c.includes("4gb") || c.includes("4.0")) return "159";
+        if (c.includes("10gb") || c.includes("10.0") || c.includes("10")) return "160";
+        if (c.includes("15gb") || c.includes("15.0")) return "161";
+      }
+
+      // SME Bundles
+      if (c.includes("sme")) {
+        if (c.includes("150mb") || c.includes("150")) return "180";
+        if (c.includes("300mb") || c.includes("300")) return "181";
+        if (c.includes("250mb") || c.includes("250")) return "257";
+        if (c.includes("600mb") || c.includes("600")) return "218";
+        if (c.includes("1gb") || c.includes("1.0")) return "200";
+        if (c.includes("1.5gb") || c.includes("1.5")) return "239";
+        if (c.includes("2gb") || c.includes("2.0")) return "240";
+        if (c.includes("3gb") || c.includes("3.0")) return "255";
+        if (c.includes("4gb") || c.includes("4.0")) return "256";
+        if (c.includes("5gb") || c.includes("5.0")) return "221";
+        if (c.includes("6gb") || c.includes("6.0")) return "253";
+        if (c.includes("8gb") || c.includes("8.0")) return "213";
+        if (c.includes("10gb") || c.includes("10.0")) return "184";
+      }
+
+      // CG Bundles
+      if (c.includes("cg")) {
+        if (c.includes("3.2")) return "237";
+        if (c.includes("1.2")) return "262";
+      }
+
+      // Default Airtel idan ba a tantance ba
+      if (c.includes("3gb") || c.includes("3.0")) return "255";
+      if (c.includes("2gb") || c.includes("2.0")) return "240";
+      if (c.includes("1gb") || c.includes("1.0")) return "200";
+      return "200";
+    }
+
+    return clean;
+  };
+
+  if (cleanToken) {
+    try {
+      const selectedNet = gatewayNetMap[normNet] || "1";
+      const selectedPlanId = await resolveAlihsanPlanId(planCode, normNet);
+      const reqId = String(reference || `DATA_${Date.now()}`);
+
+      const payload = {
+        network: String(selectedNet),
+        plan_id: String(selectedPlanId),
+        mobile_number: String(formattedPhone),
+        request_id: reqId,
+      };
+
+      console.log("📤 [ALIHSAN DATA REQUEST]:", payload);
+
+      const res = await axios.post(
+        "https://alihsandatasub.com.ng/api/v1/data.php",
+        payload,
+        {
+          headers: {
+            Authorization: cleanToken,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          timeout: 40000,
+        }
+      );
+
+      console.log("📥 [ALIHSAN DATA RESPONSE]:", res.data);
+
+      const resData = res.data || {};
+      const statusText = String(
+        resData.status || resData.Status || resData.success || ""
+      ).toLowerCase();
+      const messageText = String(
+        resData.message || resData.msg || resData.desc || ""
+      ).toLowerCase();
+
+      const isSuccess =
+        statusText === "success" ||
+        statusText === "successful" ||
+        statusText === "true" ||
+        resData.success === true ||
+        resData.success === "true" ||
+        resData.code === 200 ||
+        resData.code === "200" ||
+        messageText.includes("successful") ||
+        messageText.includes("success") ||
+        (resData.info && String(resData.info.status).toLowerCase() === "success");
+
+      if (isSuccess) {
+        return { success: true, provider: "ALIHSAN", data: resData };
+      }
+
+      const failMsg =
+        resData.desc ||
+        resData.message ||
+        resData.msg ||
+        JSON.stringify(resData);
+
+      errors.push(`ALIHSAN: ${failMsg}`);
+    } catch (err) {
+      const errRes = err.response?.data;
+      const errMsg = errRes?.desc || errRes?.message || errRes?.msg || err.message;
+      console.error("❌ [ALIHSAN DATA DISPATCH ERROR]:", errRes || err.message);
+      errors.push(`ALIHSAN: ${errMsg}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 2: AYAX MARKETPLACE GATEWAY
+  // ==========================================
+  const ayaxApiKey = String(process.env.AYAX_API_KEY || process.env.MARKETPLACE_API_KEY || "").trim();
+  const ayaxBaseUrl = (process.env.AYAX_API_BASE_URL || "https://www.ayaxapis.com").replace(/\/+$/, "");
+
+  if (ayaxApiKey) {
+    try {
+      const res = await axios.post(
+        `${ayaxBaseUrl}/api/v1/data/purchase`,
+        {
+          network: normNet,
+          phone: formattedPhone,
+          phoneNumber: formattedPhone,
+          planCode: planCode,
+          planId: planCode,
+          amount: amount,
+          reference: reference,
+        },
+        {
+          headers: {
+            "x-api-key": ayaxApiKey,
+            Authorization: `Bearer ${ayaxApiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 40000,
+        }
+      );
+
+      const resData = res.data;
+      const providerStatus = String(resData?.status || "").toUpperCase();
+      if (
+        resData?.success === true ||
+        providerStatus === "SUCCESSFUL" ||
+        providerStatus === "SUCCESS" ||
+        res.status === 200
+      ) {
+        return { success: true, provider: "AYAX_MARKETPLACE", data: resData };
+      }
+      errors.push(`AYAX: ${resData?.message || "Delivery rejected"}`);
+    } catch (err) {
+      errors.push(`AYAX: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 3: HUSMODATA
+  // ==========================================
+  const husmoToken = process.env.HUSMODATA_API_KEY || process.env.HUSMODATA_TOKEN;
+  if (husmoToken) {
+    try {
+      const res = await axios.post(
+        "https://husmodata.com/api/data/",
+        {
+          network: netMapNumeric[normNet] || 1,
+          plan: Number(planCode),
+          mobile_number: formattedPhone,
+          Ported_number: true,
+        },
+        {
+          headers: {
+            Authorization: `Token ${husmoToken}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 35000,
+        }
+      );
+      if (res.data?.status === "successful" || res.data?.status === "success") {
+        return { success: true, provider: "HUSMODATA", data: res.data };
+      }
+      errors.push(`HUSMODATA: ${res.data?.message || "Husmodata failed"}`);
+    } catch (err) {
+      errors.push(`HUSMODATA: ${err.response?.data?.message || err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 4: SMARTSMS SOLUTIONS
+  // ==========================================
+  if (process.env.SMARTSMS_API_TOKEN) {
+    try {
+      const netMapSmart = { MTN: "1", AIRTEL: "2", GLO: "3", "9MOBILE": "4" };
+      const res = await axios.post(
+        "https://smartsmssolutions.com/api/json.php",
+        {
+          token: process.env.SMARTSMS_API_TOKEN,
+          type: "internet_data",
+          network: netMapSmart[normNet] || "1",
+          phone: formattedPhone,
+          product_code: String(planCode),
+          ref: reference,
+        },
+        { timeout: 35000 }
+      );
+      if (res.data?.code === "1000" || res.data?.status === "success") {
+        return { success: true, provider: "SMARTSMS", data: res.data };
+      }
+      errors.push(`SMARTSMS: ${res.data?.message || "SmartSMS failed"}`);
+    } catch (err) {
+      errors.push(`SMARTSMS: ${err.message}`);
+    }
+  }
+
+  // ==========================================
+  // GATEWAY 5: BILALSADASUB
+  // ==========================================
+  if (process.env.BILALSADA_API_TOKEN) {
+    try {
+      const res = await axios.post(
+        "https://bilalsadasub.com/api/data",
+        {
+          network: netMapNumeric[normNet] || 1,
+          phone: formattedPhone,
+          plan: Number(planCode),
+          "request-id": reference,
+        },
+        {
+          headers: { Authorization: `Token ${process.env.BILALSADA_API_TOKEN}` },
+          timeout: 35000,
+        }
+      );
+      if (res.data?.status === "success" || res.data?.status === "process") {
+        return { success: true, provider: "BILALSADA", data: res.data };
+      }
+      errors.push(`BILALSADA: ${res.data?.message || "Bilalsada failed"}`);
+    } catch (err) {
+      errors.push(`BILALSADA: ${err.message}`);
+    }
   }
 
   return { success: false, errors };
 };
 
 /**
- * @desc    Sayen Data Bundle (VTU) via AYAX API tare da Auto-Refund
+ * @desc    Sayen Data Bundle (VTU) via Multi-Gateway tare da Auto-Refund
  * @route   POST /api/v1/vtu/buy-data (ko /api/v1/data/buy)
  * @access  Private (User)
  */
@@ -375,14 +506,14 @@ exports.buyData = async (req, res) => {
 
     const targetPhone = cleanLocalPhone(phoneNumber || phone || phoneNo || "");
     const finalNetwork = String(network || "").trim().toUpperCase();
-    const cleanPlanCode = String(planId || planCode || plan || "100").trim();
+    const cleanPlanCode = String(planId || planCode || plan || "27").trim();
     const amountNum = Number(amount);
     const userPin = String(transactionPin || pin || "").trim();
 
-    if (!targetPhone || !cleanPlanCode) {
+    if (!finalNetwork || !targetPhone || !cleanPlanCode) {
       return res.status(400).json({
         success: false,
-        message: "Please provide recipient phone number and plan code.",
+        message: "Please provide network, recipient phone number, and plan code.",
       });
     }
 
@@ -467,7 +598,7 @@ exports.buyData = async (req, res) => {
       reference,
       type: "data",
       category: "DATA",
-      service: `${finalNetwork || "DATA"} Data (${cleanPlanCode})`,
+      service: `${finalNetwork} Data (${cleanPlanCode})`,
       amount: amountNum,
       oldBalance: oldBal,
       newBalance: newBal,
@@ -475,11 +606,11 @@ exports.buyData = async (req, res) => {
       recipient: targetPhone,
       phoneNumber: targetPhone,
       status: "pending",
-      details: `${finalNetwork || "DATA"} (${cleanPlanCode}) Data Bundle for ${targetPhone}`,
+      details: `${finalNetwork} (${cleanPlanCode}) Data Bundle for ${targetPhone}`,
     });
 
     // =========================================================================
-    // AYAX DISPATCH
+    // MULTI-GATEWAY EXECUTION
     // =========================================================================
     const dispatchResult = await dispatchToExternalGateways({
       network: finalNetwork,
@@ -492,43 +623,43 @@ exports.buyData = async (req, res) => {
     // 1. IDAN YA YI NASARA
     if (dispatchResult.success) {
       const providerData = dispatchResult.data || {};
+      const providerName = dispatchResult.provider || "GATEWAY";
 
       await Transaction.findOneAndUpdate(
         { reference },
         {
           status: "success",
           reference: providerData.reference || providerData.orderId || reference,
-          details: `Success: Data (${cleanPlanCode}) to ${targetPhone} via AYAX API`,
+          details: `Success: ${finalNetwork} Data (${cleanPlanCode}) to ${targetPhone} via ${providerName}`,
         }
       );
 
       await sendNotification(
         userId,
         "Data Bundle Successful 🎉",
-        `Your data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
-        "DATA"
+        `Your ${finalNetwork} data bundle (${cleanPlanCode}) for ${targetPhone} was delivered successfully.`,
+        "DATA" 
       );
 
       return res.status(200).json({
         success: true,
         status: "success",
-        message: `Data Purchase Successful via AYAX API!`,
+        message: `Data Purchase Successful via ${providerName}!`,
         orderId: providerData.reference || reference,
         network: finalNetwork,
         phone: targetPhone,
         amount: amountNum,
         newBalance: newBal,
-        provider: "AYAX_API",
+        provider: providerName,
       });
     }
 
-    // 2. IDAN YA GAZA: AUTO-REFUND NAN TAKE
-    const combinedErrors =
-      dispatchResult.errors.length > 0
-        ? dispatchResult.errors.join(" | ")
-        : "AYAX API rejected this transaction";
+    // 2. IDAN DUK GATEWAYS SUN GASA: AUTO-REFUND NAN TAKE
+    const combinedErrors = dispatchResult.errors.length > 0
+      ? dispatchResult.errors.join(" | ")
+      : "All gateway providers rejected this transaction";
 
-    console.error(`🚨 [AYAX DISPATCH FAILED]: Refunding User ${userId}. Errors: ${combinedErrors}`);
+    console.error(`🚨 [ALL GATEWAYS FAILED]: Refunding User ${userId}. Errors: ${combinedErrors}`);
 
     const refundBalance = await executeAutoRefund(
       userId,
@@ -547,6 +678,7 @@ exports.buyData = async (req, res) => {
       message: `Delivery Error (${combinedErrors}). ₦${amountNum.toLocaleString()} has been refunded back to your wallet.`,
       newBalance: refundBalance,
     });
+
   } catch (error) {
     console.error("Buy Data Controller Error:", error);
     return res.status(500).json({
@@ -614,8 +746,9 @@ exports.getDataPlans = async (req, res) => {
     }
 
     let plans = [];
-    const db = mongoose.connection?.db;
+    const db = mongoose.connection.db;
 
+    // 1. Duba kai-tsaye a cikin ainihin collections na MongoDB
     if (db) {
       try {
         plans = await db.collection("plans").find(query).sort({ network: 1, userPrice: 1 }).toArray();
@@ -625,8 +758,22 @@ exports.getDataPlans = async (req, res) => {
       } catch (_) {}
     }
 
-    if ((!plans || plans.length === 0) && DataPlan && typeof DataPlan.find === "function") {
+    // 2. Idan Mongoose model yana aiki
+    if ((!plans || plans.length === 0) && DataPlan) {
       plans = await DataPlan.find(query).sort({ network: 1, userPrice: 1 }).lean();
+    }
+
+    // 3. Fallback idan babu komai a database kwata-kwata
+    if (!plans || plans.length === 0) {
+      plans = [
+        { id: "140", planId: "140", network: "MTN", planType: "DC", plan: "1.0 GB", validity: "30 Days", costPrice: 189, userPrice: 230, agentPrice: 210, status: "active" },
+        { id: "27", planId: "27", network: "MTN", planType: "CG", plan: "1.0 GB", validity: "30 Days", costPrice: 400, userPrice: 450, agentPrice: 425, status: "active" },
+        { id: "17", planId: "17", network: "MTN", planType: "SME", plan: "500 MB", validity: "1 Day", costPrice: 250, userPrice: 290, agentPrice: 270, status: "active" },
+        { id: "262", planId: "262", network: "AIRTEL", planType: "CG", plan: "1.2 GB", validity: "7 Days", costPrice: 230, userPrice: 280, agentPrice: 260, status: "active" },
+        { id: "200", planId: "200", network: "AIRTEL", planType: "SME", plan: "1.0 GB", validity: "7 Days", costPrice: 300, userPrice: 350, agentPrice: 330, status: "active" },
+        { id: "28", planId: "28", network: "GLO", planType: "Gifting", plan: "1.0 GB", validity: "30 Days", costPrice: 450, userPrice: 480, agentPrice: 460, status: "active" },
+        { id: "45", planId: "45", network: "9MOBILE", planType: "Gifting", plan: "500 MB", validity: "30 Days", costPrice: 480, userPrice: 550, agentPrice: 510, status: "active" }
+      ];
     }
 
     return res.status(200).json({
@@ -655,32 +802,51 @@ exports.deleteDataPlan = async (req, res) => {
       return res.status(400).json({ success: false, message: "Plan ID is required to delete." });
     }
 
-    const db = mongoose.connection?.db;
-    if (db) {
-      await db.collection("plans").deleteMany({
-        $or: [{ id }, { planId: id }, { planCode: id }, { code: id }],
-      });
-      await db.collection("dataplans").deleteMany({
-        $or: [{ id }, { planId: id }, { planCode: id }, { code: id }],
+    let Model = DataPlan;
+    if (!Model) {
+      try {
+        Model = mongoose.model("DataPlan");
+      } catch (e) {
+        try {
+          Model = mongoose.model("Plan");
+        } catch (err) {
+          Model = null;
+        }
+      }
+    }
+
+    if (!Model) {
+      return res.status(500).json({ success: false, message: "DataPlan model is not registered." });
+    }
+
+    let deletedPlan = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      deletedPlan = await Model.findByIdAndDelete(id);
+    }
+
+    if (!deletedPlan) {
+      deletedPlan = await Model.findOneAndDelete({
+        $or: [
+          { _id: id },
+          { id: id },
+          { planId: id },
+          { planCode: id },
+          { code: id }
+        ]
       });
     }
 
     return res.status(200).json({
       success: true,
       message: "Data plan deleted successfully.",
-      deletedId: id,
+      deletedId: id
     });
   } catch (err) {
     console.error("deleteDataPlan Error:", err.message);
     return res.status(500).json({
       success: false,
       message: "Server failed to delete plan.",
-      error: err.message,
+      error: err.message
     });
   }
-};
-
-module.exports = {
-  ...exports,
-  DataPlanModel,
 };
